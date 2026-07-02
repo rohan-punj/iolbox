@@ -1,0 +1,115 @@
+# iolab design brief — "Bench & Glass"
+
+The improved brief for the frontend redesign. It replaces the placeholder
+GitHub-dark scaffold with a deliberate visual identity and specifies the four
+interaction changes the user asked for. Hand this (plus `docs/roadmap.md`) to the
+build agents.
+
+## The problem with what we have
+
+The scaffold theme is competent but generic — near-black `#0d1117`, a safe blue
+accent, rounded cards. It reads as "AI-coded default." A network-lab tool has a
+world of its own to draw from; the redesign should look like an **instrument**,
+not a web template.
+
+## Identity: the lab bench
+
+Ground the look in the subject's materials: rack equipment, terminal phosphor,
+LED status indicators, colour-coded patch cabling, the monospace CLI. Two themes
+share one token system and one layout; only the surface treatment differs.
+
+### Theme A — "Bench" (dark, default)
+An instrument at rest on a dark bench. The ground is a **blue-black slate**, not
+pure black — a neutral biased toward the accent so it reads as chosen. Status is
+shown as **LEDs with a soft glow**, the way real gear signals state. Data — node
+names, interfaces, telnet ports — is set in **mono**, because that is the language
+of the CLI the user lives in.
+
+### Theme B — "Glass" (light, "apple glass white")
+Frosted translucent panels over a soft, faintly-cool white, with `backdrop-filter`
+blur + saturation, hairline borders, and gentle shadows — the Apple vibrancy
+material. Apple's system blue is the accent here (authentic to the reference).
+Panels float above the canvas; the topology reads through the glass.
+
+## Tokens (both themes)
+
+| Role | Bench (dark) | Glass (light) |
+|---|---|---|
+| ground | `#0a0e14` | `#eef1f6` |
+| panel | `#10161f` | `rgba(255,255,255,0.62)` + blur(20px) saturate(180%) |
+| panel-2 / elevated | `#151d28` | `rgba(255,255,255,0.80)` |
+| border (hairline) | `#223041` | `rgba(16,26,42,0.10)` |
+| ink / secondary / tertiary | `#eaf0f7` / `#9db0c6` / `#61748c` | `#1b2431` / `#566579` / `#8a97a8` |
+| accent (used once, sparingly) | cable-cyan `#4bc6d1` | apple-blue `#0a84ff` |
+| canvas dot-grid | `#1a2531` | `#d4dbe6` |
+
+**Semantic status (separate from accent — LED palette, both themes):**
+running `#39d98a` · starting `#f0b429` (soft pulse) · crashed `#ff5a5f` ·
+stopped `#5b6b7f`. **Link/cable tints** carry meaning: default cable = border
+colour; capture-active = amber glow; selected = accent.
+
+## Type
+
+- **Data face (mono):** `"Cascadia Code","JetBrains Mono",ui-monospace,"SF Mono",Consolas,monospace`
+  — node names, interface ids, telnet ports, RAM, anything the CLI would print.
+- **UI face:** `system-ui,"Segoe UI",-apple-system,Roboto,sans-serif` — buttons,
+  labels, prose.
+- Type scale 11/12/13/14/16/20; uppercase eyebrows get `letter-spacing: 0.06em`.
+- Never link a webfont CDN (blocked); if a custom face is wanted, inline it.
+
+*Rationale:* mono-for-data is the one type move that makes the tool feel native to
+its audience instead of like a generic dashboard. It's the signature.
+
+## The four interaction requirements (precise specs)
+
+### 1. Changeable icons
+- Each node has an `icon` field (already in the schema). Ship a bundled SVG icon
+  set (reuse the licence-clean pack at `J:\Claude code\network-icons`; avoid
+  Cisco-brand marks). Default icon derives from image class (L3→router, L2→switch,
+  vpcs→PC); user overrides per node.
+- **Icon picker**: right-click node → "Change icon…" and an Inspector control open
+  a popover grid of glyphs; click swaps live. Allow "Import SVG…" for custom.
+- Icons are tintable via `currentColor` so they inherit theme + status.
+
+### 2. Connector labels = PNetLab-style hover-pop
+- Replace xyflow's flat SVG edge text with **HTML labels** (EdgeLabelRenderer),
+  one small **mono chip** at each end of a link showing the local interface (e.g.
+  `Gi0/0`); the running node's chip also carries its `telnet NNNNN`.
+- **Rest state**: small, low-contrast, unobtrusive. **On hover** (of the chip or
+  its link): the chip **scales up ~1.6×**, lifts with a shadow, gains the glassy
+  tooltip background, and reveals the full detail (`R1 Gi0/0 · telnet 30013`).
+  120–160ms ease; `transform-origin` toward the node. This is the exact
+  "jumps out bigger on hover" behaviour from classic PNetLab.
+- Respect `prefers-reduced-motion` (cross-fade instead of scale).
+
+### 3. Floating edges — links exit the side facing the neighbour
+- Drop fixed source/target handles. Compute each edge's endpoint as the
+  intersection of the centre-to-centre line with the node's perimeter (the xyflow
+  "floating edges" recipe: a `getEdgeParams(source,target)` helper feeding
+  `getBezier/StraightPath`). Recompute on drag so cables re-anchor live.
+- A node keeps four connectable sides; new links attach on whichever side faces
+  the other node. Multiple links to different neighbours fan out naturally.
+
+### 4. Background + infinite canvas
+- Keep the **PNetLab dotted grid** (xyflow `Background` `Dots`, gap 20). The
+  canvas is **already infinite** — xyflow pans without bounds; we just remove the
+  `fitView` clamp and set no `translateExtent`. Add a "reset view" and
+  fit-to-content control. Optional cross/grid variants as a view setting.
+
+## "Doesn't look AI-coded" — the checklist
+
+- Neutrals are hue-biased toward the accent, not pure grey/black.
+- Mono carries the data; UI face carries the chrome. Not one neutral face for all.
+- Status is **shape + colour** (LED with glow), not just a coloured word.
+- Spacing comes from a scale and from flex/grid `gap`, not ad-hoc margins.
+- One bold move (the accent / the glass) and everything else quiet.
+- Real empty states and real copy ("Drag a device onto the bench"), no lorem.
+- No gratuitous motion — every animation is functional (hover-pop, LED pulse,
+  cable re-anchor, theme fade).
+
+## Themeability (so it stays "modernizable")
+
+All of the above is driven by `theme.css` custom properties under
+`:root[data-theme="bench"]` / `[data-theme="glass"]`. Adding a third theme = one
+token block. Components reference tokens only — no hard-coded colours. A
+`ThemeProvider` writes `data-theme` on `<html>` and persists the choice.
