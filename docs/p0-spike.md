@@ -147,6 +147,33 @@ NETMAP entry points at that pseudo-instance; iouyap relays netio↔UDP into the
 supervisor's relay (pcapng tee + forward). This is the exact seam `internal/iouyap`
 was built for.
 
+## Capture + bridged-link status — 2026-07-02
+
+Ran a 2×IOL lab with **capture enabled** on the link (bridged via iouyap+relay+tee)
+and pinged 20× to generate traffic; `tshark` analyzed the captured pcapng stream.
+
+- ✅ **Wireshark capture PRODUCES VALID CAPTURES.** The pcapng stream is valid
+  (SHB magic `0a0d0d0a`) and `tshark` decodes **clean Ethernet frames** — R1's
+  `ARP Who has 10.0.0.2? Tell 10.0.0.1` and both routers' LOOP keepalives. The tee →
+  relay → pcapng → `StripIOLHeader` chain works; a real `capture-helper` → Wireshark
+  would show live link traffic.
+- ⚠️ **Bridging a link currently breaks its L2 connectivity** (`ping 0/20`). R1's
+  frames reach the relay/tee (captured) but the peer IOL never accepts them, so no
+  ARP reply. Root cause = **IOL netio header addressing**: the 8-byte header encodes
+  a dst port-channel keyed to the socket it was sent to (the pseudo-instance); when
+  the frame is relayed to the peer's real netio socket the header still addresses
+  the pseudo-instance, so the receiving IOL drops it. `internal/iouyap` forwards the
+  header verbatim — it must **rewrite the src/dst channel fields per hop** so each
+  IOL sees frames addressed to its own interface (same requirement VPCS↔IOL needs:
+  strip header toward VPCS, add a correctly-addressed header toward IOL).
+
+**Remaining deep piece (the one real unknown left):** reverse-engineer IOL's exact
+8-byte netio header semantics (src/dst instance + port fields) by decoding real
+native-IOL netio datagrams, then implement per-hop header rewriting in
+`internal/iouyap`. Until then: native same-host IOL↔IOL links work perfectly (ping
+100%), capture yields valid pcaps but interrupts the captured link, and VPCS↔IOL
+needs the same header work. This is focused networking R&D, not architecture risk.
+
 ## P0 status: core risks RETIRED ✅
 
 Every hard unknown is now confirmed against real IOL 17.18.02: image sniff, iourc

@@ -102,39 +102,46 @@ func (s Spec) Environ() []string {
 	}
 }
 
-// VPCSArgv builds the argv for a VPCS process hosting a PC on its console.
+// VPCSArgv builds the argv for a bundled vpcs 0.8.3 process.
 //
-//	vpcs -N <name> [-s <localUdp> -c <remoteUdp> -t 127.0.0.1]
+//	vpcs -p <ConsolePort> -i <count> [-s <localUdp> -c <remoteUdp> -t 127.0.0.1]
 //
-// Console: VPCS is run under the supervisor's controlling pty exactly like IOL
-// (spawn_linux.go allocates the pty and bridges it to ConsolePort). We therefore
-// pass NO "-p": with -p, VPCS tries to bind its OWN telnet listener on the SAME
-// port the supervisor already bound at spawn, fails, and exits immediately
-// (which then triggered the serveConsole teardown race). Without -p, VPCS uses
-// stdin/stdout — i.e. the pty — as its console, which the pty->telnet bridge
-// already serves. Confirmed against the bundled VPCS 0.8.3.
+// name is unused: vpcs 0.8.3 has NO name flag — passing "-N" makes it print
+// `vpcs: invalid option -- 'N'` and exit. It is kept in the signature for a
+// stable call site.
 //
-// UDP tunnel: VPCS speaks the UDP tunnel protocol natively (it never speaks IOL
-// netio), so a VPCS<->IOL link connects VPCS's UDP tunnel straight to the
+// Console (VM-confirmed): vpcs is its OWN telnet console server. "-p
+// <ConsolePort>" makes vpcs open and listen on that TCP port and serve a
+// `VPCS>` prompt. So — unlike IOL — vpcs is NOT run under the supervisor's pty
+// and the supervisor does NOT bind ConsolePort; vpcs owns it. vpcs also
+// daemonizes (forks; the launcher exits immediately). "-i <count>" sets the
+// number of PCs the process hosts (default 1).
+//
+// UDP tunnel: vpcs speaks the UDP tunnel protocol natively (it never speaks IOL
+// netio), so a VPCS<->IOL link connects vpcs's UDP tunnel straight to the
 // supervisor's relay (the IOL side reaches the same relay through an iouyap
 // netio<->UDP bridge). The port pairing (from server.bridgePlan.vpcsUDPFor):
 //
-//   - -s <localUdp>  : the port VPCS BINDS to receive frames the relay forwards
+//   - -s <localUdp>  : the port vpcs BINDS to receive frames the relay forwards
 //     to it — i.e. the relay endpoint's RemotePort for this VPCS.
-//   - -c <remoteUdp> : the port VPCS SENDS frames to — the relay endpoint's
+//   - -c <remoteUdp> : the port vpcs SENDS frames to — the relay endpoint's
 //     receiving LocalPort.
 //   - -t 127.0.0.1   : the tunnel peer host (the relay runs on loopback).
 //
 // When no UDP tunnel is wired (VPCSUDPLocal/Remote == 0) the -s/-c/-t flags are
-// omitted and the PC is unconnected. (VPCSCount is retained for validation; the
-// bundled build hosts a single PC per process, driven over the pty console.)
+// omitted and the PC is unconnected.
 func (s Spec) VPCSArgv(name string) ([]string, error) {
+	_ = name // vpcs 0.8.3 has no name flag; see doc above.
 	if s.VPCSCount < 1 || s.VPCSCount > 9 {
 		return nil, fmt.Errorf("vpcs count must be 1..9, got %d", s.VPCSCount)
 	}
+	if s.ConsolePort <= 0 || s.ConsolePort > 65535 {
+		return nil, fmt.Errorf("vpcs requires a console port, got %d", s.ConsolePort)
+	}
 	argv := []string{
 		"vpcs",
-		"-N", name,
+		"-p", strconv.Itoa(s.ConsolePort),
+		"-i", strconv.Itoa(s.VPCSCount),
 	}
 	if s.VPCSUDPLocal > 0 && s.VPCSUDPRemote > 0 {
 		argv = append(argv,

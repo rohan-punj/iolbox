@@ -154,23 +154,37 @@ func TestVPCSArgv(t *testing.T) {
 	if argv[0] != "vpcs" {
 		t.Fatalf("argv0=%s", argv[0])
 	}
-	// VPCS runs under the supervisor's pty (like IOL), so it must NOT be given
-	// -p: -p would make VPCS bind its own telnet listener on the console port the
-	// supervisor already bound at spawn, and VPCS would exit immediately.
+	joined := ""
 	for _, a := range argv {
-		if a == "-p" {
-			t.Fatalf("VPCS argv must NOT contain -p (pty console): %v", argv)
+		joined += a + " "
+	}
+	// vpcs 0.8.3 is its own telnet console server: it MUST get -p <ConsolePort>
+	// and -i <count>. It has NO name flag, so -N must never appear (vpcs rejects
+	// it and exits).
+	if !contains(joined, "-p 9000 ") {
+		t.Fatalf("VPCS argv must contain -p <ConsolePort>: %v", argv)
+	}
+	if !contains(joined, "-i 1 ") {
+		t.Fatalf("VPCS argv must contain -i <count>: %v", argv)
+	}
+	for _, a := range argv {
+		if a == "-N" {
+			t.Fatalf("VPCS argv must NOT contain -N (vpcs 0.8.3 has no name flag): %v", argv)
 		}
 	}
 	s.VPCSCount = 20
 	if _, err := s.VPCSArgv("x"); err == nil {
 		t.Fatal("count>9 should error")
 	}
+	// A console port is required (vpcs serves telnet on it).
+	if _, err := (Spec{Kind: "vpcs", VPCSCount: 1}).VPCSArgv("x"); err == nil {
+		t.Fatal("missing console port should error")
+	}
 }
 
 // TestVPCSArgvUDPTunnel checks the UDP tunnel flags: -s binds VPCSUDPLocal (the
 // relay's delivery port), -c targets VPCSUDPRemote (the relay's receiving port),
-// with -t 127.0.0.1. Absent ports => no tunnel flags.
+// with -t 127.0.0.1. Absent ports => no tunnel flags. -p/-i are always present.
 func TestVPCSArgvUDPTunnel(t *testing.T) {
 	s := Spec{NodeID: 2, Kind: "vpcs", ConsolePort: 9001, VPCSCount: 1,
 		VPCSUDPLocal: 10005, VPCSUDPRemote: 10004}
@@ -185,14 +199,17 @@ func TestVPCSArgvUDPTunnel(t *testing.T) {
 	if !contains(joined, "-s 10005 ") || !contains(joined, "-c 10004 ") || !contains(joined, "-t 127.0.0.1 ") {
 		t.Fatalf("vpcs UDP tunnel flags missing/wrong: %s", joined)
 	}
-	// Still no -p even with the UDP tunnel wired (pty console, not telnet -p).
+	// Console + count flags present alongside the tunnel; no name flag.
+	if !contains(joined, "-p 9001 ") || !contains(joined, "-i 1 ") {
+		t.Fatalf("vpcs console/count flags missing: %s", joined)
+	}
 	for _, a := range argv {
-		if a == "-p" {
-			t.Fatalf("VPCS argv must NOT contain -p: %v", argv)
+		if a == "-N" {
+			t.Fatalf("VPCS argv must NOT contain -N: %v", argv)
 		}
 	}
 
-	// No tunnel wired => no -s/-c/-t.
+	// No tunnel wired => no -s/-c/-t (but -p/-i remain).
 	s.VPCSUDPLocal, s.VPCSUDPRemote = 0, 0
 	argv, _ = s.VPCSArgv("pc2")
 	for _, a := range argv {

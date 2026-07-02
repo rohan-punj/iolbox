@@ -376,13 +376,20 @@ exactly one place. None of it embeds Cisco code.
    and `-n` sizing are accepted by every image line, and console readability
    end-to-end through the pty bridge under load.
 
-5. **VPCS argv + UDP tunnel flags** — `node.Spec.VPCSArgv`.
-   `vpcs -N <name> -p <consolePort> -s <localUdp> -c <remoteUdp> -t 127.0.0.1`,
-   up to 9 PCs per process. Wired: `-s` binds the relay's delivery port, `-c`
-   targets the relay's receiving port (see the bridged-links section). **Verify**
-   the bundled VPCS build accepts this `-s`/`-c`/`-t` form (some builds use `-e`
-   or a runtime `set` command) and that a PC pings the IOL LAN through the
-   iouyap+relay path (P0 step 6).
+5. **VPCS argv + spawn model** — `node.Spec.VPCSArgv`, `spawnVPCS` (spawn_linux.go).
+   **RESOLVED on the VM (vpcs 0.8.3).** `vpcs -p <ConsolePort> -i <count> -s
+   <localUdp> -c <remoteUdp> -t 127.0.0.1`. Unlike IOL, vpcs is its OWN telnet
+   console server (it opens `-p <ConsolePort>` itself) and it DAEMONIZES (forks;
+   the launcher exits immediately). So vpcs is spawned via a DISTINCT path
+   (`spawnVPCS`): no pty, the supervisor does NOT bind ConsolePort, the process
+   is put in its own group (`Setpgid`) so `Stop` kills the group (no orphan
+   daemon), and the node is marked running only once ConsolePort accepts TCP
+   (`waitConsoleReady`, 5s). vpcs 0.8.3 has NO name flag (`-N` is rejected).
+   Remaining to verify on the VM: a PC pings the IOL LAN through the iouyap+relay
+   path (`ip 10.0.0.10 10.0.0.1 24` then `ping 10.0.0.1`, P0 step 6), and that
+   `node.stop`/`lab.stop` leave no orphan vpcs. Unexpected-death detection for a
+   daemonized vpcs is currently minimal (a future periodic ConsolePort-listen
+   check); documented here as a known gap.
 
 6. **UDP tunnel port pairing** — `server.bridgePlan` (bridgeplan.go).
    Each bridged link endpoint gets a local (relay-receives) and remote
