@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "seed-3-switches",
+  "name": "3 Switches",
+  "description": "Switch triangle — spanning-tree root election, blocked ports, VLANs and trunking.",
+  "created": "2026-07-02T00:00:00Z",
+  "modified": "2026-07-02T00:00:00Z",
+  "canvas": { "zoom": 1, "pan": { "x": 0, "y": 0 }, "background": "dots" },
+  "nodes": [
+    { "id": 0, "kind": "iol", "name": "SW1", "x": 330, "y": 110, "ram": 1024, "ethernet": 1, "serial": 0,
+      "image": { "id": "seed-l2", "filename": "L2.bin", "class": "l2" } },
+    { "id": 1, "kind": "iol", "name": "SW2", "x": 160, "y": 340, "ram": 1024, "ethernet": 1, "serial": 0,
+      "image": { "id": "seed-l2", "filename": "L2.bin", "class": "l2" } },
+    { "id": 2, "kind": "iol", "name": "SW3", "x": 500, "y": 340, "ram": 1024, "ethernet": 1, "serial": 0,
+      "image": { "id": "seed-l2", "filename": "L2.bin", "class": "l2" } }
+  ],
+  "links": [
+    { "id": 0, "type": "p2p", "endpoints": [ { "node": 0, "interface": "e0/0" }, { "node": 1, "interface": "e0/0" } ] },
+    { "id": 1, "type": "p2p", "endpoints": [ { "node": 1, "interface": "e0/1" }, { "node": 2, "interface": "e0/1" } ] },
+    { "id": 2, "type": "p2p", "endpoints": [ { "node": 2, "interface": "e0/0" }, { "node": 0, "interface": "e0/1" } ] }
+  ]
+}

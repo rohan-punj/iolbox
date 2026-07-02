@@ -181,6 +181,10 @@ func (s *Server) CapturePort(linkID int) (port int, ok bool) {
 // ListenAndServe binds the control address and serves connections until ctx is
 // cancelled. It refuses non-loopback bind hosts.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// Materialize the embedded starter labs on first run (no-op once the
+	// store holds any lab).
+	s.seedLabs()
+
 	host, _, err := net.SplitHostPort(s.cfg.ControlAddr)
 	if err != nil {
 		return fmt.Errorf("control addr %q: %w", s.cfg.ControlAddr, err)
