@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 
@@ -99,6 +100,24 @@ func (s *Server) register() {
 // Dispatcher exposes the verb dispatcher (used by tests).
 func (s *Server) Dispatcher() *protocol.Dispatcher { return s.disp }
 
+// ConsolePort returns the allocated telnet console port for nodeID in the
+// currently loaded lab. Used by the WebSocket console bridge
+// (internal/wsbridge) to dial the right local port for GET /console/{nodeId}.
+// ok is false if no lab is loaded or the node id is unknown.
+func (s *Server) ConsolePort(nodeID int) (port int, ok bool) {
+	s.mu.Lock()
+	ll := s.lab
+	s.mu.Unlock()
+	if ll == nil {
+		return 0, false
+	}
+	nr := ll.get(nodeID)
+	if nr == nil {
+		return 0, false
+	}
+	return nr.consolePort, true
+}
+
 // ListenAndServe binds the control address and serves connections until ctx is
 // cancelled. It refuses non-loopback bind hosts.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -142,22 +161,44 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
-// serveConn handles one client connection: reads requests, dispatches, writes
-// responses, and subscribes the connection to event pushes.
+// serveConn handles one TCP client connection by delegating to ServeConn, the
+// transport-agnostic NDJSON connection core also used by the WebSocket
+// bridge (internal/wsbridge) so both transports share identical dispatch,
+// event-subscription, and error-handling behaviour.
 func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	dec := protocol.NewDecoder(conn)
-	enc := protocol.NewEncoder(conn)
+	s.ServeConn(ctx, conn)
+}
+
+// ServeConn runs the NDJSON control-protocol loop over rwc until the stream
+// ends, ctx is cancelled, or a write fails: it reads one NDJSON request per
+// line, dispatches it through the shared verb dispatcher, writes the
+// response, and subscribes rwc to server-pushed events for the connection's
+// lifetime. It does not close rwc; the caller owns that.
+//
+// This is the seam that lets the TCP control listener (server.go) and the
+// WebSocket /control endpoint (internal/wsbridge) behave identically: both
+// hand ServeConn an io.ReadWriteCloser (a net.Conn for TCP, a small adapter
+// over WebSocket text frames for WS) and get the same request/response/event
+// semantics with no duplicated verb-handling logic.
+func (s *Server) ServeConn(ctx context.Context, rwc io.ReadWriteCloser) {
+	dec := protocol.NewDecoder(rwc)
+	enc := protocol.NewEncoder(rwc)
 
 	unsub := s.bc.subscribe(enc)
 	defer unsub()
 
-	for {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
 		select {
 		case <-ctx.Done():
-			return
-		default:
+			_ = rwc.Close()
+		case <-done:
 		}
+	}()
+
+	for {
 		req, err := dec.ReadRequest()
 		if err != nil {
 			return // EOF or malformed; drop the connection

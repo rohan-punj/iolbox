@@ -15,10 +15,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/iourc"
 	"github.com/rohanpunj/iolab/supervisor/internal/server"
+	"github.com/rohanpunj/iolab/supervisor/internal/wsbridge"
 )
 
 // version is the supervisor build version reported in the hello handshake.
@@ -26,6 +28,7 @@ const version = "0.1.0"
 
 func main() {
 	controlAddr := flag.String("control-addr", "127.0.0.1:4000", "control API bind address (loopback only)")
+	wsAddr := flag.String("ws-addr", "127.0.0.1:4001", "WebSocket bridge bind address, loopback only (control + console over WS; empty disables it)")
 	imageDir := flag.String("image-dir", "/opt/iolab/images", "directory holding IOL image files")
 	runDir := flag.String("run-dir", "/run/iolab", "base directory for per-node working directories")
 	genIourc := flag.Bool("gen-iourc", false, "generate the IOU license file to stdout from this host's hostid+hostname, then exit (used by the runtime firstboot script)")
@@ -50,9 +53,38 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("iolab supervisor %s listening on %s (images=%s run=%s)", version, *controlAddr, *imageDir, *runDir)
-	if err := srv.ListenAndServe(ctx); err != nil {
-		log.Fatalf("supervisor: %v", err)
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Printf("iolab supervisor %s listening on %s (images=%s run=%s)", version, *controlAddr, *imageDir, *runDir)
+		if err := srv.ListenAndServe(ctx); err != nil {
+			errCh <- fmt.Errorf("control listener: %w", err)
+		}
+	}()
+
+	if *wsAddr != "" {
+		bridge := wsbridge.New(wsbridge.Config{Addr: *wsAddr}, srv)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Printf("iolab supervisor ws bridge listening on %s (/control, /console/{nodeId})", *wsAddr)
+			if err := bridge.ListenAndServe(ctx); err != nil {
+				errCh <- fmt.Errorf("ws bridge: %w", err)
+			}
+		}()
+	} else {
+		log.Printf("iolab supervisor ws bridge disabled (-ws-addr empty)")
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			log.Fatalf("supervisor: %v", err)
+		}
 	}
 	log.Printf("iolab supervisor shut down cleanly")
 }
