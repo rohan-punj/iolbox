@@ -92,6 +92,57 @@ func TestIOLArgvStripsKeepalive(t *testing.T) {
 	}
 }
 
+func TestEnvironHasNoConsolePort(t *testing.T) {
+	// P0: the console is a pty bridged by the supervisor, NOT an IOL-opened TCP
+	// port. Environ must not invent a console port env var.
+	s := Spec{NodeID: 3, Kind: "iol", WorkDir: "/run/iolab/lab1", ConsolePort: 9003}
+	for _, e := range s.Environ() {
+		if len(e) >= 8 && e[:8] == "IOL_CONS" {
+			t.Fatalf("Environ must not set a console port env: %q", e)
+		}
+	}
+	// IOURC must still point into the (shared) work dir.
+	found := false
+	for _, e := range s.Environ() {
+		if e == "IOURC=/run/iolab/lab1/iourc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("IOURC env missing: %v", s.Environ())
+	}
+}
+
+func TestNVRAMKiBFor(t *testing.T) {
+	if got := NVRAMKiBFor(0); got != DefaultNVRAMKiB {
+		t.Fatalf("empty config: got %d want %d", got, DefaultNVRAMKiB)
+	}
+	if got := NVRAMKiBFor(10); got < DefaultNVRAMKiB {
+		t.Fatalf("small config must not shrink below default: %d", got)
+	}
+	// A config larger than the default headroom grows the size.
+	big := 200 * 1024
+	if got := NVRAMKiBFor(big); got <= DefaultNVRAMKiB {
+		t.Fatalf("large config must grow -n: got %d", got)
+	}
+	// The size must be able to hold the config bytes.
+	if NVRAMKiBFor(big)*1024 < big {
+		t.Fatalf("nvram size %d KiB cannot hold %d bytes", NVRAMKiBFor(big), big)
+	}
+}
+
+func TestIOLArgvNVRAMSize(t *testing.T) {
+	s := Spec{NodeID: 1, Kind: "iol", ImagePath: "/i", NVRAMKiB: 512}
+	argv := s.IOLArgv()
+	joined := ""
+	for _, a := range argv {
+		joined += a + " "
+	}
+	if !contains(joined, "-n 512 ") {
+		t.Fatalf("expected -n 512, got %s", joined)
+	}
+}
+
 func TestVPCSArgv(t *testing.T) {
 	s := Spec{NodeID: 1, Kind: "vpcs", ConsolePort: 9000, VPCSCount: 1}
 	argv, err := s.VPCSArgv("pc1")

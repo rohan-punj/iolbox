@@ -24,8 +24,12 @@ type Config struct {
 	ControlAddr string
 	// ImageDir is where images are registered from.
 	ImageDir string
-	// RunDir is the base for per-node working directories.
+	// RunDir is the base for per-lab working directories.
 	RunDir string
+	// IourcPath is the runtime's generated IOU license file, copied into each
+	// lab's shared dir so co-located IOL instances find it. Empty defaults to
+	// <ImageDir>/../iourc then /opt/iolab/iourc (see prepareLabDir).
+	IourcPath string
 	// Runtime/Arch are advertised in the hello handshake.
 	Runtime string
 	Arch    string

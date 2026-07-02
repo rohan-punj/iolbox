@@ -3,8 +3,15 @@
 The **supervisor** is the control + data plane for iolab. It is a single static
 Go binary that runs **inside the Linux runtime** (WSL2, a VMware helper VM, a
 remote box, or QEMU) and drives Cisco IOL + VPCS nodes: it spawns the processes,
-wires them together over UDP tunnels, tees links to Wireshark, generates the
-IOU license, and injects/extracts NVRAM startup-configs.
+bridges each console over a pty, wires same-host IOL nodes together natively via
+NETMAP (and other links over UDP + the iouyap bridge), tees links to Wireshark,
+generates the IOU license, and injects/extracts NVRAM startup-configs.
+
+The design below reflects the **P0 findings against real IOL 17.18.02**
+(`docs/p0-spike.md`): the console is a pty (not a TCP port IOL opens), same-host
+IOL↔IOL links carry traffic over native unix-socket netio via a shared-directory
+NETMAP (no relay), and nodes boot pre-configured from injected NVRAM so IOS-XE
+PnP never engages.
 
 The Windows GUI never talks to IOL directly — it speaks the NDJSON control
 protocol (`docs/protocol.md`) to this supervisor over a loopback TCP socket.
@@ -16,9 +23,10 @@ supervisor/
   cmd/supervisor/      entrypoint: flags, control server, ws bridge, graceful shutdown
   internal/protocol/   NDJSON request/response/event framing + verb dispatcher
   internal/lab/        lab.schema.json Go structs + Validate()
-  internal/netmap/     IOL interface addressing (e0/0 -> port index) + NETMAP file
-  internal/relay/      UDP data plane: p2p forward, segment hub, pcapng capture tee
-  internal/node/       process mgmt: state machine, port alloc, IOL/VPCS argv, spawn
+  internal/netmap/     IOL interface addressing (e0/0 -> a/p token) + whole-lab NETMAP file
+  internal/relay/      UDP data plane: p2p forward, segment hub, pcapng capture tee (bridged links)
+  internal/iouyap/     netio<->UDP bridge for bridged links (built separately; NOT imported by server)
+  internal/node/       process mgmt: state machine, port alloc, IOL/VPCS argv, pty console spawn
   internal/iourc/      IOU license (iourc) generation from hostid+hostname
   internal/nvram/      IOL NVRAM startup-config encode/decode (GNS3 iou codec)
   internal/image/      image fingerprint (sha256), ELF arch parse, L2/L3 class sniff
@@ -62,6 +70,95 @@ UDP tunnel ports from 10000+ (all reported back in responses/`status`).
 Pass `-ws-addr ""` to disable the WebSocket bridge; it is **enabled by
 default** on `127.0.0.1:4001`, started under the same context and graceful
 shutdown as the TCP control listener.
+
+`-iourc` (default `/opt/iolab/iourc`) points at the runtime's IOU license; the
+supervisor copies it into each lab's shared dir at start (see below).
+
+## Node runtime model (P0-confirmed)
+
+### Console = pty → telnet bridge (`internal/node/spawn_linux.go`)
+
+Real IOL uses **stdin/stdout on a controlling pty** for its console and opens
+**no** TCP port of its own (confirmed in P0). So on start the supervisor:
+
+1. Binds a loopback telnet listener on the node's allocated `ConsolePort`
+   **before** spawning (so a client dialing right after `node.console` never
+   races the accept loop).
+2. Allocates a pty with `github.com/creack/pty` and runs the node attached to
+   the pty **slave** as its controlling terminal — `pty.Start` sets
+   `SysProcAttr{Setsid:true, Setctty:true}`, i.e. exactly the
+   `setsid`+`ctty` combination the manual P0 `socat …,pty,setsid,ctty` test
+   proved works.
+3. Keeps the pty **master** for the node's whole lifetime. A per-node console
+   server accepts TCP clients and pumps bytes between the client and the
+   master. Because the master persists independently of any console
+   connection, **sequential clients can disconnect and reconnect without
+   disturbing IOL** — no console client is required for the node to run.
+
+Telnet handling is minimal and pass-through: on connect the bridge volunteers
+`IAC WILL ECHO` + `IAC WILL SGA` (so a line-mode client goes char-at-a-time and
+lets IOL own echo), and inbound IAC from the client is consumed/answered by
+`internal/telnet.Negotiator` so it never leaks into the pty. pty→client is raw
+(IOL emits no IAC over a pty). There is **no** `IOL_CONSOLE_PORT` env var and no
+console argv flag — both were scaffold guesses P0 removed. `Environ()` still sets
+`IOURC`.
+
+The single dependency `github.com/creack/pty` (v1.1.24) is the standard, tiny,
+maintained pty library; it is the supervisor's only third-party dep besides the
+hand-rolled `internal/ws`. All pty/console code is behind `//go:build linux`
+with a stub on other OSes.
+
+### Shared lab dir + whole-lab NETMAP (`internal/server`, `internal/netmap`)
+
+Every IOL instance of a lab runs with its **cwd set to one shared lab dir**,
+`<run-dir>/<labId>/`, which holds:
+
+- a **single `NETMAP`** describing every native same-host IOL↔IOL link,
+- the **shared `iourc`** license (copied from `-iourc`), and
+- per-node **`nvram_<id>`** files (5-digit, `nvram_%05d`).
+
+IOL's unix-socket netio endpoints live in this cwd, so co-located instances find
+each other. `prepareLabDir` writes all three artifacts before any node spawns
+(it is idempotent and re-runs on every `lab.start`/`node.start`).
+
+The NETMAP line format is IOL's **`<nodeid>:<adapter>/<port>`** token, e.g.
+`1:0/0 2:0/0` — the exact form the P0 test used to bring two real IOL
+`Ethernet0/0` line protocols up. (`netmap.Iface.Index()`, the flat
+`adapter*16+port`, is retained for the UDP/iouyap bridge path but is **not** what
+the NETMAP file uses.)
+
+### Native vs. bridged links (`internal/server/links.go`)
+
+`wiringFor(link, isIOL)` is the single decision point:
+
+- **Native** (`wiringNative`) — a point-to-point link whose **both** endpoints
+  are IOL nodes, with **no capture** requested. Realized purely through the
+  whole-lab NETMAP (netio); no UDP relay, no supervisor in the data path. This
+  is the default fast path P0 validated.
+- **Bridged** (`wiringBridged`) — a link that needs **capture**, involves a
+  **VPCS** (or any non-IOL) endpoint, is a **segment**, or (future) spans
+  **hosts**. These route through the UDP relay + pcapng tee, fronted by an
+  `iouyap` netio↔UDP bridge. `nativeLinkSpecs` deliberately excludes bridged
+  links from the NETMAP so a port is never double-wired.
+
+### iouyap seam (do not import here)
+
+The netio↔UDP bridge itself lives in `internal/iouyap` (built in parallel). This
+package **does not import it**. The seam is left as clearly-marked `TODO(iouyap)`
+branches at exactly the three spots a bridged link needs one: `handleLinkAdd`
+(runtime add of a bridged link), `buildRelayConfig` (the UDP side of an IOL
+endpoint on a bridged link), and `startNodes` (per-node bridge instantiation).
+When iouyap lands, wire `iouyap.New(...)` in only at those branches — the native
+path is complete and needs no bridge.
+
+### NVRAM startup-config injection (`internal/nvram`)
+
+Hand-driving the console fights IOS-XE 17.18 PnP (P0), so nodes boot
+**pre-configured**: `injectNVRAM` encodes a node's `startupConfig` into
+`nvram_<id>` in the shared lab dir before spawn, and `buildSpec` sizes IOL's
+`-n <KiB>` (via `node.NVRAMKiBFor`) to hold it. `config.save`/`config.extract`
+decode the NVRAM file back out through the same codec. An empty `startupConfig`
+writes no NVRAM (the node boots to its default config).
 
 ## WebSocket bridge (`internal/wsbridge`)
 
@@ -206,13 +303,15 @@ exactly one place. None of it embeds Cisco code.
    whether an empty/absent private-config section is accepted. Also confirm the
    **NVRAM filename** IOL writes (`server.nvramFilename` = `nvram_%05d`).
 
-4. **IOL argv + console mechanism** — `node.Spec.IOLArgv`, `node.Spec.Environ`.
-   We pass `<image> [-e groups] [-s groups] -n 64 <instance-id>` and
-   **deliberately omit `-l`** (the keepalive flag causes 100% idle CPU spin).
-   The telnet console port is advertised via env (`IOL_CONSOLE_PORT`, alongside
-   `IOURC`). **Verify** the exact IOL flags, and whether IOL selects its telnet
-   console via the environment or via its built-in default
-   (`127.0.0.1:(2000+id)`); adjust `IOLArgv`/`Environ` accordingly.
+4. **IOL argv + console mechanism** — `node.Spec.IOLArgv`, `spawn_linux.go`.
+   **RESOLVED in P0.** We pass `<image> [-e groups] [-s groups] -n <KiB>
+   <instance-id>` and **deliberately omit `-l`** (the keepalive flag causes 100%
+   idle CPU spin). The console is **not** a TCP port IOL opens and **not** an env
+   var — it is IOL's controlling **pty**, bridged to `ConsolePort` by the
+   supervisor (see "Node runtime model" above). `-n` is now sized to the injected
+   NVRAM (`NVRAMKiBFor`). Remaining to verify on the real VM: that the argv order
+   and `-n` sizing are accepted by every image line, and console readability
+   end-to-end through the pty bridge under load.
 
 5. **VPCS argv** — `node.Spec.VPCSArgv`.
    `vpcs -N <name> -p <consolePort>`, up to 9 PCs per process, per-PC UDP tunnels

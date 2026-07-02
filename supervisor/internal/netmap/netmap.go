@@ -1,17 +1,25 @@
 // Package netmap implements IOL interface addressing and NETMAP file generation.
 //
 // IOL numbers interfaces as adapter/port pairs written like "e0/0" or "s1/2".
-// Internally each interface maps to a single port index:
+// Internally each interface also maps to a single flat port index (used by the
+// UDP/iouyap bridge path):
 //
 //	port = adapter*16 + portInAdapter
 //
 // The NETMAP file wires nodes together. Each line describes one connection:
 //
-//	<a-nodeid>:<a-port> <b-nodeid>:<b-port>
+//	<a-nodeid>:<a-adapter>/<a-port> <b-nodeid>:<b-adapter>/<b-port>
 //
-// where the node id is the lab node.id and the port is the computed index above.
-// This matches the "id = port*16 + group" convention used by our lab packs and
-// the iouyap NETMAP format (see docs/protocol.md).
+// where the node id is the lab node.id and the interface token is IOL's own
+// "adapter/port" form (e0/0 -> 0/0, s1/2 -> 1/2). This is the exact token format
+// the P0 manual test proved carries traffic between two real IOL instances
+// (NETMAP line "1:0/0 2:0/0" brought both Ethernet0/0 line protocols up). IOL
+// reads this file from its current working directory and connects same-directory
+// instances directly over unix-socket netio (no UDP relay).
+//
+// NOTE: this NETMAP form intentionally differs from the flat-index encoding
+// documented in an early draft of docs/protocol.md; P0 corrected it to the
+// adapter/port token that real IOL 17.18.02 actually accepts.
 package netmap
 
 import (
@@ -110,9 +118,11 @@ type Entry struct {
 	Iface  Iface
 }
 
-// String renders "<nodeid>:<portindex>".
+// String renders "<nodeid>:<adapter>/<port>", the IOL NETMAP interface token
+// (e.g. "2:0/0" for node 2 Ethernet0/0). This is the format real IOL accepts;
+// see the package doc and docs/p0-spike.md.
 func (e Entry) String() string {
-	return fmt.Sprintf("%d:%d", e.NodeID, e.Iface.Index())
+	return fmt.Sprintf("%d:%d/%d", e.NodeID, e.Iface.Adapter, e.Iface.Port)
 }
 
 // LinkSpec is the minimal link description Build needs: whether it is a direct

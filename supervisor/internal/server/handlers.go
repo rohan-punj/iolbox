@@ -236,7 +236,15 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 }
 
 // startNodes spawns the given nodes (Linux) or records the attempt (other OS).
+//
+// Before spawning, it (re)prepares the shared lab dir: the whole-lab NETMAP
+// (native IOL<->IOL links), the shared iourc, and each IOL node's NVRAM with its
+// startupConfig injected. IOL reads all of these from its cwd at boot, so they
+// must exist first. prepareLabDir is a no-op off Linux.
 func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
+	if err := s.prepareLabDir(ll); err != nil {
+		return nil, err
+	}
 	out := protocol.StartResult{Started: []protocol.StartedNode{}}
 	for _, id := range ids {
 		nr := ll.get(id)
@@ -253,9 +261,10 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 			return nil, protocol.Errorf(protocol.CodeNodeSpawnFailed, "%v", err)
 		}
 		nr.proc = proc
-		// The console is reachable once the process is up; a real deployment
-		// probes the telnet port before flipping to running. We optimistically
-		// advance and emit node.console.
+		// The console listener is bound synchronously inside Spawn (before it
+		// returns), so ConsolePort is reachable the moment we get here: the
+		// pty->telnet bridge accepts clients immediately, buffering the live
+		// pty stream. Flip to running and announce the console.
 		nr.machine.To(node.StateRunning)
 		s.emit(protocol.EventNodeConsole, protocol.NodeConsoleData{Node: id, ConsolePort: nr.consolePort})
 		out.Started = append(out.Started, protocol.StartedNode{
@@ -286,6 +295,10 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 		spec.ImagePath = s.cfg.ImageDir + "/" + info.Filename
 		spec.Ethernet = intOr(n.Ethernet, 1)
 		spec.Serial = intOr(n.Serial, 1)
+		// Size NVRAM to hold the injected startup-config (P0 correction #3:
+		// boot pre-configured so IOS-XE PnP never engages). -n must be >= the
+		// nvram_<id> file prepareLabDir writes.
+		spec.NVRAMKiB = node.NVRAMKiBFor(len(n.StartupConfig))
 	case lab.KindVPCS:
 		spec.VPCSCount = 1
 	}
@@ -343,6 +356,23 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Native same-host IOL<->IOL links are realized through the whole-lab
+	// NETMAP, which IOL reads once at boot from the shared lab dir. There is no
+	// runtime relay to start for them: they come up when the NETMAP (written by
+	// prepareLabDir before spawn) already contains the line and both endpoints
+	// are running. A link.add for a native link that wasn't in the NETMAP at
+	// boot needs a restart to take effect; we still report link.up so the GUI
+	// reflects intent.
+	//
+	// TODO(iouyap): bridged links (capture/VPCS/cross-host) start a UDP relay
+	// today; once internal/iouyap lands, insert its netio<->UDP bridge here so
+	// the IOL side speaks netio into the bridge and the relay tees/floods UDP.
+	if wiringFor(&args.Link, isIOLMap(ll.doc)) == wiringNative {
+		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
+		return protocol.LinkData{Link: args.Link.ID}, nil
+	}
+
 	cfg, err := s.buildRelayConfig(ll, &args.Link, 0)
 	if err != nil {
 		return nil, err
@@ -367,10 +397,17 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	return protocol.LinkData{Link: args.Link.ID}, nil
 }
 
-// buildRelayConfig derives the relay Config for a link. UDP endpoint ports are
-// allocated per node interface. This models the iol_wrapper / VPCS UDP tunnel
-// pairing; exact local/remote port derivation is finalized in P0 against the
-// real wrapper.
+// buildRelayConfig derives the relay Config for a BRIDGED link (capture / VPCS /
+// segment / cross-host). Native same-host IOL<->IOL links never reach here —
+// they are wired via the whole-lab NETMAP (see wiringFor / netmapFor). UDP
+// endpoint ports are allocated per node interface, modelling the VPCS UDP tunnel
+// and the (future) iouyap netio<->UDP bridge pairing.
+//
+// TODO(iouyap): for IOL endpoints on a bridged link, the IOL side actually
+// speaks unix-socket netio, so a netio<->UDP bridge (internal/iouyap, built in
+// parallel) must sit between IOL and this UDP relay. This function allocates the
+// UDP side; the iouyap bridge instance is created where startNodes handles a
+// bridged link's IOL endpoints. Do NOT import iouyap here.
 func (s *Server) buildRelayConfig(ll *loadedLab, link *lab.Link, capturePort int) (relay.Config, error) {
 	kind := relay.KindP2P
 	if link.EffectiveType() == lab.LinkSegment {
@@ -543,30 +580,11 @@ func intOr(p *int, def int) int {
 	return *p
 }
 
-// netmapFor renders the NETMAP for the loaded lab (used by node working-dir
-// preparation on Linux; exposed here for completeness/testing).
+// netmapFor renders the whole-lab NETMAP for every natively-wired IOL<->IOL
+// link (see nativeLinkSpecs / wiringFor). It is written once, into the shared
+// lab dir, before any IOL node spawns (Linux prepareLabDir); bridged links
+// (capture/VPCS/cross-host) are intentionally absent and are wired via
+// iouyap+relay instead.
 func (s *Server) netmapFor(ll *loadedLab) string {
-	return netmap.Build(labToLinkSpecs(ll.doc))
-}
-
-// labToLinkSpecs converts a lab document into netmap.LinkSpec values, tagging
-// which endpoints are IOL nodes.
-func labToLinkSpecs(doc *lab.Lab) []netmap.LinkSpec {
-	isIOL := make(map[int]bool, len(doc.Nodes))
-	for _, n := range doc.Nodes {
-		if n.Kind == lab.KindIOL {
-			isIOL[n.ID] = true
-		}
-	}
-	out := make([]netmap.LinkSpec, 0, len(doc.Links))
-	for _, l := range doc.Links {
-		ls := netmap.LinkSpec{P2P: l.EffectiveType() == lab.LinkP2P}
-		for _, ep := range l.Endpoints {
-			ls.Endpoints = append(ls.Endpoints, netmap.EndpointSpec{
-				NodeID: ep.Node, Interface: ep.Interface, IsIOL: isIOL[ep.Node],
-			})
-		}
-		out = append(out, ls)
-	}
-	return out
+	return netmap.Build(nativeLinkSpecs(ll.doc))
 }

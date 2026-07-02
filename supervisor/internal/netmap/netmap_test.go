@@ -61,8 +61,24 @@ func TestBuildNETMAP(t *testing.T) {
 		}},
 	}
 	got := Build(links)
-	want := "0:0 1:0\n1:18 2:19\n"
+	// Interface token is IOL's adapter/port form: e0/0 -> 0/0, s1/2 -> 1/2,
+	// s1/3 -> 1/3. This is the format P0 proved works ("1:0/0 2:0/0").
+	want := "0:0/0 1:0/0\n1:1/2 2:1/3\n"
 	if got != want {
 		t.Fatalf("NETMAP mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestBuildMatchesP0Format pins the exact NETMAP line format the P0 manual test
+// used to carry traffic between two real IOL 17.18.02 instances.
+func TestBuildMatchesP0Format(t *testing.T) {
+	links := []LinkSpec{
+		{P2P: true, Endpoints: []EndpointSpec{
+			{NodeID: 1, Interface: "e0/0", IsIOL: true},
+			{NodeID: 2, Interface: "e0/0", IsIOL: true},
+		}},
+	}
+	if got := Build(links); got != "1:0/0 2:0/0\n" {
+		t.Fatalf("P0 NETMAP format mismatch: got %q want %q", got, "1:0/0 2:0/0\n")
 	}
 }

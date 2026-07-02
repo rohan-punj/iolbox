@@ -39,9 +39,27 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 	}
 }
 
-// workDir returns the per-node working directory (holds NETMAP, iourc, nvram).
+// labDir returns the SHARED per-lab working directory. Every IOL instance in a
+// lab runs with this as its cwd so that (a) they all read the one whole-lab
+// NETMAP file, (b) they share the one iourc license, and (c) their unix-socket
+// netio endpoints land in the same directory and can therefore find each other
+// for native same-host IOL<->IOL links (confirmed in P0). Per-node NVRAM files
+// (nvram_<id>) also live here.
+func (ll *loadedLab) labDir() string {
+	return filepath.Join(ll.runDir, ll.doc.ID)
+}
+
+// workDir returns the working directory a node is spawned in.
+//
+// IOL nodes share ll.labDir() (see labDir for why: co-located netio sockets +
+// one NETMAP + one iourc). VPCS and any other UDP-tunnelled node get their own
+// per-node subdir, since they never participate in native netio and don't need
+// to see the NETMAP file.
 func (ll *loadedLab) workDir(nodeID int) string {
-	return filepath.Join(ll.runDir, ll.doc.ID, "n"+strconv.Itoa(nodeID))
+	if n := ll.findNode(nodeID); n != nil && n.Kind == lab.KindIOL {
+		return ll.labDir()
+	}
+	return filepath.Join(ll.labDir(), "n"+strconv.Itoa(nodeID))
 }
 
 // get returns the runtime for a node id, or nil.

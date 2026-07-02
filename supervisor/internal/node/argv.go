@@ -14,36 +14,39 @@ type Spec struct {
 
 	// IOL fields.
 	ImagePath   string // absolute path to the IOL ELF binary
-	WorkDir     string // per-node working directory (holds NETMAP, iourc, nvram)
+	WorkDir     string // working directory (for IOL: the SHARED lab dir with NETMAP+iourc+nvram)
 	Ethernet    int    // ethernet adapter groups
 	Serial      int    // serial adapter groups
 	RAM         int    // megabytes
-	ConsolePort int    // telnet console TCP port
+	ConsolePort int    // telnet console TCP port (the supervisor's pty->telnet bridge binds this)
+	NVRAMKiB    int    // IOL NVRAM size in KiB (-n); 0 uses DefaultNVRAMKiB
 
 	// VPCS fields.
 	VPCSCount int // number of PCs (<= 9)
 }
 
+// DefaultNVRAMKiB is the NVRAM size used when Spec.NVRAMKiB is 0. IOL rounds
+// this and it must comfortably exceed the injected startup-config; 64 KiB fits
+// typical lab configs. See NVRAMKiBFor for config-sized growth.
+const DefaultNVRAMKiB = 64
+
 // IOLArgv builds the argv for launching an IOL instance.
 //
 // IOL argv shape (community convention):
 //
-//	<image> [-e <eth groups>] [-s <serial groups>] [-n <nvram KiB>] <instance-id>
+//	<image> [-e <eth groups>] [-s <serial groups>] -n <nvram KiB> <instance-id>
 //
 // The instance id is the last positional argument and matches the NETMAP node
 // id. We deliberately DO NOT pass "-l": the keepalive flag causes a 100% idle
 // CPU spin on this kernel (see PLAN.md).
 //
-// The IOL binary reads NETMAP and the iourc license from its current working
-// directory, so WorkDir must be the process cwd (set by the spawner) and hold
-// both files. The telnet console is exposed by IOL itself when the
-// IOURC/telnet environment is set (see Environ) — IOL listens on the telnet
-// port passed via the environment rather than an argv flag.
-//
-// ASSUMPTION (verify in P0): the exact IOL argv flags and whether the console
-// telnet port is selected via env (IOURC + a listen port) or by IOL's built-in
-// default of 127.0.0.1:(2000+id). We model the env approach and expose the port
-// via Environ; P0 confirms against a real image.
+// The IOL binary reads NETMAP, the iourc license, and its NVRAM file from its
+// current working directory (its cwd = the SHARED lab dir; the spawner sets it),
+// so those files must already be there. There is NO console argv flag and NO
+// console env var: P0 confirmed real IOL uses stdin/stdout on its controlling
+// pty for the console and opens no TCP port of its own. The supervisor allocates
+// a pty, runs IOL attached to it, and bridges that pty to ConsolePort (see
+// spawn_linux.go). The -n size is honoured for the injected NVRAM config.
 func (s Spec) IOLArgv() []string {
 	argv := []string{s.ImagePath}
 	if s.Ethernet > 0 {
@@ -52,23 +55,37 @@ func (s Spec) IOLArgv() []string {
 	if s.Serial > 0 {
 		argv = append(argv, "-s", strconv.Itoa(s.Serial))
 	}
-	// NVRAM size in KiB; 64 KiB is a safe default that fits typical configs.
-	argv = append(argv, "-n", "64")
+	nvKiB := s.NVRAMKiB
+	if nvKiB <= 0 {
+		nvKiB = DefaultNVRAMKiB
+	}
+	argv = append(argv, "-n", strconv.Itoa(nvKiB))
 	// NOTE: no "-l" — intentionally omitted (idle CPU spin).
 	argv = append(argv, strconv.Itoa(s.NodeID))
 	return argv
 }
 
-// Environ returns the environment for an IOL process. IOL reads its license
-// from the iourc file named by IOURC and keys it by NETIO_NAME/hostname. We
-// also advertise the telnet console port so the wrapper/telnet bridge binds it.
-//
-// ASSUMPTION (verify in P0): the precise env var names IOL honours for the
-// iourc path and console port. These are centralised here so P0 fixes them once.
+// NVRAMKiBFor returns an NVRAM size (KiB) large enough to hold a startup-config
+// of configLen bytes plus codec headers/padding, never below DefaultNVRAMKiB.
+// IOL's -n must be >= the NVRAM file we inject or it will truncate/reject it.
+func NVRAMKiBFor(configLen int) int {
+	// Headers (~52B) + generous slack; round the config up to whole KiB and add
+	// the default as headroom for private-config/growth.
+	needKiB := (configLen+1023)/1024 + DefaultNVRAMKiB
+	if needKiB < DefaultNVRAMKiB {
+		return DefaultNVRAMKiB
+	}
+	return needKiB
+}
+
+// Environ returns the environment for an IOL process. IOL reads its license from
+// the iourc file named by IOURC (we point it at the shared lab dir's iourc; IOL
+// also falls back to ./iourc in cwd, which is the same file). There is
+// deliberately NO console env var — the console is a pty bridged by the
+// supervisor, not an IOL-opened TCP port (P0-confirmed).
 func (s Spec) Environ() []string {
 	return []string{
 		"IOURC=" + s.WorkDir + "/iourc",
-		"IOL_CONSOLE_PORT=" + strconv.Itoa(s.ConsolePort),
 	}
 }
 

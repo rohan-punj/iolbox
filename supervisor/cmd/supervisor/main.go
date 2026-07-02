@@ -30,7 +30,8 @@ func main() {
 	controlAddr := flag.String("control-addr", "127.0.0.1:4000", "control API bind address (loopback only)")
 	wsAddr := flag.String("ws-addr", "127.0.0.1:4001", "WebSocket bridge bind address, loopback only (control + console over WS; empty disables it)")
 	imageDir := flag.String("image-dir", "/opt/iolab/images", "directory holding IOL image files")
-	runDir := flag.String("run-dir", "/run/iolab", "base directory for per-node working directories")
+	runDir := flag.String("run-dir", "/run/iolab", "base directory for per-lab working directories")
+	iourcPath := flag.String("iourc", "/opt/iolab/iourc", "IOU license file copied into each lab's shared dir (generated at firstboot by -gen-iourc)")
 	genIourc := flag.Bool("gen-iourc", false, "generate the IOU license file to stdout from this host's hostid+hostname, then exit (used by the runtime firstboot script)")
 	flag.Parse()
 
@@ -47,6 +48,7 @@ func main() {
 		ControlAddr: *controlAddr,
 		ImageDir:    *imageDir,
 		RunDir:      *runDir,
+		IourcPath:   *iourcPath,
 		Version:     version,
 	})
 
