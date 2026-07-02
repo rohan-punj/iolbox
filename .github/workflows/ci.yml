@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  supervisor:
+    name: Supervisor (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supervisor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: supervisor/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Cross-build linux/amd64 (the real target)
+        run: GOOS=linux GOARCH=amd64 go build -o bin/supervisor-linux-amd64 ./cmd/supervisor
+
+  contracts:
+    name: Contracts (schema + example labs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate example labs against lab.schema.json
+        run: |
+          npm i -g ajv-cli@5
+          for f in labs/*.lab.json; do
+            echo "Validating $f"
+            ajv validate -s contracts/lab.schema.json -d "$f" --spec=draft2020 || exit 1
+          done
+
+  frontend:
+    name: GUI frontend (Svelte/Vite typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run check --if-present
+      - run: npm run build
+
+  tauri:
+    name: GUI native build (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - run: npm ci
+      - name: Build Tauri app (no bundle in CI)
+        run: npx tauri build --no-bundle
