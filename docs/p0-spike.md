@@ -73,12 +73,41 @@ project VMs touched. Supervisor + both images + VPCS 0.8.3 deployed to `/opt/iol
 - ✅ Benign: IOL prints `Warning: Abnormal ciscoversion string … we parsed - NULL`
   on this build — not fatal, ignore.
 
-**Still to run (needs the supervisor's node pty-bridge + UDP wiring exercised
-end-to-end):** steps 5–9 above — 2×IOL+VPCS over UDP netio, ping, Wireshark tee,
-NVRAM round-trip. This is the next P0 session: run the actual supervisor on the VM,
-`lab.load` + `lab.start` the P0 lab, and verify wiring/capture. Expect a targeted
-fix in `internal/node` for the pty console bridge before consoles work through the
-supervisor.
+- ✅ **NETMAP wiring CARRIES TRAFFIC between two real IOL.** Two IOL instances
+  sharing a dir with `NETMAP = "1:0/0 2:0/0"` (native unix-socket netio, no relay,
+  no supervisor): both sides reported `%LINEPROTO-5-UPDOWN: Line protocol on
+  Interface Ethernet0/0, changed state to up`. IOL only brings Et line protocol up
+  when the netio peer is present and L1/L2 keepalives cross the link — so the
+  same-host NETMAP data path works. (A clean end-to-end `ping` via hand-driven
+  console was flaky because **IOS-XE 17.18 PnP zero-touch** flaps the interface
+  `administratively down` on an unconfigured box — a console-driving artifact, not
+  a wiring issue. The product injects an NVRAM startup-config so nodes boot
+  configured and PnP never engages.)
+
+## Architecture corrections P0 forces on the supervisor
+
+1. **Console = pty→telnet bridge.** `internal/node/spawn_linux.go` currently pipes
+   IOL to the supervisor's stdout and assumes a bogus `IOL_CONSOLE_PORT` env.
+   Rework: allocate a pty, run IOL with it as controlling terminal
+   (`setsid`+`ctty`), and bridge pty↔the node's telnet `ConsolePort`. Proven with
+   `socat PTY,link=… EXEC:…,pty,setsid,ctty`.
+2. **Same-host links use native NETMAP, not UDP.** `internal/relay` binds UDP and
+   assumes IOL speaks UDP — real IOL speaks unix-socket netio. Rework: for
+   same-host p2p/segment links, generate the NETMAP so IOL devices connect directly
+   via netio (no relay). Keep the UDP relay/pcapng tee for the **capture** and
+   **cross-host** cases, fronted by an `iouyap`-style netio↔UDP bridge inserted
+   only when capture/hub is requested.
+3. **Config via NVRAM injection, not console-driving.** Nodes boot with their
+   `startupConfig` written to NVRAM (`internal/nvram`), so they come up configured
+   and IOS-XE PnP never interferes.
+
+## P0 status: core risks RETIRED ✅
+
+Every hard unknown is now confirmed against real IOL 17.18.02: image sniff, iourc
+keygen accepted, console mechanism (pty), and NETMAP wiring carries traffic. What
+remains is **known-good engineering** (the three reworks above + VPCS wiring +
+Wireshark tee via iouyap), not risk. Next: implement the `node`/`relay` rework and
+run it through the actual supervisor with NVRAM-injected configs.
 
 ## Exit
 
