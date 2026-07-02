@@ -19,7 +19,10 @@ Implements `docs/design-brief.md`. All frontend; verifiable in the browser previ
 | **D3 — Hover-pop labels** 🔜 | HTML interface chips via `EdgeLabelRenderer`; small at rest, scale ~1.6× + glass tooltip on hover; show `iface · telnet NNNNN`; reduced-motion fallback | Sonnet | D1 |
 | **D4 — Icon system** 🔜 | Bundled licence-clean SVG set; per-node `icon` override; icon-picker popover (grid + Import SVG); tint via `currentColor` | Sonnet | D1 |
 | **D5 — Canvas polish** 🔜 | Confirm infinite pan (remove `fitView` clamp, no `translateExtent`); PNetLab dot grid tuned per theme; reset-view / fit-to-content; grid/cross variants as a setting | Sonnet | D1 |
-| **D6 — Design QA** 🔜 | Against the "doesn't look AI-coded" checklist; both themes; keyboard focus; `prefers-reduced-motion`; screenshot set | Fable | D1–D5 |
+| **D2b — PNetLab link-add** 🔜 | Connector affordance on node hover → drag rubber-band → drop anywhere over node B (node-level hit-test, not a precise port) → **Interface Picker** to choose local+remote interfaces (free ones only). Brief R2.1 | Opus | D2 |
+| **D7 — Node edit dialog** 🔜 | Right-click/double-click → modal: name, icon, image, RAM, ethernet/serial adapter counts (guard against orphaning links), boot-from-startup-config toggle + config editor. Brief R2.2 | Sonnet | D1, D4 |
+| **D3b — Link hover glow** 🔜 | Hover edge or its chip → accent drop-shadow glow + slight width bump; capture links intensify; reduced-motion = glow only. Brief R2.3 | Opus | D2, D3 |
+| **D6 — Design QA** 🔜 | Against the "doesn't look AI-coded" checklist; both themes; keyboard focus; `prefers-reduced-motion`; screenshot set | Fable | D1–D7 |
 
 D1 and D2 can start together (different files). One integration pass at the end.
 

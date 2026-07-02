@@ -107,6 +107,57 @@ its audience instead of like a generic dashboard. It's the signature.
 - No gratuitous motion — every animation is functional (hover-pop, LED pulse,
   cable re-anchor, theme fade).
 
+## Revisions round 2 (2026-07-02) — link-add, node edit, link glow
+
+Three interaction changes requested after the redesign kickoff. These refine D2/D3
+and add a node-edit dialog. Reference: PNetLab's connect-and-pick workflow.
+
+### R2.1 — PNetLab-style link-add (connector-on-hover → drag → interface picker)
+The current handle-to-handle connect is too fiddly. Match PNetLab exactly:
+- **Hover a node** → a **connector affordance appears on the node** (a small
+  crosshair/link glyph overlaid on the node icon, like the orange connector in the
+  reference). It only shows on hover (and on keyboard focus), never at rest.
+- **Press on that affordance and drag** → a live "rubber-band" link follows the
+  cursor from the source node center.
+- **Drop anywhere over node B** — the drop does **not** need to land on a precise
+  handle/port. Hit-test the whole target node's bounding box; if the pointer is
+  over any part of node B, it's a valid drop. Highlight node B (accent ring) while
+  hovered as a drop target.
+- **On drop → open an Interface Picker** popover near the drop point: two columns
+  (or two selects) — **local interface on A** and **remote interface on B** — each
+  listing that node's *free* interfaces (used ones disabled), pre-selecting the
+  next free one on each side. Confirm creates the link with the chosen endpoints;
+  Cancel aborts. VPCS auto-selects `eth0` (only one), so its column collapses to a
+  label.
+- Implementation notes: use a full-node connectable target (xyflow: a node-sized
+  target handle or `isValidConnection` + `onconnectend` hit-testing the pane), not
+  four tiny port handles. The visible per-side floating anchor (D2) is still where
+  the *edge* attaches after creation; the *drop* is node-level. Keep the rubber-band
+  styled like a cable (accent, slightly thicker) during the drag.
+
+### R2.2 — Node edit dialog
+Right-click node → **"Edit…"** (and double-click node) opens a modal to change:
+- **Name**, **Icon** (opens the icon picker incl. Import — R from round 1),
+- **Image** (library picker; hot-swap by id),
+- **RAM (MB)** (number, sensible min per class),
+- **Ethernet adapters** and **Serial adapters** counts (each adapter = 4 ports;
+  changing these re-derives available interfaces and must not orphan existing links
+  — warn if reducing below a count that has links attached),
+- **Boot from startup-config** toggle (on = inject the node's `startupConfig` into
+  NVRAM at boot; off = boot image default) plus the startup-config editor,
+- Applied on **Save**; changes to adapters/RAM/image take effect on next node start
+  (show a "restart required" hint if the node is running).
+This supersedes the lighter Inspector-only editing for the full set of properties;
+the Inspector stays as the quick-glance/quick-edit panel, "Edit…" is the full form.
+
+### R2.3 — Link hover glow
+Hovering a link (edge) **or** its interface chip highlights the whole cable: a
+soft accent **glow** (`filter: drop-shadow` in the accent color) + slight
+stroke-width increase, 120ms ease. Capture-active links already glow amber; on
+hover they intensify. This makes it obvious which cable a chip belongs to and which
+link a right-click will target. Respect `prefers-reduced-motion` (glow only, no
+width animation).
+
 ## Revisions from review (2026-07-02)
 
 Three changes requested after seeing the "Bench & Glass" mockup:
