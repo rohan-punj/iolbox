@@ -73,15 +73,33 @@
     box-shadow: var(--shadow-md);
     opacity: 0;
     pointer-events: none;
+    /* Forgiveness: slow fade-out (~120ms delay) so a slightly-off cursor path
+       doesn't instantly kill the bar; show is immediate. */
     transition: opacity var(--transition-fast), transform var(--transition-fast);
+    transition-delay: 120ms;
     z-index: 5;
   }
-  /* Reveal on node hover (or keyboard focus within the bar). */
+  /* Invisible hit-area bridging the gap between the floating bar and the face,
+     so the pointer never crosses a dead zone travelling up to the buttons. It
+     spans the bar's full width and reaches from the bar's bottom edge down to
+     (and slightly past) the face top. No visual change. */
+  .node-actions::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    height: 18px;
+  }
+  /* Reveal on node hover (or keyboard focus within the bar). Show is instant;
+     the hide delay lives on the base rule above. */
   :global(.face-node:hover) .node-actions,
+  .node-actions:hover,
   .node-actions:focus-within {
     opacity: 1;
     pointer-events: auto;
     transform: translate(-50%, -100%) translateY(-2px);
+    transition-delay: 0ms;
   }
   .na-btn {
     all: unset;

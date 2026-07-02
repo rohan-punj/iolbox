@@ -20,13 +20,27 @@
   // persisted user choice from consoleUiStore.
   const showConsole = $derived(labStore.openConsoleTabs.length > 0);
   const dockRight = $derived(consoleUiStore.dockSide === "right");
+
+  // Right Inspector pane only exists when something is selected. Clicking empty
+  // canvas clears selection (CanvasInner onPaneClick), which collapses the pane
+  // and hands its width back to the canvas.
+  const showInspector = $derived(
+    labStore.selectedNodeId !== null || labStore.selectedLinkId !== null
+  );
 </script>
 
 <div class="shell">
   <TopBar />
 
   <div class="body">
-    <SplitPane direction="horizontal" edge="start" bind:size={paletteWidth} min={180} max={360}>
+    <SplitPane
+      direction="horizontal"
+      edge="start"
+      bind:size={paletteWidth}
+      min={180}
+      max={360}
+      storageKey="iolab.split.palette"
+    >
       <Palette />
     </SplitPane>
 
@@ -35,18 +49,34 @@
         <Canvas />
       </div>
       {#if showConsole && !dockRight}
-        <SplitPane direction="vertical" edge="end" bind:size={consoleHeight} min={80} max={520}>
+        <SplitPane
+          direction="vertical"
+          edge="end"
+          bind:size={consoleHeight}
+          min={80}
+          max={520}
+          storageKey="iolab.split.consoleBottom"
+        >
           <Console />
         </SplitPane>
       {/if}
     </div>
 
-    <div class="inspector-pane" style:flex-basis={`${inspectorWidth}px`}>
-      <Inspector />
-    </div>
+    {#if showInspector}
+      <div class="inspector-pane" style:flex-basis={`${inspectorWidth}px`}>
+        <Inspector />
+      </div>
+    {/if}
 
     {#if showConsole && dockRight}
-      <SplitPane direction="horizontal" edge="end" bind:size={consoleWidth} min={280} max={720}>
+      <SplitPane
+        direction="horizontal"
+        edge="end"
+        bind:size={consoleWidth}
+        min={280}
+        max={720}
+        storageKey="iolab.split.consoleRight"
+      >
         <Console />
       </SplitPane>
     {/if}

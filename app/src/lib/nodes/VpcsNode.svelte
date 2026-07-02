@@ -49,7 +49,6 @@
 
   <div class="face">
     <NodeActions {nodeId} {state} />
-    <span class="led" title={stateLabel(state)}></span>
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
     <button
       class="connector nodrag"
@@ -58,7 +57,7 @@
       onpointerdown={onConnectorDown}
     >{@html uiSvg("link", 12)}</button>
   </div>
-  <div class="name mono">{label}</div>
+  <div class="name mono"><span class="led" title={stateLabel(state)}></span>{label}</div>
 </div>
 
 <style>
@@ -154,27 +153,28 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 34%, transparent);
   }
+  /* Status LED — now an inline dot at the head of the name chip (was a
+     face-corner dot). Same state colors + pulse; the face corner is left to the
+     connector button alone. */
   .led {
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    width: 8px;
-    height: 8px;
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--state-stopped);
   }
   .node[data-state="running"] .led {
     background: var(--state-running);
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-running) 24%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--state-running) 24%, transparent);
   }
   .node[data-state="starting"] .led {
     background: var(--state-starting);
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-starting) 24%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--state-starting) 24%, transparent);
     animation: led-pulse 1.1s ease-in-out infinite;
   }
   .node[data-state="crashed"] .led {
     background: var(--state-crashed);
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-crashed) 24%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--state-crashed) 24%, transparent);
   }
   @keyframes led-pulse {
     0%,
@@ -187,6 +187,9 @@
   }
   .name {
     /* Readability — up ~1px and a touch more opaque backing vs the dot grid. */
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: calc(var(--fs-xs) + 1px);
     color: var(--ink);
     background: color-mix(in oklab, var(--chip-bg) 92%, var(--ground));

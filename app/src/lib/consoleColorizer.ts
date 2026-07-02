@@ -1,25 +1,43 @@
 // IOS console color highlighter — a stream transformer applied to node->browser
 // bytes before xterm.write, mirroring the user's PNetLab webconsole colorizer.
 //
-// CORRECTNESS is the whole game here. Console bytes arrive in arbitrary chunk
-// boundaries (a single \r\n can straddle two WS frames; a prompt the user is
-// mid-typing on has no terminator yet). So the rule is:
+// CORRECTNESS is the whole game here, and the #1 rule is PASS-THROUGH LATENCY:
+// every byte that arrives is forwarded to xterm IN THE SAME push() call it
+// arrived in. Nothing is ever held back. This is what keeps interactive echo
+// instant — the user types, IOS echoes a char, and that char lands on screen in
+// the same frame, on the current row, with the cursor exactly where it should be.
 //
-//   - We only ever inject SGR color into a line ONCE IT IS COMPLETE, i.e. a run
-//     terminated by \n (with optional preceding \r). That guarantees we never
-//     touch the line the cursor is currently on, so keystroke echo is never
-//     delayed, reordered, or recolored mid-edit.
-//   - Any trailing partial line (no terminator yet) is buffered verbatim and
-//     re-emitted UNMODIFIED on the next chunk. Nothing is held back that isn't
-//     genuinely an incomplete line — a completed line always flushes in the same
-//     chunk it terminated in, so interactive latency is unchanged.
-//   - We colorize only lines that look "safe" (see rules). Control sequences,
-//     escapes, and anything already carrying an ESC are passed through as-is so
-//     we never corrupt cursor moves, colored banners, or NAWS chatter.
+// Colorization is a *best-effort overlay* that only fires when it can be done
+// without adding a single byte of latency:
+//
+//   - We track how many bytes of the CURRENT (still-unterminated) line have
+//     already been emitted raw this session (`emittedInLine`). When a chunk
+//     contains the line's terminating \n we may colorize ONLY IF
+//     `emittedInLine === 0` — i.e. the whole line arrived complete inside this
+//     one chunk (bulk output like `show run` streaming in full lines). To
+//     "recolor" we emit a carriage return + the colorized line, overwriting the
+//     raw copy we would otherwise have emitted; but since emittedInLine===0 we
+//     haven't emitted any of it yet, so we simply emit the colored form instead
+//     of the raw form. No overwrite, no flicker, no latency.
+//   - If ANY of the line was already passed through raw (emittedInLine > 0), the
+//     line is an interactive/streamed-mid-line case: we emit the remaining bytes
+//     RAW and never recolor. Typed lines therefore never get recolored — correct
+//     and expected.
+//   - Lines that contain an ESC pass through untouched (cursor moves, colored
+//     banners, NAWS chatter — never corrupt them).
+//
+// EQUIVALENCE (the property the tests pin down):
+//   - Feed a chunk of whole lines ("foo\nbar\n") in one push and each complete
+//     line is colorized.
+//   - Feed the SAME text one byte at a time and every byte is returned
+//     immediately and RAW (byte-for-byte identical input→output, zero added
+//     latency), with no color — because each line's \n arrives in a push where
+//     emittedInLine > 0.
+//   Both render identically in the terminal apart from the SGR codes.
 //
 // The transformer is a tiny stateful object (one per console tab) rather than a
-// pure fn because it must remember the partial-line tail across chunks. The
-// per-line decision (`colorizeLine`) is a pure function, exported for testing.
+// pure fn because it must remember `emittedInLine` across chunks. The per-line
+// decision (`colorizeLine`) is a pure function, exported for testing.
 
 // SGR helpers — foreground colors + reset. Kept as plain strings so a colorized
 // line is just `code + text + RESET` and the terminal state is always restored.
@@ -84,50 +102,71 @@ export function colorizeLine(line: string): string {
 }
 
 /**
- * Stateful, chunk-boundary-safe colorizing transformer. One instance per console
- * tab. Feed it each decoded string chunk; it returns the string to hand to
- * xterm.write — completed lines colorized, the trailing partial line passed
- * through unmodified and remembered for the next call.
+ * Stateful, pass-through-immediately colorizing transformer. One instance per
+ * console tab. Feed it each decoded string chunk; it returns the string to hand
+ * to xterm.write. EVERY input byte is forwarded within the same call — nothing
+ * is buffered/held back. A completed line is colorized ONLY when the whole line
+ * arrived inside a single chunk (no part of it was emitted raw first); otherwise
+ * the bytes go through raw so interactive echo is never delayed or recolored.
  */
 export class ConsoleColorizer {
-  /** Bytes seen since the last line terminator — an incomplete line, verbatim. */
-  private tail = "";
+  /**
+   * How many raw bytes of the current (still-unterminated) line have already
+   * been forwarded to xterm. 0 means "nothing of this line has been shown yet",
+   * which is the only condition under which we're allowed to colorize the line
+   * when its terminator arrives.
+   */
+  private emittedInLine = 0;
 
   /**
-   * Transform one chunk. Preserves every terminator exactly ("\n" and "\r\n"
-   * both survive), so xterm's convertEol/cursor behavior is unchanged; only the
-   * printable content of a completed line is wrapped in SGR codes.
+   * Transform one chunk, forwarding every byte immediately. Preserves every
+   * terminator exactly ("\n" and "\r\n" both survive), so xterm's convertEol /
+   * cursor behavior is unchanged; only fully-in-this-chunk lines are wrapped in
+   * SGR codes.
    */
   push(chunk: string): string {
-    const data = this.tail + chunk;
-    // Split keeping terminators. We walk manually rather than String.split so a
-    // lone trailing "\r" (possible first half of a \r\n split across chunks) is
-    // held in the tail instead of being treated as a completed line.
+    if (chunk.length === 0) return "";
     let out = "";
+    let segStart = 0; // start of the not-yet-emitted run within `chunk`
     let i = 0;
-    let lineStart = 0;
-    while (i < data.length) {
-      const c = data[i];
-      if (c === "\n") {
-        // Completed line runs [lineStart, i); it may end with a \r we keep.
-        const raw = data.slice(lineStart, i);
-        const hasCr = raw.endsWith("\r");
-        const body = hasCr ? raw.slice(0, -1) : raw;
-        out += colorizeLine(body) + (hasCr ? "\r\n" : "\n");
+    while (i < chunk.length) {
+      if (chunk[i] === "\n") {
+        // The line terminates here. The portion of this line living in THIS
+        // chunk is chunk[segStart..i) (the terminator is at i). Whether we may
+        // colorize depends on emittedInLine: if 0, the entire line is in hand.
+        const seg = chunk.slice(segStart, i); // this-chunk part of the line, no \n
+        const canColorize = this.emittedInLine === 0;
+        if (canColorize) {
+          // Whole line is in `seg`. Strip a trailing \r so colorizeLine sees the
+          // bare body, then re-attach the exact terminator we found.
+          const hasCr = seg.endsWith("\r");
+          const body = hasCr ? seg.slice(0, -1) : seg;
+          out += colorizeLine(body) + (hasCr ? "\r\n" : "\n");
+        } else {
+          // Part of this line already went out raw earlier — emit the remaining
+          // bytes (this-chunk tail + terminator) raw and DO NOT recolor.
+          out += seg + "\n";
+        }
+        this.emittedInLine = 0; // next line starts fresh
         i++;
-        lineStart = i;
+        segStart = i;
         continue;
       }
       i++;
     }
-    // Whatever follows the last \n is an incomplete line (which may be just a
-    // lone "\r"): buffer it verbatim and re-emit unmodified next time.
-    this.tail = data.slice(lineStart);
+    // Trailing bytes after the last \n are an incomplete line: forward them raw
+    // NOW (never buffered) and remember we've shown that many bytes of it, so the
+    // line can't be recolored when its terminator arrives in a later chunk.
+    if (segStart < chunk.length) {
+      const rest = chunk.slice(segStart);
+      out += rest;
+      this.emittedInLine += rest.length;
+    }
     return out;
   }
 
   /** Drop buffered state (e.g. on reconnect). */
   reset(): void {
-    this.tail = "";
+    this.emittedInLine = 0;
   }
 }

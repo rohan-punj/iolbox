@@ -120,9 +120,7 @@
         onpointerleave={() => (hot = false)}
         role="presentation"
       >
-        <span class="chip-detail">{info.source.name} </span>{info.source.iface}{#if info.source.telnet}<span
-            class="chip-sep">·</span><span class="chip-detail">telnet {info.source.telnet}</span
-          >{/if}
+        <span class="chip-detail">{info.source.name} </span>{info.source.iface}
       </span>
     </EdgeLabel>
   {/if}
@@ -137,9 +135,7 @@
         onpointerleave={() => (hot = false)}
         role="presentation"
       >
-        <span class="chip-detail">{info.target.name} </span>{info.target.iface}{#if info.target.telnet}<span
-            class="chip-sep">·</span><span class="chip-detail">telnet {info.target.telnet}</span
-          >{/if}
+        <span class="chip-detail">{info.target.name} </span>{info.target.iface}
       </span>
     </EdgeLabel>
   {/if}
@@ -225,11 +221,6 @@
     display: none;
     color: var(--ink-2);
   }
-  .chip-sep {
-    display: none;
-    margin: 0 4px;
-    color: var(--ink-2);
-  }
   .port-chip:hover {
     transform: scale(1.65);
     color: var(--ink);
@@ -239,8 +230,7 @@
     position: relative;
     z-index: 20;
   }
-  .port-chip:hover .chip-detail,
-  .port-chip:hover .chip-sep {
+  .port-chip:hover .chip-detail {
     display: inline;
   }
   /* When the edge (or its sibling chip) is hovered, signal both chips. */

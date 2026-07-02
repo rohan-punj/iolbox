@@ -9,6 +9,7 @@
     min = 160,
     max = 520,
     edge = "start",
+    storageKey,
     children,
   }: {
     direction?: "horizontal" | "vertical";
@@ -16,8 +17,25 @@
     min?: number;
     max?: number;
     edge?: "start" | "end";
+    /** When set, the chosen size persists to localStorage under this key. */
+    storageKey?: string;
     children: Snippet;
   } = $props();
+
+  // Restore a persisted size on mount (before first paint) so the pane opens at
+  // the width/height the user last dragged it to. Intentionally a one-time read
+  // of the initial prop values.
+  // svelte-ignore state_referenced_locally
+  if (storageKey) {
+    try {
+      const saved = Number(localStorage.getItem(storageKey));
+      if (Number.isFinite(saved) && saved > 0) {
+        size = Math.min(max, Math.max(min, saved));
+      }
+    } catch {
+      /* localStorage may be unavailable (private mode) */
+    }
+  }
 
   let dragging = $state(false);
 
@@ -40,6 +58,13 @@
   }
   function onPointerUp() {
     dragging = false;
+    if (storageKey) {
+      try {
+        localStorage.setItem(storageKey, String(Math.round(size)));
+      } catch {
+        /* ignore persistence failure */
+      }
+    }
   }
 </script>
 
@@ -92,7 +117,9 @@
     inset: 0;
     margin: auto;
     background: var(--border);
-    transition: background var(--transition-fast);
+    border-radius: 2px;
+    transition: background var(--transition-fast), width var(--transition-fast),
+      height var(--transition-fast);
   }
   .divider.horizontal::after {
     width: 1px;
@@ -102,9 +129,19 @@
     height: 1px;
     width: 100%;
   }
+  /* Grabbable affordance: the thin rule fattens + tints accent on hover/drag so
+     the handle is discoverable, not invisible. */
   .divider:hover::after,
   .divider.dragging::after {
     background: var(--accent);
+  }
+  .divider.horizontal:hover::after,
+  .divider.horizontal.dragging::after {
+    width: 3px;
+  }
+  .divider.vertical:hover::after,
+  .divider.vertical.dragging::after {
+    height: 3px;
   }
   .divider.horizontal {
     width: 5px;
