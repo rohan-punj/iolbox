@@ -7,6 +7,7 @@ import type {
   ImageRegisterResult,
   LabLoadResult,
   LabStartResult,
+  LabWipeResult,
   NodeSetImageResult,
   StatusResult,
   SupervisorEvent,
@@ -103,6 +104,12 @@ export class SupervisorClient {
 
   labStop(labId: string, nodes: number[] | null = null) {
     return this.call<void>("lab.stop", { labId, nodes });
+  }
+
+  /** Deletes saved configs/state for the given nodes (or the whole lab when
+   *  nodes is null). Destructive — callers must confirm with the user first. */
+  labWipe(labId: string, nodes: number[] | null = null) {
+    return this.call<LabWipeResult>("lab.wipe", { labId, nodes });
   }
 
   // node.start/stop/restart all reply with the same {started:[...]} shape as

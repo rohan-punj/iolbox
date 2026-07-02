@@ -293,6 +293,27 @@ Bridges to that node's telnet console port (the same port reported in
   `Negotiator`; there is no shared per-node session state, so opening
   consoles for several nodes (or the same node twice) at once just works.
 
+### `POST /api/upload/image?filename=<basename>`
+
+Puts an image file onto the VM for the browser GUI's "Add image" action. Body is
+the raw file bytes (`application/octet-stream`); the endpoint does **not**
+register the image — the GUI calls the `image.register` verb over `/control`
+with the returned path afterwards.
+
+- **Filename** is sanitized to a plain basename: any `/` or `\` path components
+  are stripped, the remainder must match `[A-Za-z0-9._-]+` and end in `.bin` or
+  `.iol` (case-insensitive); anything else is a 400.
+- **Streaming** goes to `<ImageDir>/<name>.partial`, renamed to the final name on
+  success, so an aborted/oversized transfer never leaves a truncated file (the
+  `.partial` is deleted on any failure). The body is capped at 4 GiB via
+  `http.MaxBytesReader`.
+- **Responses**: `200 {"path":"/abs/path"}` on success; a JSON `{"error":...}`
+  body with a 4xx/5xx status otherwise. If no image dir is configured the
+  endpoint 503s.
+
+The exact `/api/upload/image` pattern is more specific than the `/` catch-all, so
+`ServeMux` routes it here rather than to the SPA fallback.
+
 ### Telnet IAC negotiation policy (`internal/telnet`)
 
 `Negotiator` is a small explicit state machine (`Feed([]byte) []byte` +

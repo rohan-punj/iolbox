@@ -6,6 +6,9 @@
   let replaceFrom = $state<string>("");
   let replaceTo = $state<string>("");
   let busy = $state(false);
+  let uploadProgress = $state<number | null>(null); // 0..100 while an upload is in flight
+  let uploadError = $state<string | null>(null);
+  let fileInput: HTMLInputElement | undefined = $state();
 
   function fmtSize(bytes: number): string {
     if (bytes > 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
@@ -16,17 +19,72 @@
     return labStore.lab.nodes.filter((n) => n.image?.id === imageId).length;
   }
 
-  async function addImage() {
-    // Stubs a Tauri file-picker invoke; in dev/mock we fabricate a path.
+  function addImage() {
+    uploadError = null;
+    fileInput?.click();
+  }
+
+  /** Upload the file to the same-origin supervisor HTTP endpoint with progress,
+   *  then register the resulting path as a library image. Mock transport has
+   *  no HTTP server to upload to, so it fabricates a path instead (keeps the
+   *  existing dev click-through flow working with no backend). */
+  async function onFileChosen(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    uploadError = null;
     busy = true;
     try {
-      const fakeName = `custom-image-${Math.floor(Math.random() * 1000)}.bin`;
-      await labStore.client.imageRegister(`C:\\fake\\path\\${fakeName}`);
+      const path =
+        labStore.transportKind === "mock"
+          ? `C:\\fake\\path\\${file.name}`
+          : await uploadImageFile(file);
+      await labStore.client.imageRegister(path);
       const { images } = await labStore.client.imageList();
       labStore.images = images;
+    } catch (e) {
+      uploadError = (e as Error).message;
+      labStore.pushLog("error", `image upload failed: ${uploadError}`);
     } finally {
       busy = false;
+      uploadProgress = null;
     }
+  }
+
+  /** POST the file to /api/upload/image with progress via XHR (fetch has no
+   *  upload-progress event). Resolves with the server-reported path. */
+  function uploadImageFile(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const url = `/api/upload/image?filename=${encodeURIComponent(file.name)}`;
+      xhr.open("POST", url);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      uploadProgress = 0;
+
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) uploadProgress = Math.round((ev.loaded / ev.total) * 100);
+      };
+
+      xhr.onload = () => {
+        let body: { path?: string; error?: string } = {};
+        try {
+          body = JSON.parse(xhr.responseText);
+        } catch {
+          // fall through to status-based handling below
+        }
+        if (xhr.status >= 200 && xhr.status < 300 && body.path) {
+          resolve(body.path);
+        } else {
+          reject(new Error(body.error || `upload failed (HTTP ${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new Error("network error during upload"));
+      xhr.onabort = () => reject(new Error("upload aborted"));
+
+      xhr.send(file);
+    });
   }
 
   async function removeImage(id: string) {
@@ -78,11 +136,35 @@
     </div>
 
     <div class="toolbar">
+      <input
+        bind:this={fileInput}
+        type="file"
+        accept=".bin,.iol"
+        class="file-input-hidden"
+        onchange={onFileChosen}
+      />
       <button class="btn btn-primary" onclick={addImage} disabled={busy}>
         {busy ? "Adding…" : "+ Add image…"}
       </button>
-      <span class="hint">Registers a .bin/.iol via file picker (stubbed in dev).</span>
+      {#if uploadProgress !== null}
+        <div class="progress-wrap" role="progressbar" aria-valuenow={uploadProgress} aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-bar" style:width={`${uploadProgress}%`}></div>
+          <span class="progress-label">{uploadProgress}%</span>
+        </div>
+      {:else}
+        <span class="hint">
+          {labStore.transportKind === "mock"
+            ? "Registers a .bin/.iol (fabricated path in dev)."
+            : "Upload a .bin/.iol image (250–300 MB files may take a while)."}
+        </span>
+      {/if}
     </div>
+    {#if uploadError}
+      <div class="upload-error" role="alert">
+        {uploadError}
+        <button class="btn btn-icon btn-ghost" onclick={() => (uploadError = null)} aria-label="Dismiss error">✕</button>
+      </div>
+    {/if}
 
     <div class="table-wrap">
       <table>
@@ -191,6 +273,47 @@
   .hint {
     font-size: var(--fs-xs);
     color: var(--text-tertiary);
+  }
+  .file-input-hidden {
+    display: none;
+  }
+  .progress-wrap {
+    position: relative;
+    flex: 1;
+    height: 18px;
+    min-width: 140px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .progress-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--accent, #5b8cff);
+    transition: width 120ms linear;
+  }
+  .progress-label {
+    position: relative;
+    display: block;
+    text-align: center;
+    font-size: var(--fs-xs);
+    line-height: 18px;
+    color: var(--text-primary);
+    mix-blend-mode: difference;
+  }
+  .upload-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    margin: 0 var(--sp-4) var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid color-mix(in oklab, var(--state-crashed, #e5484d) 55%, transparent);
+    background: color-mix(in oklab, var(--state-crashed, #e5484d) 14%, transparent);
+    color: var(--state-crashed, #e5484d);
+    border-radius: var(--radius-md);
+    font-size: var(--fs-xs);
   }
   .table-wrap {
     overflow-y: auto;

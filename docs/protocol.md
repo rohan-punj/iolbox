@@ -64,6 +64,13 @@ Start/stop all nodes (or a subset).
 - args: `{ "labId", "nodes":[<id>...]|null }`
 - result: `{ "started":[{"node","consolePort","pid","state"}] }`
 
+### `lab.wipe`
+Reset node state (like PNetLab's wipe): stop the targeted nodes and delete their
+persisted per-node NVRAM (`nvram_<id>`) so they next boot from the injected
+startup-config again. Non-existent NVRAM is not an error.
+- args: `{ "labId", "nodes":[<id>...]|null }`
+- result: `{ "wiped":[<id>...] }`
+
 ### `node.start` / `node.stop` / `node.restart`
 Single-node lifecycle. Same shape as above for one node.
 

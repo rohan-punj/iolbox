@@ -275,7 +275,7 @@
             name: `R${id}`,
             x: pos.x,
             y: pos.y,
-            ram: 256,
+            ram: 1024,
             ethernet: 1,
             serial: 1,
             image: img ? { id: img.id, filename: img.filename, class: img.class } : undefined,

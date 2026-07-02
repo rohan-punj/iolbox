@@ -68,7 +68,7 @@ func main() {
 	}()
 
 	if *wsAddr != "" {
-		bridge := wsbridge.New(wsbridge.Config{Addr: *wsAddr}, srv)
+		bridge := wsbridge.New(wsbridge.Config{Addr: *wsAddr, ImageDir: *imageDir}, srv)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

@@ -109,6 +109,10 @@ export interface LabStartResult {
   started: NodeRuntimeStatus[];
 }
 
+export interface LabWipeResult {
+  wiped: number[];
+}
+
 export interface NodeSetImageResult {
   node: number;
   imageId: string;

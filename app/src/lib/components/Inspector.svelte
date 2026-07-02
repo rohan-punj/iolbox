@@ -36,7 +36,7 @@
   }
   function updateRam(e: Event) {
     if (!node) return;
-    node.ram = Number((e.target as HTMLInputElement).value) || 256;
+    node.ram = Number((e.target as HTMLInputElement).value) || 1024;
   }
   function updateEthernet(e: Event) {
     if (!node) return;
@@ -114,7 +114,7 @@
       <div class="field-row">
         <label class="field">
           <span class="label">RAM (MB)</span>
-          <input type="number" min="32" step="32" value={node.ram ?? 256} oninput={updateRam} />
+          <input type="number" min="32" step="32" value={node.ram ?? 1024} oninput={updateRam} />
         </label>
       </div>
 

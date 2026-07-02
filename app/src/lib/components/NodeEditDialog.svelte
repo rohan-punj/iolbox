@@ -25,7 +25,7 @@
   let name = $state("");
   let icon = $state<string | undefined>(undefined);
   let imageId = $state<string | undefined>(undefined);
-  let ram = $state(256);
+  let ram = $state(1024);
   let ethernet = $state(1);
   let serial = $state(1);
   let bootConfig = $state(true);
@@ -36,7 +36,7 @@
     name = node.name;
     icon = node.icon;
     imageId = node.image?.id;
-    ram = node.ram ?? (node.kind === "iol" ? 256 : 0);
+    ram = node.ram ?? (node.kind === "iol" ? 1024 : 0);
     ethernet = node.ethernet ?? 1;
     serial = node.serial ?? 0;
     bootConfig = node.config?.bootFromStartup !== false;
@@ -73,7 +73,7 @@
   const restartHint = $derived(
     running &&
       !!node &&
-      (ram !== (node.ram ?? (node.kind === "iol" ? 256 : 0)) ||
+      (ram !== (node.ram ?? (node.kind === "iol" ? 1024 : 0)) ||
         ethernet !== (node.ethernet ?? 1) ||
         serial !== (node.serial ?? 0) ||
         imageId !== node.image?.id)

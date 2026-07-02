@@ -11,9 +11,28 @@
   }
 
   const iolImages = $derived(labStore.images);
+  const running = $derived(labStore.labRunning);
+
+  async function startAll() {
+    await labStore.startLab();
+  }
+  async function stopAll() {
+    await labStore.stopLab();
+  }
+  async function wipeAll() {
+    if (!confirm("Wipe all saved configs/state for this lab? This cannot be undone.")) return;
+    await labStore.wipeLab();
+  }
 </script>
 
 <div class="palette">
+  <div class="section-title">Lab</div>
+  <div class="lab-controls">
+    <button class="btn lab-btn" onclick={startAll} disabled={running}>Start all</button>
+    <button class="btn lab-btn" onclick={stopAll} disabled={!running}>Stop all</button>
+    <button class="btn lab-btn btn-danger" onclick={wipeAll} disabled={running}>Wipe all</button>
+  </div>
+
   <div class="section-title">Nodes</div>
 
   <div
@@ -92,6 +111,18 @@
   }
   .section-title:first-child {
     margin-top: 0;
+  }
+  .lab-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: var(--sp-2);
+  }
+  .lab-btn {
+    justify-content: center;
+    width: 100%;
+    font-size: var(--fs-xs);
+    padding: 6px 8px;
   }
   .palette-item {
     display: flex;

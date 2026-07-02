@@ -94,7 +94,7 @@ func TestAllVerbsRegistered(t *testing.T) {
 	s := newTestServer()
 	want := []string{
 		"hello", "image.list", "image.register", "lab.load", "lab.start", "lab.stop",
-		"node.start", "node.stop", "node.restart", "node.setImage", "link.add",
+		"lab.wipe", "node.start", "node.stop", "node.restart", "node.setImage", "link.add",
 		"link.remove", "capture.start", "capture.stop", "config.save", "config.extract", "status",
 	}
 	have := map[string]bool{}

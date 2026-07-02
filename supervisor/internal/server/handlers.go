@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/image"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
@@ -201,6 +203,42 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 		s.stopBridges(ll)
 	}
 	return protocol.StartResult{Started: []protocol.StartedNode{}}, nil
+}
+
+// handleLabWipe resets node state like PNetLab's wipe: for each targeted node
+// it stops the node (via the shared stop path, so consoles/relays clean up and
+// node.state events fire) then deletes the node's persisted nvram_<id> file from
+// the lab dir so the next boot starts from the injected startup-config again. A
+// missing nvram file is not an error. Nodes nil = all nodes.
+func (s *Server) handleLabWipe(raw json.RawMessage) (any, error) {
+	var args protocol.LabWipeArgs
+	if err := decode(raw, &args); err != nil {
+		return nil, err
+	}
+	ll, err := s.currentLab(args.LabID)
+	if err != nil {
+		return nil, err
+	}
+	ids := args.Nodes
+	if ids == nil {
+		for _, n := range ll.doc.Nodes {
+			ids = append(ids, n.ID)
+		}
+	}
+	wiped := []int{}
+	for _, id := range ids {
+		if ll.get(id) == nil {
+			return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
+		}
+		// Stop first so the process releases the nvram file before we delete it.
+		s.stopNode(ll, id)
+		path := filepath.Join(ll.labDir(), nvramFilename(id))
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return nil, protocol.Errorf(protocol.CodeNvramCodecFailed, "wipe nvram node %d: %v", id, err)
+		}
+		wiped = append(wiped, id)
+	}
+	return protocol.LabWipeResult{Wiped: wiped}, nil
 }
 
 func (s *Server) handleNodeStart(raw json.RawMessage) (any, error) {

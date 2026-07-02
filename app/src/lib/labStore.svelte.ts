@@ -68,7 +68,7 @@ class LabStore {
         name: "R1",
         x: 120,
         y: 140,
-        ram: 256,
+        ram: 1024,
         ethernet: 2,
         serial: 1,
         image: { id: "a1b2c3d4", filename: "i86bi_linux-adventerprisek9-ms.vm.bin", class: "l3" },
@@ -79,7 +79,7 @@ class LabStore {
         name: "SW1",
         x: 420,
         y: 140,
-        ram: 256,
+        ram: 1024,
         ethernet: 4,
         serial: 0,
         image: { id: "b2c3d4e5", filename: "i86bi_linux_l2-adventerprisek9-ms.bin", class: "l2" },
@@ -227,6 +227,14 @@ class LabStore {
       this.openConsoleTabs = [];
       this.activeConsoleTab = null;
     });
+  }
+
+  /** Deletes saved configs/state for every node in the lab. Destructive —
+   *  callers (UI) must confirm with the user before invoking this. Under the
+   *  mock transport lab.wipe isn't implemented, so a rejection here is logged
+   *  and swallowed rather than surfaced as a hard error. */
+  async wipeLab() {
+    await this.guarded("wipe lab", () => this.client.labWipe(this.lab.id, null));
   }
 
   async startNode(nodeId: number) {

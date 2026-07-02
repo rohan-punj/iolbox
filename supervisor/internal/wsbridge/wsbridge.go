@@ -62,6 +62,10 @@ type ControlServer interface {
 type Config struct {
 	// Addr is the bind address (must be loopback), e.g. "127.0.0.1:4001".
 	Addr string
+	// ImageDir is where POST /api/upload/image writes uploaded image files (the
+	// same directory the server registers images from). Empty disables the
+	// upload endpoint, which then 503s.
+	ImageDir string
 	// DialConsole dials a node's local telnet console port. Defaults to
 	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
 	DialConsole func(port int) (net.Conn, error)
@@ -87,6 +91,10 @@ func New(cfg Config, srv ControlServer) *Bridge {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control", b.handleControl)
 	mux.HandleFunc("/console/", b.handleConsole)
+	// Exact route: the GUI PUTs an image file body here, then registers it over
+	// WS with the returned path. The exact "/api/upload/image" pattern is more
+	// specific than the "/" catch-all, so ServeMux routes it here, not to the SPA.
+	mux.HandleFunc("/api/upload/image", b.handleUploadImage)
 	// Catch-all "/" serves the embedded GUI. ServeMux prefers the longer, more
 	// specific patterns above, so /control and /console/ are never shadowed by
 	// this fallback; everything else (the SPA and its assets) falls through

@@ -101,6 +101,20 @@ type NodeArgs struct {
 	Node  int    `json:"node"`
 }
 
+// --- lab.wipe ---
+
+// LabWipeArgs targets all nodes (Nodes nil) or a subset of a lab for a wipe:
+// stop each node and delete its persisted per-node NVRAM state.
+type LabWipeArgs struct {
+	LabID string `json:"labId"`
+	Nodes []int  `json:"nodes"`
+}
+
+// LabWipeResult lists the node ids that were wiped.
+type LabWipeResult struct {
+	Wiped []int `json:"wiped"`
+}
+
 // --- node.setImage ---
 
 // NodeSetImageArgs is the node.setImage request payload.

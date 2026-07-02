@@ -88,6 +88,7 @@ func (s *Server) register() {
 	s.disp.Handle("lab.load", s.handleLabLoad)
 	s.disp.Handle("lab.start", s.handleLabStart)
 	s.disp.Handle("lab.stop", s.handleLabStop)
+	s.disp.Handle("lab.wipe", s.handleLabWipe)
 	s.disp.Handle("node.start", s.handleNodeStart)
 	s.disp.Handle("node.stop", s.handleNodeStop)
 	s.disp.Handle("node.restart", s.handleNodeRestart)
