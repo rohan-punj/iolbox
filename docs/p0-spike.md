@@ -223,6 +223,35 @@ harness — the MITM run's expect-driven console config proved flaky (PnP DHCP
 kept the test interfaces unconfigured), while the supervisor path uses NVRAM
 injection and avoids console-driving entirely.
 
+**RE-VALIDATED on the VM, 2026-07-02 — both bridged-link cases PASS:**
+
+- ✅ **Capture-preserving link** (`run-capture.sh`): ping through the
+  capture-enabled IOL↔IOL link = **95% (19/20)** (was 0/20), and the pcapng
+  now shows the full conversation — ARP who-has → ARP reply → 19 ICMP echo
+  request/reply pairs (38 ICMP frames), tshark-clean. Capture no longer
+  breaks the link it captures.
+- ✅ **VPCS↔IOL** (`run-vpcs.sh`): VPCS PC1 10.0.0.10/24 ping IOL R1 10.0.0.1
+  = **4/5 replies ~0.5 ms** (seq=1 ARP-miss timeout, normal; was "not
+  reachable"). No orphan vpcs/supervisor/IOL after teardown.
+
+**Second bug found during re-validation (fixed same day):** the supervisor
+never started the UDP relay for bridged links at `lab.start` — only
+`capture.start`/`link.add` started relays, so a VPCS↔IOL link declared in the
+lab doc had both edges (iouyap 10001→10000, VPCS 10003→10002) pumping into
+unbound relay ports (traced with tcpdump on lo: frames in, zero forwards, no
+listener on the relay's LocalPorts). That's why capture "worked" while plain
+VPCS links didn't. Fix: `prepareLabDir` now calls `startLinkRelays` (one relay
+per bridged link from the same plan) right after `startBridges`, before any
+node spawns.
+
+**VPCS console gotchas (for any driver/harness):** the syntax is
+`ip <addr>/<mask> <gateway>` (`ip 10.0.0.10/24 10.0.0.1` — addr-then-gw-then-
+masklen silently no-ops), the command runs a duplicate-address probe and takes
+up to ~5 s before confirming with `VPCS : <addr> <mask> gateway <gw>` (wait for
+that line, don't just wait for the prompt), and the first line sent after
+connecting to the console is sometimes swallowed (send a bare CR first, retry
+the command if the confirmation never appears).
+
 **Fix implemented in `internal/iouyap`:** the UDP mesh now carries **raw
 ethernet frames** (VPCS's native convention — no header on UDP at all).
 `stripToUDP` drops the 8-byte header on netio→UDP; `wrapToNetio` constructs a

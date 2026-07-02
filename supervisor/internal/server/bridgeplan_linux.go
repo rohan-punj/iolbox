@@ -67,6 +67,26 @@ func (s *Server) startBridges(ll *loadedLab) error {
 	return nil
 }
 
+// startLinkRelays starts (or restarts) the UDP relay for every bridged link in
+// the plan, so bridged links carry traffic from lab start — without this, only
+// capture.start / link.add ever started a relay, leaving a VPCS<->IOL link
+// declared in the lab doc with both edges pumping into unbound relay ports.
+// Ports come from the same deterministic plan the iouyap bridges and VPCS argv
+// use, so the pairing always agrees; the Stop-then-Start makes restarts clean.
+func (s *Server) startLinkRelays(ll *loadedLab) error {
+	if ll.bridge == nil {
+		return nil
+	}
+	for i := range ll.bridge.links {
+		bl := &ll.bridge.links[i]
+		_ = s.relays.Stop(bl.linkID)
+		if _, err := s.relays.Start(bl.relayCfg); err != nil {
+			return protocol.Errorf(protocol.CodeNodeSpawnFailed, "relay link %d: %v", bl.linkID, err)
+		}
+	}
+	return nil
+}
+
 // stopBridges closes every iouyap bridge tracked for the lab. Called on lab/node
 // teardown (shutdown, stopAll) so no netio sockets or pump goroutines leak.
 func (s *Server) stopBridges(ll *loadedLab) {

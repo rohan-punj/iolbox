@@ -45,6 +45,14 @@ func (s *Server) prepareLabDir(ll *loadedLab) error {
 		return err
 	}
 
+	// And the UDP relay for every bridged link, so those links carry traffic
+	// from the moment the nodes boot (capture.start only ADDS a tee to an
+	// already-running relay's config via restart; it must not be what brings
+	// the link up in the first place).
+	if err := s.startLinkRelays(ll); err != nil {
+		return err
+	}
+
 	// Shared iourc license.
 	if err := s.writeIourc(dir); err != nil {
 		return err
