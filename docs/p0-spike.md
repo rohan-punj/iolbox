@@ -129,8 +129,10 @@ Everything validated at once through the real orchestrator:
 **One bug found + fixed:** IOL rejects **instance id 0** (valid range 1–1024). The
 supervisor used lab `node.id` directly as the IOL instance id, so a node with id 0
 exited immediately. Fix: map node id → IOL instance id (`nodeID+1`, guarded ≤1024)
-consistently across argv + NETMAP + nvram filename. Validated above with ids 1,2;
-re-validated with ids 0,1 after the fix.
+consistently across argv + NETMAP + nvram filename. Validated with ids 1,2;
+**re-validated after the fix with node ids 0,1 (the failing case): node 0 boots
+(IOL instance 1), R1# console over the pty bridge, Et0/0 10.0.0.1 NVRAM up/up, and
+`ping 10.0.0.2` = `!!!!!` Success rate 100 percent (5/5).**
 
 Remaining P0 items (not risk — plumbing): VPCS↔IOL and Wireshark capture via the
 `internal/iouyap` bridge (built, not yet wired into the server link path).
