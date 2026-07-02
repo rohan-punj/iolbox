@@ -1,6 +1,9 @@
 package node
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStateMachineTransitions(t *testing.T) {
 	if !CanTransition(StateStopped, StateStarting) {
@@ -226,4 +229,18 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestIOLArgvRAM(t *testing.T) {
+	s := Spec{NodeID: 0, Kind: "iol", ImagePath: "/i", RAM: 1024}
+	argv := s.IOLArgv()
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "-m 1024") {
+		t.Fatalf("argv missing -m 1024: %v", argv)
+	}
+	// RAM 0 = omit the flag entirely (IOL default).
+	s.RAM = 0
+	if joined := strings.Join(s.IOLArgv(), " "); strings.Contains(joined, "-m") {
+		t.Fatalf("argv must omit -m when RAM unset: %v", s.IOLArgv())
+	}
 }

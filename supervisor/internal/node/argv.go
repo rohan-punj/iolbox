@@ -65,6 +65,13 @@ func (s Spec) IOLArgv() []string {
 	if s.Serial > 0 {
 		argv = append(argv, "-s", strconv.Itoa(s.Serial))
 	}
+	// -m <MB>: without it IOL runs at its built-in default (256MB), which is
+	// too small for modern 17.x x86_64 images to finish booting — the process
+	// stays alive while IOS wedges, so the failure is silent. Spec.RAM comes
+	// from the lab doc's node.ram.
+	if s.RAM > 0 {
+		argv = append(argv, "-m", strconv.Itoa(s.RAM))
+	}
 	nvKiB := s.NVRAMKiB
 	if nvKiB <= 0 {
 		nvKiB = DefaultNVRAMKiB
