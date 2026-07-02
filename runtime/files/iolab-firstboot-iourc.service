@@ -1,0 +1,22 @@
+# Oneshot unit that generates /opt/iolab/iourc on first boot, before the
+# supervisor starts. Ordered via Before=/RequiredBy so it always completes
+# (or the supervisor unit simply won't start — Requires= in
+# iolab-supervisor.service enforces that).
+#
+# RemainAfterExit=yes + the script's own marker-file guard
+# (/opt/iolab/.iourc-generated) together mean this only does real work once
+# per runtime instance, and every subsequent boot is a fast no-op (systemd
+# still "runs" it, but the script exits 0 immediately after the guard check).
+[Unit]
+Description=iolab first-boot iourc generation
+Before=iolab-supervisor.service
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/iolab/firstboot-iourc.sh
+
+[Install]
+WantedBy=multi-user.target

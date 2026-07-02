@@ -1,0 +1,44 @@
+# iolab supervisor — the Go control-plane process the Windows GUI talks to
+# over 127.0.0.1:4000 (see docs/protocol.md). Installed to
+# /etc/systemd/system/iolab-supervisor.service and enabled at build time
+# (build-rootfs.sh runs `systemctl enable` inside the chroot).
+#
+# Kept deliberately tiny: one static Go binary, no forking, no privilege
+# drop (the runtime is a single-purpose throwaway VM/WSL instance — there's
+# nobody else to protect it from). Restart=always because a crashed
+# supervisor should come back on its own; the GUI's reconnect logic (control
+# protocol) handles the client side of a bounce.
+[Unit]
+Description=iolab supervisor (IOL/VPCS control plane)
+Documentation=https://github.com/  # placeholder — replaced by the real repo URL at release time
+After=network.target iolab-firstboot-iourc.service
+Wants=network.target
+Requires=iolab-firstboot-iourc.service
+
+[Service]
+Type=simple
+ExecStart=/opt/iolab/supervisor -control-addr 127.0.0.1:4000 -image-dir /opt/iolab/images
+Restart=always
+RestartSec=1
+
+# Runs as root: IOL/iol_wrapper needs raw-ish socket + NVRAM file access and
+# this is a single-tenant disposable runtime, not a multi-user box (same
+# posture PNetLab used to have pre-B7-broker, but here there's no www-data
+# to protect anything from — see pnetlab-b7-sudoers-drop memory topic for
+# why that mattered there and doesn't here).
+User=root
+WorkingDirectory=/opt/iolab
+
+# Keep supervisor + child IOL/VPCS process output in the journal; the GUI
+# doesn't read this directly (it uses the control protocol's `log` event)
+# but it's invaluable when debugging a runtime interactively.
+StandardOutput=journal
+StandardError=journal
+
+# No sandboxing directives (ProtectSystem=, PrivateNetwork=, etc.) on
+# purpose: the supervisor needs to create UDP sockets, telnet listeners on
+# arbitrary high ports, and read the images directory. This is not a
+# hardened multi-tenant service.
+
+[Install]
+WantedBy=multi-user.target
