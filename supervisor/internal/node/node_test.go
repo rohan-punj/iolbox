@@ -154,6 +154,14 @@ func TestVPCSArgv(t *testing.T) {
 	if argv[0] != "vpcs" {
 		t.Fatalf("argv0=%s", argv[0])
 	}
+	// VPCS runs under the supervisor's pty (like IOL), so it must NOT be given
+	// -p: -p would make VPCS bind its own telnet listener on the console port the
+	// supervisor already bound at spawn, and VPCS would exit immediately.
+	for _, a := range argv {
+		if a == "-p" {
+			t.Fatalf("VPCS argv must NOT contain -p (pty console): %v", argv)
+		}
+	}
 	s.VPCSCount = 20
 	if _, err := s.VPCSArgv("x"); err == nil {
 		t.Fatal("count>9 should error")
@@ -176,6 +184,12 @@ func TestVPCSArgvUDPTunnel(t *testing.T) {
 	}
 	if !contains(joined, "-s 10005 ") || !contains(joined, "-c 10004 ") || !contains(joined, "-t 127.0.0.1 ") {
 		t.Fatalf("vpcs UDP tunnel flags missing/wrong: %s", joined)
+	}
+	// Still no -p even with the UDP tunnel wired (pty console, not telnet -p).
+	for _, a := range argv {
+		if a == "-p" {
+			t.Fatalf("VPCS argv must NOT contain -p: %v", argv)
+		}
 	}
 
 	// No tunnel wired => no -s/-c/-t.

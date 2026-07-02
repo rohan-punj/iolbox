@@ -112,11 +112,24 @@ func Spawn(spec Spec, m *Machine) (*Process, error) {
 // the pty master. One active client at a time (a Cisco console is single-user);
 // a new client preempts nothing on the pty — the master persists — and simply
 // gets the live stream. The loop runs until the listener is closed (Stop).
+//
+// The listener is snapshotted ONCE under p.mu into a local before the loop:
+// teardown() nils p.ln under the same lock, so re-reading p.ln each iteration
+// would race — a node that exits immediately at spawn (e.g. VPCS misconfigured)
+// triggers teardown right as this goroutine starts, and an unsynchronized
+// p.ln.Accept() then nil-derefs and panics the whole supervisor. Once teardown
+// closes the captured listener, Accept returns an error and the loop exits.
 func (p *Process) serveConsole() {
+	p.mu.Lock()
+	ln := p.ln
+	p.mu.Unlock()
+	if ln == nil {
+		return // already torn down
+	}
 	for {
-		conn, err := p.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
-			return // listener closed on Stop
+			return // listener closed on Stop/teardown
 		}
 		p.bridgeConsole(conn)
 	}
