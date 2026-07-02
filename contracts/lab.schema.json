@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rohanpunj/iolab/contracts/lab.schema.json",
+  "title": "iolab lab file",
+  "description": "One JSON document describes a full lab: nodes, links, and metadata. Portable and diffable. This schema is the source of truth for Go structs and TS types.",
+  "type": "object",
+  "required": ["version", "id", "name", "nodes", "links"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "Lab file format version. Bump on breaking changes.",
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "description": "Stable unique lab id (uuid-ish string).",
+      "type": "string",
+      "minLength": 1
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "created": { "type": "string", "description": "ISO8601; set by GUI." },
+    "modified": { "type": "string", "description": "ISO8601; set by GUI." },
+    "canvas": {
+      "description": "View state; purely presentational.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "zoom": { "type": "number", "default": 1 },
+        "pan": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+        },
+        "background": { "type": "string", "enum": ["grid", "dots", "blank"], "default": "dots" }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["id", "kind", "name", "x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Unique within lab. Also the NETMAP node index basis.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "description": "iol = Cisco IOL (L2 or L3). vpcs = virtual PC.",
+          "type": "string",
+          "enum": ["iol", "vpcs"]
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "icon": {
+          "description": "Optional icon override; GUI defaults from image class.",
+          "type": "string"
+        },
+        "image": {
+          "description": "IOL image reference. Required when kind=iol; ignored for vpcs.",
+          "$ref": "#/$defs/imageRef"
+        },
+        "ram": {
+          "description": "Megabytes. Default depends on image class.",
+          "type": "integer",
+          "minimum": 32,
+          "default": 256
+        },
+        "ethernet": {
+          "description": "Number of Ethernet adapter groups (each = 4 ports in IOL).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16,
+          "default": 1
+        },
+        "serial": {
+          "description": "Number of Serial adapter groups (each = 4 ports).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16,
+          "default": 1
+        },
+        "startupConfig": {
+          "description": "Embedded day-0 config text (IOS CLI). Injected into NVRAM at boot. Empty = image default.",
+          "type": "string"
+        },
+        "config": {
+          "description": "Reserved for kind-specific extras (e.g. vpcs canned commands).",
+          "type": "object"
+        }
+      }
+    },
+    "imageRef": {
+      "description": "References a library image by content id, with a filename fallback for portability across machines.",
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Library image id (sha256 prefix). The node binds to THIS, enabling hot-swap.",
+          "type": "string",
+          "minLength": 1
+        },
+        "filename": {
+          "description": "Fallback filename if id is not found in the target library (import portability).",
+          "type": "string"
+        },
+        "class": {
+          "description": "Cached hint; supervisor re-detects authoritatively.",
+          "type": "string",
+          "enum": ["l2", "l3", "unknown"]
+        }
+      }
+    },
+    "link": {
+      "description": "Point-to-point or multi-access segment between node interfaces.",
+      "type": "object",
+      "required": ["id", "endpoints"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer", "minimum": 0 },
+        "type": {
+          "type": "string",
+          "enum": ["p2p", "segment"],
+          "default": "p2p",
+          "description": "p2p = exactly 2 endpoints (no relay needed). segment = shared medium via userspace hub."
+        },
+        "endpoints": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/endpoint" }
+        },
+        "capture": {
+          "description": "Persistent capture intent; runtime state lives elsewhere.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "mode": { "type": "string", "enum": ["live", "file"], "default": "live" }
+          }
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "required": ["node", "interface"],
+      "additionalProperties": false,
+      "properties": {
+        "node": { "description": "node.id", "type": "integer", "minimum": 0 },
+        "interface": {
+          "description": "IOL: 'e0/0','s1/1' (adapter/port). VPCS: 'eth0' (pc index derived from node).",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
