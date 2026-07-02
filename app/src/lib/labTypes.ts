@@ -1,6 +1,8 @@
 // Hand-derived from contracts/lab.schema.json — keep property names in exact sync.
 // Source of truth: J:\Claude code\iolab\contracts\lab.schema.json
 
+import { uuid } from "./uid";
+
 export type NodeKind = "iol" | "vpcs";
 export type ImageClass = "l2" | "l3" | "unknown";
 export type LinkType = "p2p" | "segment";
@@ -96,7 +98,7 @@ export function emptyLab(name = "Untitled lab"): LabDocument {
   const now = new Date().toISOString();
   return {
     version: 1,
-    id: crypto.randomUUID(),
+    id: uuid(),
     name,
     description: "",
     created: now,

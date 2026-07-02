@@ -12,6 +12,7 @@ import type {
   SupervisorEvent,
 } from "./protocol";
 import type { LabDocument, LabLink } from "./labTypes";
+import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
 
 type PendingEntry = {
@@ -71,7 +72,7 @@ export class SupervisorClient {
   }
 
   private call<R>(op: string, args?: unknown): Promise<R> {
-    const id = crypto.randomUUID();
+    const id = uuid();
     return new Promise<R>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.transport.send({ id, op, args });
