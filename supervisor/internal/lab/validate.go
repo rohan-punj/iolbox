@@ -58,8 +58,11 @@ func (l *Lab) Validate() error {
 			}
 		case KindVPCS:
 			// image is ignored for vpcs
+		case KindNAT, KindMgmt:
+			// nat/mgmt are supervisor-internal endpoints (no image); they have
+			// exactly one connectable interface, "eth0", enforced below.
 		default:
-			return fmt.Errorf("node %d: kind must be iol or vpcs, got %q", n.ID, n.Kind)
+			return fmt.Errorf("node %d: kind must be iol, vpcs, nat or mgmt, got %q", n.ID, n.Kind)
 		}
 		if n.Ethernet != nil && (*n.Ethernet < 0 || *n.Ethernet > 16) {
 			return fmt.Errorf("node %d: ethernet groups must be 0..16, got %d", n.ID, *n.Ethernet)
@@ -72,6 +75,10 @@ func (l *Lab) Validate() error {
 		}
 		nodeByID[n.ID] = n
 	}
+
+	// extEndpoints counts how many link endpoints reference each nat/mgmt node,
+	// so we can enforce their single-interface constraint (at most one link).
+	extEndpoints := make(map[int]int)
 
 	linkIDs := make(map[int]bool, len(l.Links))
 	for _, link := range l.Links {
@@ -100,9 +107,19 @@ func (l *Lab) Validate() error {
 			}
 			// IOL interfaces must parse to adapter/port. VPCS uses ethN and is
 			// validated leniently (a non-empty string is enough).
-			if n.Kind == KindIOL {
+			switch n.Kind {
+			case KindIOL:
 				if _, err := netmap.ParseIface(ep.Interface); err != nil {
 					return fmt.Errorf("link %d: %w", link.ID, err)
+				}
+			case KindNAT, KindMgmt:
+				// Exactly one connectable interface, "eth0".
+				if ep.Interface != "eth0" {
+					return fmt.Errorf("link %d: %s node %d has only interface eth0, got %q", link.ID, n.Kind, ep.Node, ep.Interface)
+				}
+				extEndpoints[ep.Node]++
+				if extEndpoints[ep.Node] > 1 {
+					return fmt.Errorf("%s node %d may be referenced by at most one link endpoint", n.Kind, ep.Node)
 				}
 			}
 		}

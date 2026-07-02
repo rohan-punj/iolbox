@@ -84,6 +84,17 @@ func isIOLMap(doc *lab.Lab) map[int]bool {
 	return m
 }
 
+// kindMap builds the node-id -> kind lookup the bridge plan uses to distinguish
+// VPCS from nat/mgmt endpoints (all non-IOL, but wired differently in the data
+// plane: VPCS is its own process, nat/mgmt are supervisor-internal tap pumps).
+func kindMap(doc *lab.Lab) map[int]lab.Kind {
+	m := make(map[int]lab.Kind, len(doc.Nodes))
+	for _, n := range doc.Nodes {
+		m[n.ID] = n.Kind
+	}
+	return m
+}
+
 // nativeLinkSpecs converts a lab document into the netmap.LinkSpec values for
 // ONLY the links that are realized natively (see wiringFor). Bridged links are
 // deliberately excluded so no NETMAP line is emitted for them — they are wired

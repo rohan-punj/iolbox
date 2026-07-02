@@ -56,9 +56,9 @@
           "minimum": 0
         },
         "kind": {
-          "description": "iol = Cisco IOL (L2 or L3). vpcs = virtual PC.",
+          "description": "iol = Cisco IOL (L2 or L3). vpcs = virtual PC. nat = NAT gateway to the outside world (supervisor-internal tap + DHCP + MASQUERADE). mgmt = management-network bridge (supervisor-internal macvtap on the VM's mgmt iface). nat/mgmt have exactly one interface, 'eth0', and may be referenced by at most one link endpoint.",
           "type": "string",
-          "enum": ["iol", "vpcs"]
+          "enum": ["iol", "vpcs", "nat", "mgmt"]
         },
         "name": { "type": "string", "minLength": 1 },
         "x": { "type": "number" },
@@ -159,7 +159,7 @@
       "properties": {
         "node": { "description": "node.id", "type": "integer", "minimum": 0 },
         "interface": {
-          "description": "IOL: 'e0/0','s1/1' (adapter/port). VPCS: 'eth0' (pc index derived from node).",
+          "description": "IOL: 'e0/0','s1/1' (adapter/port). VPCS/nat/mgmt: 'eth0'.",
           "type": "string",
           "minLength": 1
         }

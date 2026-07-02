@@ -47,6 +47,17 @@ Handshake + capability/version negotiation. First message.
 - args: `{ "client": "iolab-gui/0.1.0" }`
 - result: `{ "supervisor": "0.1.0", "runtime": "debian-slim-12", "arch": "x86_64", "features": ["nvram","capture","i386"] }`
 
+The `features` array always contains the base capabilities `nvram`, `capture`,
+`i386`. It additionally contains:
+- `natgw` — the runtime supports **nat** nodes (has `/dev/net/tun` and
+  passwordless `sudo`).
+- `mgmt` — the runtime supports **mgmt** nodes (the above plus a usable
+  management interface).
+
+These are detected once at supervisor startup. Starting a `nat`/`mgmt` node on a
+runtime that did not advertise the matching feature returns an `unsupported`
+error (`"runtime does not support nat/mgmt nodes"`).
+
 ### `image.list`
 - result: `{ "images": [ { "id","filename","class","arch","sha256","size" } ] }`
 
@@ -171,3 +182,36 @@ stopped ─start→ starting ─(iol ready)→ running ─stop→ stopped
 - p2p links: direct UDP tunnel between the two `iol_wrapper` sockets, no relay.
 - segment links: every endpoint tunnels to a userspace hub that floods frames.
 - Any link may be intercepted by inserting the tee relay in the path (capture).
+
+## External-world node kinds (`nat`, `mgmt`)
+
+Two special node kinds connect a lab to the outside world. Both are
+**supervisor-internal** endpoints — no spawned process — that pump raw ethernet
+frames between a kernel tap/macvtap device and the connected link's UDP relay
+(the mesh carries raw ethernet, so a tap fd yields/accepts exactly those
+frames). Topologically they behave like a VPCS endpoint: the link is bridged and
+the endpoint gets its relay UDP ports from the whole-lab bridge plan. They have
+exactly one connectable interface, `eth0`, and may be referenced by at most one
+link endpoint. They have no console. The node state machine still reports
+`running`/`stopped`, so the GUI treats them uniformly.
+
+- **`nat`** — a NAT gateway. The supervisor creates a tap with a per-node
+  gateway address `172.31.<n>.1/24` (`<n>` allocated per nat node), enables
+  `ip_forward`, adds an iptables MASQUERADE for `172.31.<n>.0/24` out the VM's
+  default-route interface plus a FORWARD accept pair, and runs a minimal DHCP
+  server on the tap (pool `172.31.<n>.100-199`, router+DNS = the gateway, 1h
+  lease). A connected lab node can `ip dhcp` and reach the internet. Requires the
+  `natgw` feature.
+- **`mgmt`** — a management-network bridge. The supervisor creates a `macvtap`
+  in bridge mode on the VM's management interface (configurable via the
+  supervisor's `-mgmt-iface` flag; empty auto-picks the first UP non-loopback
+  ethernet iface that is not the default-route iface). Connected lab nodes appear
+  directly on the management L2 network with their own MACs. No IP/NAT on the
+  supervisor side. Requires the `mgmt` feature.
+
+Lab-doc shape (nat/mgmt node + its single link):
+```json
+{"id":9,"kind":"nat","name":"Internet","x":0,"y":0}
+{"id":10,"kind":"mgmt","name":"OOB","x":0,"y":0}
+{"id":0,"endpoints":[{"node":1,"interface":"e0/0"},{"node":9,"interface":"eth0"}]}
+```

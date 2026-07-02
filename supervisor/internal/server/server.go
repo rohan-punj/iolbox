@@ -12,6 +12,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/image"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
@@ -43,6 +44,10 @@ type Config struct {
 	Runtime string
 	Arch    string
 	Version string
+	// MgmtIface is the management interface a "mgmt" node's macvtap attaches to.
+	// Empty auto-picks the first UP non-loopback ethernet iface that is not the
+	// default-route iface (see extnet.PickMgmtIface). Set via -mgmt-iface.
+	MgmtIface string
 }
 
 // Server is the supervisor control server.
@@ -54,6 +59,11 @@ type Server struct {
 	consolePorts *node.PortAllocator
 	capturePorts *node.PortAllocator
 	udpPorts     *node.PortAllocator
+	natSubnets   *extnet.SubnetAllocator
+
+	// caps reports which external-net node kinds (nat/mgmt) the runtime supports,
+	// detected once at startup. Advertised in hello; enforced at lab.start.
+	caps extnet.Capabilities
 
 	mu     sync.Mutex
 	images map[string]image.Info // by id
@@ -85,9 +95,15 @@ func New(cfg Config) *Server {
 		consolePorts: node.NewPortAllocator(9000, 1000),
 		capturePorts: node.NewPortAllocator(5500, 1000),
 		udpPorts:     node.NewPortAllocator(10000, 20000),
+		natSubnets:   extnet.NewSubnetAllocator(),
 		images:       make(map[string]image.Info),
 		bc:           newBroadcaster(),
 	}
+	// Detect nat/mgmt support once: nat needs /dev/net/tun + passwordless sudo;
+	// mgmt additionally needs a candidate management interface. Off Linux this is
+	// always all-false, so the dev box never advertises the features. See
+	// extnet.Detect / handleHello.
+	s.caps = extnet.Detect(extnet.SudoOK(), cfg.MgmtIface)
 	s.register()
 	return s
 }

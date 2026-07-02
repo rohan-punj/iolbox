@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
 )
@@ -33,9 +34,18 @@ type nodeRuntime struct {
 	id          int
 	consolePort int
 	machine     *node.Machine
-	proc        *node.Process // nil until started (Linux only)
+	proc        *node.Process // nil until started (Linux only); IOL/VPCS
 	imageID     string
 	ram         int
+
+	// extnet is the running tap/macvtap endpoint for a nat/mgmt node (nil for
+	// IOL/VPCS and until started). It is process-less: it owns an fd + pump
+	// goroutines the server drives via Start/Close, but the node state machine
+	// still reports running/stopped like any other node.
+	extnet *extnet.Endpoint
+	// natSubnet is the allocated 172.31.<n>.0/24 index for a nat node (0 until
+	// started / for non-nat nodes), released back to the server on stop.
+	natSubnet int
 }
 
 func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
@@ -89,6 +99,11 @@ func (ll *loadedLab) stopAll() {
 	for _, nr := range nodes {
 		if nr.proc != nil {
 			_ = nr.proc.Stop()
+		}
+		if nr.extnet != nil {
+			_ = nr.extnet.Close()
+			nr.extnet = nil
+			nr.machine.To(node.StateStopped)
 		}
 	}
 }

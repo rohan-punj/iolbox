@@ -57,6 +57,59 @@ func TestValidateBad(t *testing.T) {
 	}
 }
 
+// TestValidateNatMgmtNodes confirms nat/mgmt are accepted kinds with an eth0
+// interface, and that their constraints (interface must be eth0; at most one
+// link endpoint) are enforced.
+func TestValidateNatMgmtNodes(t *testing.T) {
+	good := &Lab{
+		Version: 1, ID: "lab-n", Name: "n",
+		Nodes: []Node{
+			{ID: 0, Kind: KindIOL, Name: "R1", Image: &ImageRef{ID: "abc"}},
+			{ID: 1, Kind: KindNAT, Name: "Internet"},
+			{ID: 2, Kind: KindMgmt, Name: "OOB"},
+		},
+		Links: []Link{
+			{ID: 0, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
+			{ID: 1, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
+		},
+	}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid nat/mgmt lab rejected: %v", err)
+	}
+
+	bad := []struct {
+		name   string
+		mutate func(*Lab)
+	}{
+		{"nat non-eth0 iface", func(l *Lab) { l.Links[0].Endpoints[1].Interface = "e0/0" }},
+		{"mgmt non-eth0 iface", func(l *Lab) { l.Links[1].Endpoints[1].Interface = "eth1" }},
+		{"nat two links", func(l *Lab) {
+			l.Links = append(l.Links, Link{ID: 2, Type: LinkP2P,
+				Endpoints: []Endpoint{{Node: 0, Interface: "e0/2"}, {Node: 1, Interface: "eth0"}}})
+		}},
+	}
+	for _, c := range bad {
+		t.Run(c.name, func(t *testing.T) {
+			l := &Lab{
+				Version: 1, ID: "lab-n", Name: "n",
+				Nodes: []Node{
+					{ID: 0, Kind: KindIOL, Name: "R1", Image: &ImageRef{ID: "abc"}},
+					{ID: 1, Kind: KindNAT, Name: "Internet"},
+					{ID: 2, Kind: KindMgmt, Name: "OOB"},
+				},
+				Links: []Link{
+					{ID: 0, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
+					{ID: 1, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
+				},
+			}
+			c.mutate(l)
+			if err := l.Validate(); err == nil {
+				t.Fatalf("expected error for %q", c.name)
+			}
+		})
+	}
+}
+
 func TestUnmarshalRoundTrip(t *testing.T) {
 	raw := []byte(`{"version":1,"id":"x","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":1,"y":2}],"links":[]}`)
 	l, err := Unmarshal(raw)

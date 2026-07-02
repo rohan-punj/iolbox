@@ -74,6 +74,7 @@ type bridgedLink struct {
 type bridgedEndpoint struct {
 	nodeID    int
 	iface     string
+	kind      lab.Kind // the endpoint node's kind (iol/vpcs/nat/mgmt)
 	isIOL     bool
 	vpcs      bool
 	pcIndex   int // 1-based PC index within the VPCS process (VPCS only)
@@ -143,6 +144,7 @@ func realInstances(doc *lab.Lab) map[int]bool {
 // bridgeplan_linux.go). uid is os.Getuid() on Linux (the netio dir owner).
 func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int) (*bridgePlan, error) {
 	isIOL := isIOLMap(doc)
+	kindByID := kindMap(doc)
 	reals := realInstances(doc)
 
 	// Count bridged IOL endpoints first so pseudo-instances are allocated in one
@@ -203,6 +205,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 			be := bridgedEndpoint{
 				nodeID:   ep.Node,
 				iface:    ep.Interface,
+				kind:     kindByID[ep.Node],
 				isIOL:    isIOL[ep.Node],
 				relayIdx: ri,
 				relayEP:  relayEP,
@@ -232,13 +235,17 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 					LocalPort:      iface.Port,
 					PseudoInstance: be.pseudo,
 				}
-			} else {
+			} else if be.kind == lab.KindVPCS {
 				// VPCS endpoint: speaks UDP natively into the relay. Its send
 				// target is the relay's receiving port (relayEP.LocalPort) and it
 				// listens on the relay's delivery port (relayEP.RemotePort).
 				be.vpcs = true
 				be.pcIndex = 1
 			}
+			// nat/mgmt endpoints are ALSO non-IOL and bridged: they get relay UDP
+			// ports (allocated above) but no pseudo-instance and no VPCS argv. The
+			// supervisor pumps their tap/macvtap fd against these same ports (see
+			// extnetUDPFor / extnet.Config), exactly mirroring VPCS topologically.
 			bl.endpoints = append(bl.endpoints, be)
 		}
 		plan.links = append(plan.links, bl)
@@ -286,6 +293,23 @@ func (p *bridgePlan) vpcsUDPFor(nodeID int) (sendPort, listenPort int, ok bool) 
 	for i := range p.links {
 		for _, be := range p.links[i].endpoints {
 			if be.vpcs && be.nodeID == nodeID {
+				return be.relayEP.LocalPort, be.relayEP.RemotePort, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// extnetUDPFor returns the UDP send/listen ports a nat/mgmt node's tap pump uses
+// for its link, derived from the relay endpoint exactly like vpcsUDPFor: the
+// endpoint SENDS tap frames to sendPort (the relay's receiving LocalPort) and
+// LISTENS on listenPort (the relay's delivery RemotePort) for frames to write
+// into the tap. ok is false if the node is not a nat/mgmt endpoint on a bridged
+// link in this plan. See extnet.Config / extnet.Start.
+func (p *bridgePlan) extnetUDPFor(nodeID int) (sendPort, listenPort int, ok bool) {
+	for i := range p.links {
+		for _, be := range p.links[i].endpoints {
+			if (be.kind == lab.KindNAT || be.kind == lab.KindMgmt) && be.nodeID == nodeID {
 				return be.relayEP.LocalPort, be.relayEP.RemotePort, true
 			}
 		}

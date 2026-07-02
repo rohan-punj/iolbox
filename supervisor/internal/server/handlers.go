@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/image"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
 	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
@@ -31,11 +32,15 @@ func (s *Server) handleHello(raw json.RawMessage) (any, error) {
 	if err := decode(raw, &args); err != nil {
 		return nil, err
 	}
+	// Base features are always present; nat/mgmt are advertised ("natgw"/"mgmt")
+	// only when the runtime detected support at startup (see extnet.Detect).
+	features := []string{"nvram", "capture", "i386"}
+	features = append(features, s.caps.GateFeatures()...)
 	return protocol.HelloResult{
 		Supervisor: s.cfg.Version,
 		Runtime:    s.cfg.Runtime,
 		Arch:       s.cfg.Arch,
-		Features:   []string{"nvram", "capture", "i386"},
+		Features:   features,
 	}, nil
 }
 
@@ -303,6 +308,20 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 			return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
 		}
 		docNode := ll.findNode(id)
+
+		// nat/mgmt nodes are supervisor-internal tap/macvtap endpoints, not
+		// spawned processes: start an extnet.Endpoint that owns an fd + pump
+		// goroutines instead of a node.Process. The node state machine still
+		// flips to running so the GUI treats them uniformly. They have no console.
+		if docNode.Kind == lab.KindNAT || docNode.Kind == lab.KindMgmt {
+			started, err := s.startExtnetNode(ll, docNode, nr)
+			if err != nil {
+				return nil, err
+			}
+			out.Started = append(out.Started, started)
+			continue
+		}
+
 		spec, err := s.buildSpec(ll, docNode, nr)
 		if err != nil {
 			return nil, err
@@ -326,6 +345,74 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		})
 	}
 	return out, nil
+}
+
+// startExtnetNode brings up a nat/mgmt node's tap/macvtap endpoint and flips its
+// state machine to running. It requires runtime capability support (gated at
+// startup via extnet.Detect) and resolves the default-route / management
+// interface plus, for nat, a subnet index. The endpoint is idempotent per node:
+// if one is already running it is left as-is. Returns the StartedNode summary.
+func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (protocol.StartedNode, error) {
+	if !s.caps.Supports(extnet.Kind(n.Kind)) {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeUnsupported,
+			"runtime does not support %s nodes", n.Kind)
+	}
+	if nr.extnet != nil {
+		// Already running; report current state without re-creating the device.
+		return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
+	}
+	if !nr.machine.To(node.StateStarting) {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed,
+			"node %d: not in a startable state", n.ID)
+	}
+
+	cfg := extnet.Config{Kind: extnet.Kind(n.Kind), NodeID: n.ID}
+	// Relay UDP ports (same pattern as VPCS): the endpoint pumps its tap against
+	// the plan's relay endpoint for this node's single link.
+	if ll.bridge != nil {
+		if send, listen, ok := ll.bridge.extnetUDPFor(n.ID); ok {
+			cfg.SendPort = send
+			cfg.ListenPort = listen
+		}
+	}
+
+	switch n.Kind {
+	case lab.KindNAT:
+		idx, err := s.natSubnets.Next()
+		if err != nil {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed, "node %d: %v", n.ID, err)
+		}
+		def, err := extnet.DefaultRouteIface()
+		if err != nil {
+			s.natSubnets.Release(idx)
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed, "node %d: %v", n.ID, err)
+		}
+		cfg.SubnetIndex = idx
+		cfg.DefaultIface = def
+		nr.natSubnet = idx
+	case lab.KindMgmt:
+		iface, err := extnet.PickMgmtIface(s.cfg.MgmtIface)
+		if err != nil {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed, "node %d: %v", n.ID, err)
+		}
+		cfg.MgmtIface = iface
+	}
+
+	ep, err := extnet.Start(cfg)
+	if err != nil {
+		if nr.natSubnet != 0 {
+			s.natSubnets.Release(nr.natSubnet)
+			nr.natSubnet = 0
+		}
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed, "node %d: %v", n.ID, err)
+	}
+	nr.extnet = ep
+	nr.machine.To(node.StateRunning)
+	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
 }
 
 // buildSpec assembles a node.Spec from the lab node + runtime state.
@@ -369,6 +456,18 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 func (s *Server) stopNode(ll *loadedLab, id int) {
 	nr := ll.get(id)
 	if nr == nil {
+		return
+	}
+	if nr.extnet != nil {
+		// nat/mgmt: Close deletes the tap/macvtap and removes the iptables rules
+		// (nat) by exact -D spec, then release the subnet index back to the pool.
+		_ = nr.extnet.Close()
+		nr.extnet = nil
+		if nr.natSubnet != 0 {
+			s.natSubnets.Release(nr.natSubnet)
+			nr.natSubnet = 0
+		}
+		nr.machine.To(node.StateStopped)
 		return
 	}
 	if nr.proc != nil {
