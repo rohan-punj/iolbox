@@ -82,6 +82,8 @@ export const UI_GLYPHS: Record<string, string> = {
   upload: '<path d="M12 15V4m0 0-4 4m4-4 4 4M5 19h14"/>',
   images: '<rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 16 5-4 4 3 3-2 4 3"/>',
   net: '<path d="M12 3v6m0 0-3 3m3-3 3 3M6 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm12 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-6-9v0M8 17l3-3m5 3-3-3"/>',
+  link: '<path d="M9 12h6M8.5 8.5 6 11a3.5 3.5 0 0 0 5 5l1.5-1.5m3-3L17 10a3.5 3.5 0 0 0-5-5l-1.5 1.5"/>',
+  edit: '<path d="M4 20h4l10-10-4-4L4 16v4Zm10-14 4 4"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
 };
 

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
   import { stateColor, stateLabel } from "../nodeVisuals";
-  import { iconSvg, defaultIconFor, iconRegistryVersion } from "../icons.svelte";
+  import { iconSvg, defaultIconFor, iconRegistryVersion, uiSvg } from "../icons.svelte";
+  import { linking } from "../linking.svelte";
   import IconPicker from "./IconPicker.svelte";
 
   const node = $derived(labStore.selectedNode);
@@ -76,6 +77,14 @@
       <button class="icon-btn" onclick={openIconPicker}>
         <span class="icon-glyph">{@html iconMarkup}</span>
         <span class="icon-lab">Change icon…</span>
+      </button>
+    </div>
+
+    <div class="field">
+      <span class="label">Properties</span>
+      <button class="icon-btn" onclick={() => node && linking.requestEdit?.(node.id)}>
+        <span class="icon-glyph">{@html uiSvg("edit", 18)}</span>
+        <span class="icon-lab">Edit node…</span>
       </button>
     </div>
 

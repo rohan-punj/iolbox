@@ -34,6 +34,10 @@
     (data as { source?: EndpointInfo; target?: EndpointInfo; capture?: boolean } | undefined) ?? {}
   );
 
+  // R2.3 — hovering either chip glows the whole cable (same as hovering the
+  // edge). `hot` mirrors the edge path's hover state to the chips and vice-versa.
+  let hot = $state(false);
+
   // Bezier path + label anchor points, recomputed whenever either node moves.
   const geom = $derived.by(() => {
     const s = sourceNode.current;
@@ -71,12 +75,20 @@
     path={geom.path}
     class={"floating-edge" +
       (selected ? " is-selected" : "") +
-      (info.capture ? " is-capture" : "")}
+      (info.capture ? " is-capture" : "") +
+      (hot ? " is-hot" : "")}
   />
 
   {#if info.source}
     <EdgeLabel x={geom.sChip.x} y={geom.sChip.y} class="port-chip-slot">
-      <span class="port-chip" style={`transform-origin:${geom.sOrigin} center`}>
+      <span
+        class="port-chip"
+        class:chip-hot={hot}
+        style={`transform-origin:${geom.sOrigin} center`}
+        onpointerenter={() => (hot = true)}
+        onpointerleave={() => (hot = false)}
+        role="presentation"
+      >
         <span class="chip-detail">{info.source.name} </span>{info.source.iface}{#if info.source.telnet}<span
             class="chip-sep">·</span><span class="chip-detail">telnet {info.source.telnet}</span
           >{/if}
@@ -86,7 +98,14 @@
 
   {#if info.target}
     <EdgeLabel x={geom.tChip.x} y={geom.tChip.y} class="port-chip-slot">
-      <span class="port-chip" style={`transform-origin:${geom.tOrigin} center`}>
+      <span
+        class="port-chip"
+        class:chip-hot={hot}
+        style={`transform-origin:${geom.tOrigin} center`}
+        onpointerenter={() => (hot = true)}
+        onpointerleave={() => (hot = false)}
+        role="presentation"
+      >
         <span class="chip-detail">{info.target.name} </span>{info.target.iface}{#if info.target.telnet}<span
             class="chip-sep">·</span><span class="chip-detail">telnet {info.target.telnet}</span
           >{/if}
@@ -100,9 +119,8 @@
   :global(.svelte-flow__edge .floating-edge) {
     stroke: var(--cable);
     stroke-width: 2;
-  }
-  :global(.svelte-flow__edge:hover .floating-edge) {
-    stroke: var(--accent);
+    /* R2.3 — glow + width change animate together (~120ms). */
+    transition: stroke 120ms ease, stroke-width 120ms ease, filter 120ms ease;
   }
   :global(.svelte-flow__edge .floating-edge.is-selected) {
     stroke: var(--accent);
@@ -112,6 +130,36 @@
     stroke: var(--state-starting);
     stroke-width: 2.5;
     filter: drop-shadow(0 0 5px color-mix(in oklab, var(--state-starting) 60%, transparent));
+  }
+
+  /* R2.3 — link hover glow. `is-hot` is set when the edge OR either chip is
+     hovered. The whole cable glows in the accent and thickens slightly. */
+  :global(.svelte-flow__edge:hover .floating-edge),
+  :global(.svelte-flow__edge .floating-edge.is-hot) {
+    stroke: var(--accent);
+    stroke-width: 3.25;
+    filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 75%, transparent));
+  }
+  /* Capture-active links already glow amber; intensify on hover. */
+  :global(.svelte-flow__edge:hover .floating-edge.is-capture),
+  :global(.svelte-flow__edge .floating-edge.is-capture.is-hot) {
+    stroke: var(--state-starting);
+    filter: drop-shadow(0 0 8px color-mix(in oklab, var(--state-starting) 85%, transparent));
+  }
+  /* Widen the invisible interaction stroke so the cable is easy to hover. */
+  :global(.svelte-flow__edge .svelte-flow__edge-interaction) {
+    stroke-width: 18;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* glow only, no width animation */
+    :global(.svelte-flow__edge .floating-edge) {
+      transition: stroke 120ms ease, filter 120ms ease;
+    }
+    :global(.svelte-flow__edge:hover .floating-edge),
+    :global(.svelte-flow__edge .floating-edge.is-hot) {
+      stroke-width: 2;
+    }
   }
 
   /* The EdgeLabel wrapper handles positioning; let the inner chip catch hovers. */
@@ -162,8 +210,9 @@
   .port-chip:hover .chip-sep {
     display: inline;
   }
-  /* When the edge itself is hovered, gently signal both of its chips. */
-  :global(.svelte-flow__edge:hover) .port-chip {
+  /* When the edge (or its sibling chip) is hovered, signal both chips. */
+  :global(.svelte-flow__edge:hover) .port-chip,
+  .port-chip.chip-hot {
     color: var(--ink);
     border-color: var(--accent);
   }

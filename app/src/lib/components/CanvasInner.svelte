@@ -22,7 +22,11 @@
   import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
   import ChangeImagePopover from "./ChangeImagePopover.svelte";
   import IconPicker from "./IconPicker.svelte";
+  import InterfacePicker from "./InterfacePicker.svelte";
+  import NodeEditDialog from "./NodeEditDialog.svelte";
   import { uiSvg } from "../icons.svelte";
+  import { linking } from "../linking.svelte";
+  import { nextFreeInterface } from "../interfaces";
   import type { LabNode } from "../labTypes";
 
   const nodeTypes: NodeTypes = { iol: IolNode, vpcs: VpcsNode };
@@ -154,26 +158,89 @@
   }
 
   function nextInterface(node: LabNode): string {
-    const used = new Set(
-      labStore.lab.links
-        .flatMap((l) => l.endpoints)
-        .filter((e) => e.node === node.id)
-        .map((e) => e.interface)
-    );
-    if (node.kind === "vpcs") return "eth0";
-    const adapters = node.ethernet ?? 1;
-    for (let a = 0; a < Math.max(adapters, 4); a++) {
-      for (let p = 0; p < 4; p++) {
-        const iface = `e${a}/${p}`;
-        if (!used.has(iface)) return iface;
-      }
-    }
-    return "e0/0";
+    return nextFreeInterface(node);
   }
 
   // --- drag from palette to create nodes ---
   let canvasEl: HTMLDivElement | undefined = $state();
-  const { screenToFlowPosition, fitView, zoomIn, zoomOut, setViewport } = useSvelteFlow();
+  const { screenToFlowPosition, flowToScreenPosition, fitView, zoomIn, zoomOut, setViewport } =
+    useSvelteFlow();
+
+  // --- R2.1: PNetLab-style link-add (connector → rubber-band → drop → picker) ---
+  // The rubber-band is drawn in the canvas-wrap's LOCAL screen coordinates. The
+  // source anchor is the node centre projected via flowToScreenPosition; the head
+  // follows the pointer. Drop hit-tests the whole target node's bounding box (no
+  // precise handle required); on a valid drop the Interface Picker opens.
+  let rubber = $state<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  let ifPicker = $state<{ x: number; y: number; sourceId: number; targetId: number } | null>(null);
+  let linkSourceId = 0;
+
+  function localPoint(clientX: number, clientY: number) {
+    const r = canvasEl?.getBoundingClientRect();
+    return { x: clientX - (r?.left ?? 0), y: clientY - (r?.top ?? 0) };
+  }
+
+  function nodeCenterScreen(nodeId: number) {
+    const n = labStore.lab.nodes.find((x) => x.id === nodeId);
+    if (!n) return null;
+    return flowToScreenPosition({ x: n.x + NODE_W / 2, y: n.y + NODE_H / 2 });
+  }
+
+  // Whole-node hit test in flow coordinates (from the pointer's flow position).
+  function nodeAtFlow(fx: number, fy: number, exclude: number): LabNode | null {
+    for (const n of labStore.lab.nodes) {
+      if (n.id === exclude) continue;
+      if (fx >= n.x && fx <= n.x + NODE_W && fy >= n.y && fy <= n.y + NODE_H) return n;
+    }
+    return null;
+  }
+
+  function startLinkDrag(nodeId: number, ev: PointerEvent) {
+    linkSourceId = nodeId;
+    linking.sourceId = nodeId;
+    const center = nodeCenterScreen(nodeId);
+    const c = center ? localPoint(center.x, center.y) : localPoint(ev.clientX, ev.clientY);
+    const head = localPoint(ev.clientX, ev.clientY);
+    rubber = { x1: c.x, y1: c.y, x2: head.x, y2: head.y };
+    window.addEventListener("pointermove", onLinkMove);
+    window.addEventListener("pointerup", onLinkUp);
+  }
+
+  function onLinkMove(ev: PointerEvent) {
+    if (!rubber) return;
+    const head = localPoint(ev.clientX, ev.clientY);
+    // Keep the source anchor pinned to the (possibly panned) node centre.
+    const center = nodeCenterScreen(linkSourceId);
+    const c = center ? localPoint(center.x, center.y) : { x: rubber.x1, y: rubber.y1 };
+    rubber = { x1: c.x, y1: c.y, x2: head.x, y2: head.y };
+    const fp = screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+    const target = nodeAtFlow(fp.x, fp.y, linkSourceId);
+    linking.dropTargetId = target ? target.id : null;
+  }
+
+  function onLinkUp(ev: PointerEvent) {
+    window.removeEventListener("pointermove", onLinkMove);
+    window.removeEventListener("pointerup", onLinkUp);
+    const fp = screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+    const target = nodeAtFlow(fp.x, fp.y, linkSourceId);
+    rubber = null;
+    linking.sourceId = null;
+    linking.dropTargetId = null;
+    if (target) {
+      ifPicker = { x: ev.clientX, y: ev.clientY, sourceId: linkSourceId, targetId: target.id };
+    }
+  }
+
+  onMount(() => {
+    linking.start = startLinkDrag;
+    linking.requestEdit = openEdit;
+    return () => {
+      linking.start = null;
+      linking.requestEdit = null;
+      window.removeEventListener("pointermove", onLinkMove);
+      window.removeEventListener("pointerup", onLinkUp);
+    };
+  });
 
   // D5: fit-to-content once after first mount (does not clamp panning afterward).
   onMount(() => {
@@ -229,6 +296,12 @@
   let linkMenu = $state<{ x: number; y: number; linkId: number } | null>(null);
   let imagePopover = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let iconPicker = $state<{ x: number; y: number; nodeId: number } | null>(null);
+  let editDialog = $state<{ nodeId: number } | null>(null);
+
+  function openEdit(nid: number) {
+    labStore.selectedNodeId = nid;
+    editDialog = { nodeId: nid };
+  }
 
   function onNodeContextMenu({ node, event }: { node: Node; event: MouseEvent }) {
     event.preventDefault();
@@ -278,6 +351,10 @@
         action: () => labStore.openConsole(nid),
       },
       { separator: true, label: "sep1", action: () => {} },
+      {
+        label: "Edit…",
+        action: () => openEdit(nid),
+      },
       {
         label: "Change image…",
         action: () => {
@@ -350,6 +427,16 @@
     <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} bgColor="transparent" patternColor="var(--dot)" />
   </SvelteFlow>
 
+  <!-- R2.1: rubber-band cable following the cursor during a link-add drag. -->
+  {#if rubber}
+    <svg class="rubber-layer" aria-hidden="true">
+      <path
+        class="rubber-cable"
+        d={`M ${rubber.x1} ${rubber.y1} L ${rubber.x2} ${rubber.y2}`}
+      />
+    </svg>
+  {/if}
+
   <!-- D5: bench view controls -->
   <div class="view-controls">
     <button class="vc" title="Zoom in" onclick={() => void zoomIn({ duration: 150 })} aria-label="Zoom in">+</button>
@@ -400,6 +487,20 @@
       onClose={() => (iconPicker = null)}
     />
   {/if}
+
+  {#if ifPicker}
+    <InterfacePicker
+      x={ifPicker.x}
+      y={ifPicker.y}
+      sourceId={ifPicker.sourceId}
+      targetId={ifPicker.targetId}
+      onClose={() => (ifPicker = null)}
+    />
+  {/if}
+
+  {#if editDialog}
+    <NodeEditDialog nodeId={editDialog.nodeId} onClose={() => (editDialog = null)} />
+  {/if}
 </div>
 
 <style>
@@ -423,6 +524,23 @@
   }
   :global(.svelte-flow__node.selected) {
     box-shadow: none;
+  }
+
+  /* R2.1 — rubber-band cable overlay (screen-space, above the flow). */
+  .rubber-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 6;
+  }
+  .rubber-cable {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    stroke-dasharray: 6 5;
+    stroke-linecap: round;
   }
 
   .view-controls {

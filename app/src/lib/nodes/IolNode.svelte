@@ -2,12 +2,25 @@
   import { Handle, Position, type NodeProps } from "@xyflow/svelte";
   import { labStore } from "../labStore.svelte";
   import { stateLabel } from "../nodeVisuals";
-  import { iconSvg, defaultIconFor, iconRegistryVersion } from "../icons.svelte";
+  import { iconSvg, defaultIconFor, iconRegistryVersion, uiSvg } from "../icons.svelte";
+  import { linking } from "../linking.svelte";
 
   let { id, data, selected }: NodeProps = $props();
 
   const nodeId = $derived(Number(id));
   const state = $derived(labStore.nodeStates[nodeId] ?? "stopped");
+  const isDropTarget = $derived(linking.dropTargetId === nodeId);
+  const isLinkSource = $derived(linking.sourceId === nodeId);
+
+  function onConnectorDown(ev: PointerEvent) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    linking.start?.(nodeId, ev);
+  }
+  function onDblClick(ev: MouseEvent) {
+    ev.stopPropagation();
+    linking.requestEdit?.(nodeId);
+  }
   const imageClass = $derived((data as any).imageClass as string);
   const isL2 = $derived(imageClass === "l2");
   const label = $derived((data as any).label as string);
@@ -18,7 +31,17 @@
   const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, 30)));
 </script>
 
-<div class="node face-node" class:selected class:l2={isL2} data-state={state}>
+<div
+  class="node face-node"
+  class:selected
+  class:l2={isL2}
+  class:drop-target={isDropTarget}
+  class:linking={isLinkSource}
+  data-state={state}
+  ondblclick={onDblClick}
+  role="button"
+  tabindex="-1"
+>
   <Handle type="source" position={Position.Top} id="top" />
   <Handle type="source" position={Position.Right} id="right" />
   <Handle type="source" position={Position.Bottom} id="bottom" />
@@ -27,6 +50,12 @@
   <div class="face">
     <span class="led" title={stateLabel(state)}></span>
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
+    <button
+      class="connector nodrag"
+      title="Drag to another node to connect"
+      aria-label="Connect this node"
+      onpointerdown={onConnectorDown}
+    >{@html uiSvg("link", 12)}</button>
   </div>
   <div class="name mono">{label}</div>
 </div>
@@ -61,6 +90,42 @@
   }
   .node.selected .glyph {
     color: var(--accent);
+  }
+  /* R2.1 — link-add connector affordance (hover/focus only). */
+  .connector {
+    all: unset;
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-ink);
+    display: grid;
+    place-items: center;
+    cursor: crosshair;
+    opacity: 0;
+    transform: scale(0.6);
+    transition: opacity var(--transition-fast), transform var(--transition-fast);
+    box-shadow: var(--shadow-md);
+    z-index: 6;
+  }
+  .face:hover .connector,
+  .connector:focus-visible,
+  .node.linking .connector {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .connector :global(svg) {
+    width: 12px;
+    height: 12px;
+    pointer-events: none;
+  }
+  /* R2.1 — accent ring while this node is the hovered drop target. */
+  .node.drop-target .face {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 34%, transparent), var(--shadow-md);
   }
   .glyph {
     display: grid;
