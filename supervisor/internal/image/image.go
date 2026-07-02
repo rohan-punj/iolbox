@@ -5,12 +5,14 @@
 //   - arch: i386 (32-bit) vs x86_64 (64-bit), parsed from the ELF header
 //   - class: l2 (switching) vs l3 (routing), sniffed heuristically
 //
-// The class heuristic (documented, adjustable): L2 IOL images contain switching
-// strings such as "l2" markers ("Switching", "vlan", "spanning-tree",
-// "mac-address-table") far more densely than L3-only images. We scan the binary
-// for a set of L2-indicative substrings; presence of several implies l2. This is
-// a heuristic hint only — the lab schema treats class as advisory and the GUI
-// lets the user override.
+// The class heuristic (verified against real 17.18.02 binaries): L2 images
+// embed their build platform string containing "linux_l2"
+// ("x86_64_crb_linux_l2-adventerprisek9-ms"; legacy 32-bit "i86bi_linux_l2-");
+// L3 images contain no "linux_l2" at all. Generic switching strings
+// ("spanning-tree", "switchport", ...) appear in BOTH classes, so they can't
+// discriminate. The marker sits >100 MB into real images, so the whole file is
+// scanned — piggybacked on the sha256 read. This is a heuristic hint only —
+// the lab schema treats class as advisory and the GUI lets the user override.
 package image
 
 import (
@@ -21,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Arch is the CPU architecture of an IOL ELF binary.
@@ -70,27 +73,27 @@ func Inspect(path string) (*Info, error) {
 		return nil, err
 	}
 
-	// sha256 over the whole file.
+	// sha256 over the whole file, scanning for the L2 build-string marker in
+	// the same pass (see SniffClass — the marker sits >100 MB into real L2
+	// images, so no bounded prefix can catch it).
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	scan := newL2Scanner()
+	if _, err := io.Copy(io.MultiWriter(h, scan), f); err != nil {
 		return nil, err
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
 
-	// Rewind and read a prefix for ELF + class sniffing. IOL binaries are a few
-	// MB; a generous prefix captures the string table cheaply. We cap the read
-	// so we never slurp an enormous file into memory.
+	// Rewind and read a small prefix for ELF header parsing only.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	const sniffLimit = 8 << 20 // 8 MiB
-	prefix := make([]byte, min64(fi.Size(), sniffLimit))
+	prefix := make([]byte, min64(fi.Size(), 4096))
 	if _, err := io.ReadFull(f, prefix); err != nil && err != io.ErrUnexpectedEOF {
 		return nil, err
 	}
 
 	arch := ParseArch(prefix)
-	class := SniffClass(prefix)
+	class := classify(scan.found, baseName(path), fi.Size())
 
 	return &Info{
 		ID:       sum[:16],
@@ -134,28 +137,70 @@ func ParseArch(b []byte) Arch {
 	}
 }
 
-// l2Markers are substrings that appear densely in L2/switching IOL images.
-var l2Markers = [][]byte{
-	[]byte("spanning-tree"),
-	[]byte("mac-address-table"),
-	[]byte("switchport"),
-	[]byte("vlan"),
-	[]byte("Switching"),
+// l2Needle is the discriminating substring of the L2 image's embedded build
+// platform string: 64-bit L2 IOL embeds "x86_64_crb_linux_l2-adventerprisek9-ms"
+// and the legacy 32-bit generation is named/embeds "i86bi_linux_l2-...". L3
+// images contain NO "linux_l2" occurrence at all (verified against real
+// 17.18.02 L3+L2 binaries) — whereas generic switching strings
+// ("spanning-tree", "switchport", ...) appear in BOTH, so marker-presence
+// heuristics cannot tell the classes apart.
+var l2Needle = []byte("linux_l2")
+
+// l2Scanner is an io.Writer that watches a byte stream for l2Needle, keeping
+// a needle-sized tail between writes so matches spanning chunk boundaries are
+// still found. Feed it via io.MultiWriter alongside the sha256 hasher, so
+// classification costs no extra file pass.
+type l2Scanner struct {
+	tail  []byte
+	found bool
 }
 
-// SniffClass returns l2 when several switching markers are present, otherwise
-// l3, or unknown if the buffer is too small to judge. Heuristic; advisory only.
+func newL2Scanner() *l2Scanner {
+	return &l2Scanner{tail: make([]byte, 0, len(l2Needle)-1)}
+}
+
+func (s *l2Scanner) Write(p []byte) (int, error) {
+	if !s.found {
+		if bytes.Contains(p, l2Needle) || bytes.Contains(append(s.tail, p[:min(len(p), len(l2Needle)-1)]...), l2Needle) {
+			s.found = true
+		} else {
+			keep := len(l2Needle) - 1
+			if len(p) >= keep {
+				s.tail = append(s.tail[:0], p[len(p)-keep:]...)
+			} else {
+				s.tail = append(s.tail, p...)
+				if len(s.tail) > keep {
+					s.tail = append(s.tail[:0], s.tail[len(s.tail)-keep:]...)
+				}
+			}
+		}
+	}
+	return len(p), nil
+}
+
+// classify decides the image class from the full-file scan plus a filename
+// hint fallback ("l2" in the basename, for stripped/repacked images that lost
+// the build string). Heuristic; advisory only.
+func classify(foundL2Marker bool, filename string, size int64) Class {
+	if size < 1024 {
+		return ClassUnknown
+	}
+	if foundL2Marker {
+		return ClassL2
+	}
+	if strings.Contains(strings.ToLower(filename), "l2") {
+		return ClassL2
+	}
+	return ClassL3
+}
+
+// SniffClass classifies an in-memory image buffer; kept for tests and small
+// callers. Same rules as the streaming path, minus the filename hint.
 func SniffClass(b []byte) Class {
 	if len(b) < 1024 {
 		return ClassUnknown
 	}
-	hits := 0
-	for _, m := range l2Markers {
-		if bytes.Contains(b, m) {
-			hits++
-		}
-	}
-	if hits >= 2 {
+	if bytes.Contains(b, l2Needle) {
 		return ClassL2
 	}
 	return ClassL3

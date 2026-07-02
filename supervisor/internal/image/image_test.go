@@ -44,11 +44,13 @@ func TestParseArch(t *testing.T) {
 
 func TestSniffClass(t *testing.T) {
 	pad := make([]byte, 2048)
-	l2 := append(append([]byte{}, pad...), []byte("spanning-tree ... switchport ... vlan")...)
+	l2 := append(append([]byte{}, pad...), []byte("x86_64_crb_linux_l2-adventerprisek9-ms")...)
 	if got := SniffClass(l2); got != ClassL2 {
 		t.Fatalf("l2 expected, got %s", got)
 	}
-	l3 := append(append([]byte{}, pad...), []byte("ip routing ospf bgp")...)
+	// Generic switching strings appear in L3 images too and must NOT flip the
+	// class (this was the pre-fix false-negative/false-positive trap).
+	l3 := append(append([]byte{}, pad...), []byte("spanning-tree switchport vlan mac-address-table ospf bgp")...)
 	if got := SniffClass(l3); got != ClassL3 {
 		t.Fatalf("l3 expected, got %s", got)
 	}
@@ -57,11 +59,40 @@ func TestSniffClass(t *testing.T) {
 	}
 }
 
+func TestClassifyFilenameHint(t *testing.T) {
+	if got := classify(false, "L2.bin", 4096); got != ClassL2 {
+		t.Fatalf("filename hint: %s", got)
+	}
+	if got := classify(false, "L3.bin", 4096); got != ClassL3 {
+		t.Fatalf("plain l3: %s", got)
+	}
+	if got := classify(true, "anything.bin", 4096); got != ClassL2 {
+		t.Fatalf("marker beats filename: %s", got)
+	}
+	if got := classify(false, "x.bin", 100); got != ClassUnknown {
+		t.Fatalf("tiny: %s", got)
+	}
+}
+
+func TestL2ScannerSpansChunks(t *testing.T) {
+	s := newL2Scanner()
+	needle := []byte("x86_64_crb_linux_l2-ms")
+	// Feed byte-by-byte so the needle always straddles write boundaries.
+	for _, b := range needle {
+		if _, err := s.Write([]byte{b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !s.found {
+		t.Fatal("scanner missed needle split across writes")
+	}
+}
+
 func TestInspect(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "fakeimg.bin")
 	content := append(elfHeader(1, 1, 3), make([]byte, 2048)...)
-	copy(content[64:], []byte("spanning-tree switchport vlan mac-address-table"))
+	copy(content[64:], []byte("i86bi_linux_l2-adventerprisek9-ms"))
 	if err := os.WriteFile(p, content, 0o644); err != nil {
 		t.Fatal(err)
 	}

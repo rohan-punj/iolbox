@@ -24,6 +24,9 @@ class LabStore {
   consolePorts = $state<Record<number, number>>({});
   images = $state<LibraryImage[]>([]);
   logs = $state<LogLine[]>([]);
+  /** Last user-visible failure (start/stop/load); shown in the top bar until
+   *  the next successful action clears it. Never silently swallow errors. */
+  lastError = $state<string | null>(null);
   providerStatus = $state<ProviderStatus>("unknown");
   activeProvider = $state<ProviderId | null>(null);
   labRunning = $derived(
@@ -129,10 +132,41 @@ class LabStore {
       if (this.transportKind === "mock") this.activeProvider = "vmware";
       const { images } = await this.client.imageList();
       this.images = images;
+      this.reconcileNodeImages();
       await this.loadLab(this.lab);
     } catch (e) {
       this.providerStatus = "error";
+      this.lastError = `connect failed: ${(e as Error).message}`;
       this.pushLog("error", `connect failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Remap node image ids against the connected supervisor's registry. A lab
+   * doc can carry ids the backend doesn't know (the seeded demo topology's
+   * placeholder ids, a doc from another machine, an image since deleted):
+   * remap each unknown id to a registered image of the same class when one
+   * exists, else clear it so the pre-start check flags the node instead of
+   * lab.start failing opaquely with image_not_found.
+   */
+  private reconcileNodeImages() {
+    for (const node of this.lab.nodes) {
+      if (node.kind !== "iol" || !node.image) continue;
+      if (this.images.some((i) => i.id === node.image!.id)) continue;
+      const substitute = this.images.find((i) => i.class === node.image!.class);
+      if (substitute) {
+        this.pushLog(
+          "info",
+          `node ${node.name}: image ${node.image.filename} not registered here — using ${substitute.filename}`
+        );
+        node.image = { id: substitute.id, filename: substitute.filename, class: substitute.class };
+      } else {
+        this.pushLog(
+          "warn",
+          `node ${node.name}: image ${node.image.filename} is not registered and no ${node.image.class} image is available`
+        );
+        node.image = undefined;
+      }
     }
   }
 
@@ -172,24 +206,52 @@ class LabStore {
   }
 
   async startLab() {
-    await this.client.labStart(this.lab.id);
+    // Pre-flight what the supervisor would reject anyway, with a message that
+    // names the node instead of an opaque image_not_found.
+    const missing = this.lab.nodes.find(
+      (n) => n.kind === "iol" && (!n.image || !this.images.some((i) => i.id === n.image!.id))
+    );
+    if (missing) {
+      this.lastError = `${missing.name} has no registered image — assign one (Images)`;
+      this.pushLog("error", this.lastError);
+      return;
+    }
+    await this.guarded("start lab", async () => {
+      await this.client.labStart(this.lab.id);
+    });
   }
 
   async stopLab() {
-    await this.client.labStop(this.lab.id);
-    this.openConsoleTabs = [];
-    this.activeConsoleTab = null;
+    await this.guarded("stop lab", async () => {
+      await this.client.labStop(this.lab.id);
+      this.openConsoleTabs = [];
+      this.activeConsoleTab = null;
+    });
   }
 
   async startNode(nodeId: number) {
-    await this.client.nodeStart(this.lab.id, nodeId);
+    await this.guarded(`start node ${nodeId}`, () => this.client.nodeStart(this.lab.id, nodeId));
   }
 
   async stopNode(nodeId: number) {
-    await this.client.nodeStop(this.lab.id, nodeId);
-    this.openConsoleTabs = this.openConsoleTabs.filter((id) => id !== nodeId);
-    if (this.activeConsoleTab === nodeId) {
-      this.activeConsoleTab = this.openConsoleTabs[0] ?? null;
+    await this.guarded(`stop node ${nodeId}`, async () => {
+      await this.client.nodeStop(this.lab.id, nodeId);
+      this.openConsoleTabs = this.openConsoleTabs.filter((id) => id !== nodeId);
+      if (this.activeConsoleTab === nodeId) {
+        this.activeConsoleTab = this.openConsoleTabs[0] ?? null;
+      }
+    });
+  }
+
+  /** Run a supervisor action; surface failure in the top bar + log instead of
+   *  letting the rejection vanish into an unhandled promise. */
+  private async guarded(what: string, fn: () => Promise<unknown>) {
+    try {
+      await fn();
+      this.lastError = null;
+    } catch (e) {
+      this.lastError = `${what} failed: ${(e as Error).message}`;
+      this.pushLog("error", this.lastError);
     }
   }
 

@@ -37,6 +37,16 @@
 
   <div class="spacer"></div>
 
+  {#if labStore.lastError}
+    <button
+      class="pill error-pill"
+      title="Dismiss"
+      onclick={() => (labStore.lastError = null)}
+    >
+      {labStore.lastError}
+    </button>
+  {/if}
+
   <span
     class="pill status-pill"
     class:connected={labStore.providerStatus === "connected"}
@@ -129,6 +139,20 @@
   }
   .spacer {
     flex: 1;
+  }
+  .error-pill {
+    border: 1px solid color-mix(in oklab, var(--state-crashed) 55%, transparent);
+    background: color-mix(in oklab, var(--state-crashed) 14%, transparent);
+    color: var(--state-crashed);
+    font-size: var(--fs-xs);
+    font-family: var(--font-ui);
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    max-width: 380px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .status-pill .led {
     width: 7px;
