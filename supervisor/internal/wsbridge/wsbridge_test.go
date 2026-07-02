@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -196,6 +197,54 @@ func TestControlEndpointMultipleRequests(t *testing.T) {
 		if resp.ID != id || !resp.OK {
 			t.Fatalf("resp %d: %+v", i, resp)
 		}
+	}
+}
+
+// --- static GUI mux precedence tests ---
+
+// TestStaticFallbackDoesNotShadowControl proves the "/" catch-all serving the
+// embedded GUI never intercepts the WS routes: a proper /control handshake
+// still upgrades (101), and /console/ still reaches its handler (404 for an
+// unknown node), while an unrelated path is served the GUI's index.html.
+func TestStaticFallbackDoesNotShadowControl(t *testing.T) {
+	srv := server.New(server.Config{ControlAddr: "127.0.0.1:0", ImageDir: "/img", RunDir: "/run", Version: "test"})
+	b := New(Config{Addr: "127.0.0.1:0"}, srv)
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+
+	// /control still upgrades to WebSocket (not swallowed by static handler).
+	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/control"
+	conn := dialWS(t, wsURL)
+	conn.Close()
+
+	// A plain GET to "/" is served the embedded GUI, not routed to /control.
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("GET / Content-Type = %q, want text/html*", ct)
+	}
+}
+
+// TestConsoleNotShadowedByStatic confirms /console/ still hits the console
+// handler (returning 404 for an unknown node) rather than the GUI fallback.
+func TestConsoleNotShadowedByStatic(t *testing.T) {
+	fake := &fakeControlServer{consolePorts: map[int]int{}}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+
+	status, err := httpGetUpgradeAttempt(ts.URL + "/console/42")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if !strings.Contains(status, "404") {
+		t.Fatalf("expected 404 from console handler, got: %s", status)
 	}
 }
 

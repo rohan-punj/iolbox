@@ -5,6 +5,7 @@
   import "@xterm/xterm/css/xterm.css";
   import { labStore } from "../labStore.svelte";
   import { themeStore } from "../themeStore.svelte";
+  import { ConsoleTransport } from "../consoleTransport";
 
   let { nodeId, active }: { nodeId: number; active: boolean } = $props();
 
@@ -13,6 +14,7 @@
   let fit: FitAddon | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let promptLine = "";
+  let realConsole: ConsoleTransport | undefined;
 
   const PROMPT = "Router>";
 
@@ -48,21 +50,38 @@
       fit.fit();
     }
 
-    // Replay any buffered mock console history.
-    for (const line of labStore.mockTransport.getConsoleHistory(nodeId)) {
-      term.write(line);
+    if (labStore.transportKind === "ws") {
+      // Real supervisor: pipe xterm <-> ws(s)://<host>/console/<nodeId>
+      // (binary frames; see consoleTransport.ts / wsbridge.go).
+      const decoder = new TextDecoder();
+      const rc = new ConsoleTransport(nodeId, {
+        onData: (bytes) => term?.write(decoder.decode(bytes, { stream: true })),
+        onOpen: () => {
+          if (fit) rc.sendResize(term?.cols ?? 80, term?.rows ?? 24);
+        },
+        onError: () => labStore.pushLog("error", `console ws error for node ${nodeId}`, nodeId),
+      });
+      rc.connect();
+      realConsole = rc;
+      term.onData((data) => rc.sendInput(data));
+    } else {
+      // Mock console: replay buffered history and drive a tiny fake shell.
+      for (const line of labStore.mockTransport?.getConsoleHistory(nodeId) ?? []) {
+        term.write(line);
+      }
+      term.onData((data) => handleInput(data));
     }
 
-    term.onData((data) => {
-      handleInput(data);
+    resizeObserver = new ResizeObserver(() => {
+      fit?.fit();
+      if (term) realConsole?.sendResize(term.cols, term.rows);
     });
-
-    resizeObserver = new ResizeObserver(() => fit?.fit());
     if (container) resizeObserver.observe(container);
   });
 
   onDestroy(() => {
     resizeObserver?.disconnect();
+    realConsole?.disconnect();
     term?.dispose();
   });
 

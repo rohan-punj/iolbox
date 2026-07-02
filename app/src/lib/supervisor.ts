@@ -7,7 +7,6 @@ import type {
   ImageRegisterResult,
   LabLoadResult,
   LabStartResult,
-  NodeRuntimeStatus,
   NodeSetImageResult,
   StatusResult,
   SupervisorEvent,
@@ -105,16 +104,22 @@ export class SupervisorClient {
     return this.call<void>("lab.stop", { labId, nodes });
   }
 
+  // node.start/stop/restart all reply with the same {started:[...]} shape as
+  // lab.start (see docs/protocol.md "Same shape as above" and
+  // handleNodeStart/Stop/Restart -> startNodes in
+  // supervisor/internal/server/handlers.go, which literally return
+  // protocol.StartResult) — NOT a bare NodeRuntimeStatus. Actual node state
+  // is driven by the pushed node.state/node.console events, not this reply.
   nodeStart(labId: string, node: number) {
-    return this.call<NodeRuntimeStatus>("node.start", { labId, node });
+    return this.call<LabStartResult>("node.start", { labId, node });
   }
 
   nodeStop(labId: string, node: number) {
-    return this.call<NodeRuntimeStatus>("node.stop", { labId, node });
+    return this.call<LabStartResult>("node.stop", { labId, node });
   }
 
   nodeRestart(labId: string, node: number) {
-    return this.call<NodeRuntimeStatus>("node.restart", { labId, node });
+    return this.call<LabStartResult>("node.restart", { labId, node });
   }
 
   nodeSetImage(labId: string, node: number, imageId: string) {
@@ -125,7 +130,12 @@ export class SupervisorClient {
     return this.call<void>("link.add", { labId, link });
   }
 
-  linkRemove(labId: string, link: number) {
+  linkRemove(labId: string, link: LabLink) {
+    // Wire shape matches link.add: docs/protocol.md documents both verbs as
+    // `{ "labId","link":<link.json> }`, and the Go handler unmarshals `link`
+    // as a full lab.Link (only .id is read, but the field must decode as an
+    // object, not a bare id) — see handleLinkRemove in
+    // supervisor/internal/server/handlers.go.
     return this.call<void>("link.remove", { labId, link });
   }
 

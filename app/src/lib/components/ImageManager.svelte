@@ -34,7 +34,17 @@
       labStore.pushLog("warn", `Cannot remove image ${id}: still referenced by ${usageCount(id)} node(s)`);
       return;
     }
-    await labStore.client.imageRemove(id);
+    try {
+      // NOTE: the real supervisor does not implement image.remove yet (only
+      // image.list/image.register are registered — see
+      // supervisor/internal/server/server.go). Under the mock this always
+      // succeeds; against a real supervisor it currently replies
+      // {ok:false,code:"unsupported"}, so drop the image locally regardless
+      // rather than surfacing a hard failure for an unshipped verb.
+      await labStore.client.imageRemove(id);
+    } catch (e) {
+      labStore.pushLog("warn", `image.remove not supported by supervisor: ${(e as Error).message}`);
+    }
     labStore.images = labStore.images.filter((i) => i.id !== id);
   }
 

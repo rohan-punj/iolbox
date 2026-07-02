@@ -15,10 +15,16 @@
 //     sent at any time to propagate a NAWS window-size
 //     update to the node.
 //
-// Both endpoints bind loopback-only (see Bridge.ListenAndServe, which applies
-// the same loopback check as internal/server) and relax CORS/Origin checks,
-// since only trusted local clients (the desktop webview or a browser hitting
-// 127.0.0.1) ever reach this listener.
+// The listener also serves the embedded browser GUI (internal/web) as its "/"
+// catch-all, so the whole product ships as one binary: a browser opens
+// http://<vm-ip>:4001/ and the served page connects back to
+// ws://<vm-ip>:4001/control on the same origin. Because browser access needs a
+// routable address, this listener may bind a non-loopback host (e.g.
+// 0.0.0.0:4001) — unlike internal/server's raw control socket, which stays
+// loopback-only. The WebSocket handshake (internal/ws.Accept) performs no
+// Origin check, so a same-origin page served from <vm-ip>:4001 (Origin:
+// http://<vm-ip>:4001) is accepted; the trust boundary is the VM's own network
+// exposure, which the operator controls via -ws-addr.
 package wsbridge
 
 import (
@@ -35,6 +41,7 @@ import (
 	"time"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/telnet"
+	"github.com/rohanpunj/iolab/supervisor/internal/web"
 	"github.com/rohanpunj/iolab/supervisor/internal/ws"
 )
 
@@ -80,19 +87,26 @@ func New(cfg Config, srv ControlServer) *Bridge {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control", b.handleControl)
 	mux.HandleFunc("/console/", b.handleConsole)
+	// Catch-all "/" serves the embedded GUI. ServeMux prefers the longer, more
+	// specific patterns above, so /control and /console/ are never shadowed by
+	// this fallback; everything else (the SPA and its assets) falls through
+	// here. Registered last only for readability — mux precedence is by pattern
+	// specificity, not registration order.
+	mux.Handle("/", web.Handler())
 	b.server = &http.Server{Handler: mux}
 	return b
 }
 
-// ListenAndServe binds cfg.Addr and serves until ctx is cancelled. It refuses
-// non-loopback bind hosts, matching internal/server's control listener.
+// ListenAndServe binds cfg.Addr and serves until ctx is cancelled.
+//
+// Unlike internal/server's control listener (which stays loopback-only, as it
+// is the raw local NDJSON socket), the ws bridge may bind a non-loopback host
+// (e.g. 0.0.0.0:4001) on purpose: it now also serves the browser GUI, and a
+// browser on the Windows host must reach the VM's IP. We still validate the
+// address parses as host:port so a typo fails fast rather than at Listen time.
 func (b *Bridge) ListenAndServe(ctx context.Context) error {
-	host, _, err := net.SplitHostPort(b.cfg.Addr)
-	if err != nil {
+	if _, _, err := net.SplitHostPort(b.cfg.Addr); err != nil {
 		return fmt.Errorf("ws-addr %q: %w", b.cfg.Addr, err)
-	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("ws-addr host %q must be loopback (127.0.0.1)", host)
 	}
 
 	ln, err := net.Listen("tcp", b.cfg.Addr)

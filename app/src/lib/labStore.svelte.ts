@@ -3,6 +3,7 @@
 import { emptyLab, type LabDocument, type LabLink, type LabNode, type LibraryImage, type NodeState } from "./labTypes";
 import { SupervisorClient } from "./supervisor";
 import { MockTransport } from "./mockTransport";
+import { selectTransport } from "./transportSelect";
 import type { SupervisorEvent } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
@@ -34,11 +35,24 @@ class LabStore {
   showImageManager = $state(false);
 
   client: SupervisorClient;
-  private mock: MockTransport;
+  /** Only set when the mock transport was actually selected; see mockTransport getter. */
+  private mock: MockTransport | null = null;
+  /** "ws" when talking to a real supervisor (browser build served by it); the
+   *  Preflight provider-picker (Tauri-only, P2) is meaningless in that case. */
+  readonly transportKind: "mock" | "ws";
 
   constructor() {
-    this.mock = new MockTransport();
-    this.client = new SupervisorClient(this.mock);
+    const sel = selectTransport();
+    this.transportKind = sel.kind;
+    if (sel.kind === "mock") this.mock = sel.transport as MockTransport;
+    this.client = new SupervisorClient(sel.transport);
+    if (sel.kind === "ws") {
+      // Served by the supervisor itself: it already IS the runtime, so skip
+      // the desktop-only provider-detection modal and connect immediately.
+      this.showPreflight = false;
+      this.activeProvider = null;
+      void this.connect();
+    }
     this.seedDemoLab();
   }
 
@@ -96,17 +110,23 @@ class LabStore {
     for (const n of this.lab.nodes) this.nodeStates[n.id] = "stopped";
   }
 
-  get mockTransport() {
+  /** Only meaningful when transportKind === "mock"; null under a real ws transport. */
+  get mockTransport(): MockTransport | null {
     return this.mock;
   }
 
   async connect() {
     this.providerStatus = "connecting";
+    // Subscribe before the handshake settles so no push (node.state etc.)
+    // arriving mid-connect is dropped.
+    this.client.onEvent((evt) => this.handleEvent(evt));
     try {
       await this.client.connect();
       this.providerStatus = "connected";
-      this.activeProvider = "vmware";
-      this.client.onEvent((evt) => this.handleEvent(evt));
+      // Real supervisor: the runtime provider is whatever process spawned it,
+      // not a Windows-side choice — leave activeProvider as Preflight (mock
+      // path) or unset (ws path) already set it, rather than hardcoding.
+      if (this.transportKind === "mock") this.activeProvider = "vmware";
       const { images } = await this.client.imageList();
       this.images = images;
       await this.loadLab(this.lab);

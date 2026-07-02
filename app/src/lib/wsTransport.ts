@@ -1,16 +1,18 @@
-// WebSocket transport (Track 3 / B2). Mirrors tcpTransport.ts but speaks the
-// NDJSON control protocol (docs/protocol.md) over WebSocket *text* frames — one
-// JSON object per frame. This is the browser build's transport: browsers can't
-// open raw TCP, so the supervisor's WS bridge (B1) fronts the same protocol.
+// WebSocket transport. Speaks the NDJSON control protocol (docs/protocol.md)
+// over WebSocket *text* frames — one JSON object per frame, no trailing
+// newline. This is the browser build's transport: browsers can't open raw
+// TCP, so the supervisor's WS bridge (internal/wsbridge) fronts the same
+// protocol handled on the TCP listener.
 //
-// The supervisor WS endpoint is being built in parallel; this client matches the
-// documented framing. Default endpoint: ws://127.0.0.1:4001/control.
+// Verified against supervisor/internal/wsbridge/wsbridge.go: GET /control
+// upgrades to WS and runs the shared NDJSON control loop over a
+// textFrameRWC — each WS text frame carries exactly one JSON object (no
+// newline-delimited batching, no hello/auth handshake beyond the normal
+// `hello` verb request/response). Plain RFC 6455, no subprotocol.
 //
-// TODO(B1/B2): verify against the real supervisor WS bridge once it lands —
-// specifically (a) whether the bridge sends one JSON object per text frame
-// (assumed here) or newline-delimited batches within a frame (handled too), and
-// (b) any auth/hello handshake framing. Console/capture streams will use
-// separate WS URLs provided in status/events, not this control socket.
+// Console streams (GET /console/{nodeId}) are a separate WS URL/framing
+// (binary frames for terminal bytes, text frames for {"resize":...}) — see
+// consoleTransport.ts, not this control socket.
 import type { Request } from "./protocol";
 import type { IncomingFrame, Transport } from "./transport";
 

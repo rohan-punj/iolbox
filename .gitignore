@@ -35,3 +35,8 @@ Thumbs.db
 
 # Go
 /supervisor/vendor/
+
+# Embedded GUI build output (real bundle overwrites the committed placeholder
+# index.html at build time via "npm run build:embed" -- never commit the bundle)
+/supervisor/internal/web/dist/*
+!/supervisor/internal/web/dist/index.html
