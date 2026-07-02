@@ -26,6 +26,10 @@ type Config struct {
 	ImageDir string
 	// RunDir is the base for per-lab working directories.
 	RunDir string
+	// LabsDir is where the durable lab-document store persists saved lab copies
+	// (one <id>.json per lab). Created on first save. Empty defaults to
+	// /opt/iolab/labs.
+	LabsDir string
 	// IourcPath is the runtime's generated IOU license file, copied into each
 	// lab's shared dir so co-located IOL instances find it. Empty defaults to
 	// <ImageDir>/../iourc then /opt/iolab/iourc (see prepareLabDir).
@@ -71,6 +75,9 @@ func New(cfg Config) *Server {
 	if cfg.Arch == "" {
 		cfg.Arch = "x86_64"
 	}
+	if cfg.LabsDir == "" {
+		cfg.LabsDir = "/opt/iolab/labs"
+	}
 	s := &Server{
 		cfg:          cfg,
 		disp:         protocol.NewDispatcher(),
@@ -91,6 +98,10 @@ func (s *Server) register() {
 	s.disp.Handle("image.list", s.handleImageList)
 	s.disp.Handle("image.register", s.handleImageRegister)
 	s.disp.Handle("lab.load", s.handleLabLoad)
+	s.disp.Handle("lab.saveDoc", s.handleLabSaveDoc)
+	s.disp.Handle("lab.listDocs", s.handleLabListDocs)
+	s.disp.Handle("lab.getDoc", s.handleLabGetDoc)
+	s.disp.Handle("lab.deleteDoc", s.handleLabDeleteDoc)
 	s.disp.Handle("lab.start", s.handleLabStart)
 	s.disp.Handle("lab.stop", s.handleLabStop)
 	s.disp.Handle("lab.wipe", s.handleLabWipe)
@@ -128,6 +139,29 @@ func (s *Server) ConsolePort(nodeID int) (port int, ok bool) {
 	return nr.consolePort, true
 }
 
+// CapturePort returns the local TCP port serving the live pcapng stream for
+// linkID in the currently loaded lab, if that link has an active capture. Used
+// by the WebSocket capture bridge (internal/wsbridge) to dial the right local
+// port for GET /capture/{linkId}. ok is false if no lab is loaded or the link
+// has no active capture. The port is the one capture.start recorded in the
+// lab's capture bookkeeping (ll.captures), which mirrors the relay's own
+// CapturePort().
+func (s *Server) CapturePort(linkID int) (port int, ok bool) {
+	s.mu.Lock()
+	ll := s.lab
+	s.mu.Unlock()
+	if ll == nil {
+		return 0, false
+	}
+	ll.mu.Lock()
+	port, ok = ll.captures[linkID]
+	ll.mu.Unlock()
+	if !ok || port == 0 {
+		return 0, false
+	}
+	return port, true
+}
+
 // ListenAndServe binds the control address and serves connections until ctx is
 // cancelled. It refuses non-loopback bind hosts.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -149,6 +183,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+
+	// Per-link throughput sampler: polls relay counters every statsInterval and
+	// emits link.stats events. Tied to ctx so it exits with the server.
+	go s.statsLoop(ctx)
 
 	var wg sync.WaitGroup
 	for {

@@ -50,6 +50,9 @@ const (
 	CodeNvramCodecFailed  = "nvram_codec_failed"
 	CodeNotLoaded         = "not_loaded"
 	CodeUnsupported       = "unsupported"
+	// CodeNotFound is returned when a requested durable lab document does not
+	// exist in the store (lab.getDoc).
+	CodeNotFound = "not_found"
 	// CodeBadRequest is used for malformed frames / unknown verbs; it is a
 	// superset error not enumerated in the protocol but needed in practice.
 	CodeBadRequest = "bad_request"
@@ -63,6 +66,7 @@ const (
 	EventLinkDown       = "link.down"
 	EventCaptureStarted = "capture.started"
 	EventCaptureStopped = "capture.stopped"
+	EventLinkStats      = "link.stats"
 	EventLog            = "log"
 )
 

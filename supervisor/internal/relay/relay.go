@@ -42,6 +42,12 @@ type Config struct {
 type Relay interface {
 	LinkID() int
 	CapturePort() int
+	// Stats returns cumulative counters of datagrams FORWARDED by this relay
+	// since it started, summed across both directions (a P2P frame forwarded
+	// to the peer counts once; a hub frame flooded to N members counts N). The
+	// server polls these on a ticker to derive per-link throughput without the
+	// relay package importing server. Monotonic; safe for concurrent reads.
+	Stats() (frames, bytes uint64)
 	Close() error
 }
 
@@ -82,6 +88,32 @@ func (m *Manager) Stop(linkID int) error {
 		return nil
 	}
 	return r.Close()
+}
+
+// LinkStats is a snapshot of one relay's cumulative forwarded counters.
+type LinkStats struct {
+	LinkID int
+	Frames uint64
+	Bytes  uint64
+}
+
+// Stats snapshots the cumulative forwarded counters of every active relay,
+// keyed by link id. The server polls this on a ticker to emit per-link
+// throughput events; relays with no traffic yet report zero. The returned map
+// is a fresh copy safe to iterate without holding the manager lock.
+func (m *Manager) Stats() map[int]LinkStats {
+	m.mu.Lock()
+	relays := make([]Relay, 0, len(m.relays))
+	for _, r := range m.relays {
+		relays = append(relays, r)
+	}
+	m.mu.Unlock()
+	out := make(map[int]LinkStats, len(relays))
+	for _, r := range relays {
+		frames, bytes := r.Stats()
+		out[r.LinkID()] = LinkStats{LinkID: r.LinkID(), Frames: frames, Bytes: bytes}
+	}
+	return out
 }
 
 // StopAll closes every active relay.

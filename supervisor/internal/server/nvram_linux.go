@@ -105,14 +105,13 @@ func (s *Server) iourcSource() string {
 // injectNVRAM encodes a node's startupConfig into its nvram_<id> file in the
 // shared lab dir before the node spawns, so IOL boots already configured.
 //
-// An empty startupConfig writes nothing (the node boots to its default config).
-// The NVRAM file is sized to fit; Spec.NVRAMKiB (see buildSpec / NVRAMKiBFor)
-// makes IOL's -n match, so IOL accepts the injected image without truncation.
+// A node with no author-supplied startupConfig gets a generated minimal config
+// (see defaultStartupConfig) so IOS still skips autoinstall / the initial
+// setup dialog rather than booting into it. The NVRAM file is sized to fit;
+// Spec.NVRAMKiB (see buildSpec / NVRAMKiBFor / effectiveStartupConfig) makes
+// IOL's -n match, so IOL accepts the injected image without truncation.
 func (s *Server) injectNVRAM(ll *loadedLab, n *lab.Node) error {
-	cfg := n.StartupConfig
-	if cfg == "" {
-		return nil
-	}
+	cfg := effectiveStartupConfig(n)
 	// Size the injected image to the same KiB the node's -n flag advertises,
 	// so IOL accepts it without truncation (single source of truth in node).
 	sizeKiB := node.NVRAMKiBFor(len(cfg))

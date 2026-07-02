@@ -14,6 +14,12 @@
 //     frame ({"resize":{"cols":C,"rows":R}}) may be
 //     sent at any time to propagate a NAWS window-size
 //     update to the node.
+//   - GET /capture/{linkId} — bridges to that link's active pcapng capture
+//     port. The raw pcapng byte stream is delivered as
+//     binary WS frames so a browser can render a live
+//     packet view; client->server frames are ignored.
+//     404s (JSON error body) when the link has no
+//     active capture.
 //
 // The listener also serves the embedded browser GUI (internal/web) as its "/"
 // catch-all, so the whole product ships as one binary: a browser opens
@@ -56,6 +62,9 @@ type ControlServer interface {
 	// ConsolePort returns the allocated telnet console port for nodeID in the
 	// currently loaded lab.
 	ConsolePort(nodeID int) (port int, ok bool)
+	// CapturePort returns the local TCP port serving the live pcapng stream for
+	// linkID in the currently loaded lab, if that link has an active capture.
+	CapturePort(linkID int) (port int, ok bool)
 }
 
 // Config configures a Bridge.
@@ -69,6 +78,9 @@ type Config struct {
 	// DialConsole dials a node's local telnet console port. Defaults to
 	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
 	DialConsole func(port int) (net.Conn, error)
+	// DialCapture dials a link's local pcapng capture port. Defaults to
+	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
+	DialCapture func(port int) (net.Conn, error)
 }
 
 // Bridge is the WebSocket listener exposing /control and /console/{nodeId}.
@@ -86,11 +98,17 @@ func New(cfg Config, srv ControlServer) *Bridge {
 			return net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 5*time.Second)
 		}
 	}
+	if cfg.DialCapture == nil {
+		cfg.DialCapture = func(port int) (net.Conn, error) {
+			return net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 5*time.Second)
+		}
+	}
 	b := &Bridge{cfg: cfg, ctrl: srv}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control", b.handleControl)
 	mux.HandleFunc("/console/", b.handleConsole)
+	mux.HandleFunc("/capture/", b.handleCapture)
 	// Exact route: the GUI PUTs an image file body here, then registers it over
 	// WS with the returned path. The exact "/api/upload/image" pattern is more
 	// specific than the "/" catch-all, so ServeMux routes it here, not to the SPA.
@@ -263,6 +281,120 @@ func bridgeConsole(ctx context.Context, wsConn *ws.Conn, telnetConn net.Conn) {
 				if err := handleTextFrame(telnetConn, data); err != nil {
 					log.Printf("wsbridge: console resize frame: %v", err)
 				}
+			}
+		}
+	}()
+
+	<-done
+}
+
+// linkIDFromPath extracts the {linkId} segment from "/capture/{linkId}".
+func linkIDFromPath(path string) (int, error) {
+	rest := strings.TrimPrefix(path, "/capture/")
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		return 0, fmt.Errorf("missing link id")
+	}
+	return strconv.Atoi(rest)
+}
+
+// handleCapture upgrades to WebSocket, dials the link's active pcapng capture
+// port over loopback, and pumps the raw pcapng byte stream to the client as
+// binary WS frames until either side closes. A link with no active capture
+// gets a 404 with a JSON error body (written before any upgrade, so the client
+// sees an ordinary HTTP error rather than a half-open socket). Client->server
+// frames on this socket carry no meaning and are drained. Mirrors
+// handleConsole's structure.
+func (b *Bridge) handleCapture(w http.ResponseWriter, r *http.Request) {
+	linkID, err := linkIDFromPath(r.URL.Path)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	port, ok := b.ctrl.CapturePort(linkID)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, fmt.Sprintf("link %d has no active capture (start a capture first)", linkID))
+		return
+	}
+
+	capConn, err := b.cfg.DialCapture(port)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, fmt.Sprintf("dial capture port %d: %v", port, err))
+		return
+	}
+	defer capConn.Close()
+
+	wsConn, err := ws.Accept(w, r)
+	if err != nil {
+		log.Printf("wsbridge: /capture/%d handshake: %v", linkID, err)
+		return
+	}
+	defer wsConn.Close()
+
+	bridgeCapture(r.Context(), wsConn, capConn)
+}
+
+// writeJSONError writes a {"error":"..."} body with the given status. Used by
+// the capture handler so a pre-upgrade failure is machine-readable (the console
+// handler uses http.Error plain text; capture clients expect JSON).
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error string `json:"error"`
+	}{Error: msg})
+}
+
+// bridgeCapture runs the one-directional pump for one capture session:
+// capture-port bytes flow to the browser as binary WS frames; anything the
+// client sends is read and discarded so its read loop's close is observed.
+// Runs until either side closes or the context is cancelled. Exported at
+// package level (not a method) so it's independently testable against fake
+// net.Conn/ws.Conn-shaped pipes, like bridgeConsole.
+func bridgeCapture(ctx context.Context, wsConn *ws.Conn, capConn net.Conn) {
+	done := make(chan struct{})
+	var once sync.Once
+	closeAll := func() {
+		once.Do(func() {
+			_ = wsConn.Close()
+			_ = capConn.Close()
+			close(done)
+		})
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeAll()
+		case <-done:
+		}
+	}()
+
+	// capture -> browser: forward the raw pcapng stream as binary WS frames.
+	go func() {
+		defer closeAll()
+		buf := make([]byte, 32768)
+		for {
+			n, err := capConn.Read(buf)
+			if n > 0 {
+				if werr := wsConn.WriteMessage(ws.OpBinary, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// browser -> server: drain and ignore. The capture channel is one-way; we
+	// only read so that a client-side close surfaces as an error and tears the
+	// session down.
+	go func() {
+		defer closeAll()
+		for {
+			if _, _, err := wsConn.ReadMessage(); err != nil {
+				return
 			}
 		}
 	}()

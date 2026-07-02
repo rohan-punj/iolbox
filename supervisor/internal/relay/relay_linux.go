@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +18,12 @@ type udpRelay struct {
 	conns   []*net.UDPConn
 	remotes []*net.UDPAddr
 	tee     *captureServer
+
+	// fwdFrames/fwdBytes count datagrams FORWARDED (not merely received),
+	// summed across both directions and hub fan-out, for per-link throughput
+	// events. Incremented in the pump forward path; read atomically by Stats.
+	fwdFrames atomic.Uint64
+	fwdBytes  atomic.Uint64
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -86,13 +93,18 @@ func (r *udpRelay) pump(src int) {
 			r.tee.Broadcast(datagram)
 		}
 
-		// Forward per relay kind.
+		// Forward per relay kind. Count each datagram actually forwarded (once
+		// for P2P, once per destination member for a hub flood) so the stats
+		// reflect real per-link throughput in both directions.
 		switch r.cfg.Kind {
 		case KindP2P:
 			// Two endpoints; forward to the other one.
 			dst := 1 - src
 			if dst >= 0 && dst < len(r.conns) {
-				_, _ = r.conns[src].WriteToUDP(datagram, r.remotes[dst])
+				if _, err := r.conns[src].WriteToUDP(datagram, r.remotes[dst]); err == nil {
+					r.fwdFrames.Add(1)
+					r.fwdBytes.Add(uint64(n))
+				}
 			}
 		case KindHub:
 			// Flood to every member except the source.
@@ -100,7 +112,10 @@ func (r *udpRelay) pump(src int) {
 				if dst == src {
 					continue
 				}
-				_, _ = r.conns[src].WriteToUDP(datagram, r.remotes[dst])
+				if _, err := r.conns[src].WriteToUDP(datagram, r.remotes[dst]); err == nil {
+					r.fwdFrames.Add(1)
+					r.fwdBytes.Add(uint64(n))
+				}
 			}
 		}
 	}
@@ -113,6 +128,10 @@ func (r *udpRelay) CapturePort() int {
 		return r.tee.Port()
 	}
 	return 0
+}
+
+func (r *udpRelay) Stats() (frames, bytes uint64) {
+	return r.fwdFrames.Load(), r.fwdBytes.Load()
 }
 
 func (r *udpRelay) Close() error {

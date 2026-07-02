@@ -74,6 +74,39 @@ type LabLoadResult struct {
 	Warnings []string      `json:"warnings"`
 }
 
+// --- lab.saveDoc / lab.listDocs / lab.getDoc / lab.deleteDoc ---
+//
+// These verbs are the durable lab-document store (distinct from the runtime
+// lab.load/lab.start lifecycle). The document is carried as a raw JSON message
+// so it round-trips byte-exact and preserves any fields the supervisor's lab
+// struct does not model.
+
+// LabSaveDocArgs is the lab.saveDoc request payload: the full lab document.
+type LabSaveDocArgs struct {
+	Lab json.RawMessage `json:"lab"`
+}
+
+// LabSaveDocResult is the lab.saveDoc response payload.
+type LabSaveDocResult struct {
+	ID string `json:"id"`
+}
+
+// LabListDocsResult is the lab.listDocs response payload: every stored doc,
+// parsed back from disk as raw JSON.
+type LabListDocsResult struct {
+	Labs []json.RawMessage `json:"labs"`
+}
+
+// LabGetDocArgs is the lab.getDoc / lab.deleteDoc request payload.
+type LabGetDocArgs struct {
+	LabID string `json:"labId"`
+}
+
+// LabGetDocResult is the lab.getDoc response payload: the stored doc.
+type LabGetDocResult struct {
+	Lab json.RawMessage `json:"lab"`
+}
+
 // --- lab.start / lab.stop / node.* ---
 
 // LabSelectArgs targets all nodes (Nodes nil) or a subset of a lab.
@@ -223,6 +256,15 @@ type LinkData struct {
 type CaptureData struct {
 	Link        int `json:"link"`
 	CapturePort int `json:"capturePort"`
+}
+
+// LinkStatsData is the link.stats event payload: per-link forwarded throughput
+// over the last sampling interval. Only bridged links have a relay and thus
+// stats; native (same-host IOL<->IOL) links produce none.
+type LinkStatsData struct {
+	Link int     `json:"link"`
+	FPS  float64 `json:"fps"`
+	BPS  uint64  `json:"bps"`
 }
 
 // LogData is the log event payload.

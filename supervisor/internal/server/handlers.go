@@ -349,8 +349,9 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 		spec.Serial = intOr(n.Serial, 1)
 		// Size NVRAM to hold the injected startup-config (P0 correction #3:
 		// boot pre-configured so IOS-XE PnP never engages). -n must be >= the
-		// nvram_<id> file prepareLabDir writes.
-		spec.NVRAMKiB = node.NVRAMKiBFor(len(n.StartupConfig))
+		// nvram_<id> file prepareLabDir writes, which carries the *effective*
+		// config (the generated minimal default when the node has none).
+		spec.NVRAMKiB = node.NVRAMKiBFor(len(effectiveStartupConfig(n)))
 	case lab.KindVPCS:
 		spec.VPCSCount = 1
 		// Wire the PC's UDP tunnel to the relay if this VPCS is a bridged-link

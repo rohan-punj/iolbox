@@ -31,6 +31,7 @@ func main() {
 	wsAddr := flag.String("ws-addr", "127.0.0.1:4001", "WebSocket bridge + GUI bind address (control + console over WS and the embedded browser GUI; use 0.0.0.0:4001 for browser access from the host; empty disables it)")
 	imageDir := flag.String("image-dir", "/opt/iolab/images", "directory holding IOL image files")
 	runDir := flag.String("run-dir", "/run/iolab", "base directory for per-lab working directories")
+	labsDir := flag.String("labs-dir", "/opt/iolab/labs", "directory for the durable lab-document store (lab.saveDoc/listDocs/getDoc/deleteDoc)")
 	iourcPath := flag.String("iourc", "/opt/iolab/iourc", "IOU license file copied into each lab's shared dir (generated at firstboot by -gen-iourc)")
 	consoleBind := flag.String("console-bind", "127.0.0.1", "host the per-node IOL console listeners bind; 0.0.0.0 lets a native telnet client on the GUI host dial <vm-ip>:<consolePort>")
 	genIourc := flag.Bool("gen-iourc", false, "generate the IOU license file to stdout from this host's hostid+hostname, then exit (used by the runtime firstboot script)")
@@ -49,6 +50,7 @@ func main() {
 		ControlAddr: *controlAddr,
 		ImageDir:    *imageDir,
 		RunDir:      *runDir,
+		LabsDir:     *labsDir,
 		IourcPath:   *iourcPath,
 		ConsoleBind: *consoleBind,
 		Version:     version,

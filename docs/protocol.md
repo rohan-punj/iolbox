@@ -14,7 +14,9 @@ or QEMU.
 - **Consoles**: raw TCP telnet, one port per node (allocated at start, reported in
   status). GUI connects an xterm.js session per port.
 - **Capture**: raw TCP pcapng byte stream, one port per capturing link (allocated
-  on capture-start). The Windows helper pipes it into `wireshark -k -i -`.
+  on capture-start). The Windows helper pipes it into `wireshark -k -i -`. The
+  WebSocket bridge also re-exposes this stream to browsers at
+  `GET /capture/{linkId}` (see below).
 
 Default control port: **4000**. Console base: **9000+**. Capture base: **5500+**.
 All configurable; actual allocations always come back in `status`/responses.
@@ -58,6 +60,22 @@ fingerprints + sniffs class/arch authoritatively.
 Load (not start) a lab document. Validates against schema, allocates ids.
 - args: `{ "lab": <lab.json> }`
 - result: `{ "labId", "nodes":[{"id","consolePort"}], "warnings":[...] }`
+
+### `lab.saveDoc` / `lab.listDocs` / `lab.getDoc` / `lab.deleteDoc`
+Durable lab-document store, separate from the runtime `lab.load`/`lab.start`
+lifecycle: these verbs persist and retrieve whole lab documents on disk
+(`<labs-dir>/<id>.json`, default `/opt/iolab/labs`, configurable with
+`-labs-dir`) without loading or starting anything. The document is stored
+byte-for-byte as received (unknown fields preserved); the id comes from the
+document's own `id` field and must match `[A-Za-z0-9_-]+`.
+- `lab.saveDoc` — args: `{ "lab": <lab.json> }`; result: `{ "id": "<lab id>" }`.
+  Creates the labs dir on first save and overwrites any existing copy.
+- `lab.listDocs` — args: `{}`; result: `{ "labs": [ <lab.json>, ... ] }` (every
+  stored doc, parsed back from disk; unreadable/malformed files are skipped).
+- `lab.getDoc` — args: `{ "labId": "..." }`; result: `{ "lab": <lab.json> }`;
+  `not_found` error if absent.
+- `lab.deleteDoc` — args: `{ "labId": "..." }`; result: `{}`. Deleting a missing
+  document is not an error.
 
 ### `lab.start` / `lab.stop`
 Start/stop all nodes (or a subset).
@@ -103,13 +121,39 @@ Full snapshot.
 - `node.console` `{node,consolePort}` — console became reachable
 - `link.up` / `link.down` `{link}`
 - `capture.started` / `capture.stopped` `{link,capturePort}`
+- `link.stats` `{link,fps,bps}` — per-link forwarded throughput over the last 2s
+  sampling interval: `fps` is frames/sec forwarded (float, one decimal), `bps`
+  is bytes/sec forwarded, both summed across directions (and hub fan-out).
+  Emitted at most every 2s and ONLY for a link that forwarded traffic during the
+  interval (idle links stay silent), so the GUI can drive traffic-based link
+  glow directly off these events. Only **bridged** links (VPCS, segment,
+  captured, cross-host) have a relay and therefore stats; native same-host
+  IOL↔IOL links carry traffic via the whole-lab NETMAP with no relay and produce
+  no `link.stats` events.
 - `log` `{level,message,node?}`
+
+## WebSocket bridge endpoints (browser transport)
+
+The supervisor's WS bridge (default `:4001`) re-exposes the control protocol and
+per-node/per-link byte streams to browsers, which cannot open raw TCP sockets:
+
+- `GET /control` — the NDJSON control protocol, one JSON object per text frame,
+  dispatched through the same handler core as the TCP control listener.
+- `GET /console/{nodeId}` — the node's telnet console as binary WS frames (after
+  server-side IAC negotiation); a `{"resize":{"cols":C,"rows":R}}` text frame
+  propagates a NAWS window-size update.
+- `GET /capture/{linkId}` — the link's active pcapng capture stream as binary WS
+  frames, so a browser can render a live packet view. Upgrades to WebSocket then
+  pumps the raw pcapng byte stream from the link's capture port until either
+  side closes; client→server frames are ignored/drained. Returns **404** with a
+  JSON body `{"error":"..."}` (before the upgrade) when the link has no active
+  capture.
 
 ## Error codes
 
 `schema_invalid`, `image_not_found`, `image_arch_mismatch`, `iourc_failed`,
 `node_spawn_failed`, `port_unavailable`, `nvram_codec_failed`, `not_loaded`,
-`unsupported`.
+`not_found`, `unsupported`.
 
 ## Node state machine
 

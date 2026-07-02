@@ -346,6 +346,83 @@ func TestConsoleEndpointUnknownNode(t *testing.T) {
 	}
 }
 
+// --- capture bridge tests ---
+
+// TestCaptureEndpointStreamsBytes stands up a fake capture server that, on
+// accept, writes a fixed pcapng-shaped byte blob; the bridge should upgrade to
+// WebSocket and deliver that blob to the client as binary frames.
+func TestCaptureEndpointStreamsBytes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	// A recognizable byte stream standing in for the pcapng SHB + a frame.
+	payload := []byte{0x0a, 0x0d, 0x0d, 0x0a, 0xDE, 0xAD, 0xBE, 0xEF}
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.Write(payload)
+		// Keep the connection open briefly so the frame is delivered before EOF.
+		time.Sleep(200 * time.Millisecond)
+	}()
+
+	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+
+	fake := &fakeControlServer{capturePorts: map[int]int{5: port}}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+
+	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/capture/5"
+	conn := dialWS(t, wsURL)
+	defer conn.Close()
+
+	op, data := readServerFrame(t, conn)
+	if op != ws.OpBinary {
+		t.Fatalf("expected binary frame, got opcode %d", op)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatalf("capture stream = %v, want %v", data, payload)
+	}
+}
+
+// TestCaptureEndpointNoActiveCapture confirms a link with no active capture is
+// rejected with a 404 and a JSON error body, before any WS upgrade.
+func TestCaptureEndpointNoActiveCapture(t *testing.T) {
+	fake := &fakeControlServer{capturePorts: map[int]int{}}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/capture/42")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Error == "" {
+		t.Fatalf("expected non-empty error message, got %+v", body)
+	}
+}
+
 // httpGetUpgradeAttempt issues a plain (non-websocket) GET and returns the
 // raw status line, enough to check the 404 path without a full handshake.
 func httpGetUpgradeAttempt(url string) (string, error) {
@@ -367,15 +444,21 @@ func httpGetUpgradeAttempt(url string) (string, error) {
 }
 
 // fakeControlServer implements ControlServer without a real lab/server.Server,
-// for testing the console bridge in isolation.
+// for testing the console/capture bridges in isolation.
 type fakeControlServer struct {
 	consolePorts map[int]int
+	capturePorts map[int]int
 }
 
 func (f *fakeControlServer) ServeConn(ctx context.Context, rwc io.ReadWriteCloser) {}
 
 func (f *fakeControlServer) ConsolePort(nodeID int) (int, bool) {
 	p, ok := f.consolePorts[nodeID]
+	return p, ok
+}
+
+func (f *fakeControlServer) CapturePort(linkID int) (int, bool) {
+	p, ok := f.capturePorts[linkID]
 	return p, ok
 }
 
