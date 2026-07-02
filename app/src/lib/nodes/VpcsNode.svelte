@@ -2,7 +2,7 @@
   import { Handle, Position, type NodeProps } from "@xyflow/svelte";
   import { labStore } from "../labStore.svelte";
   import { stateLabel } from "../nodeVisuals";
-  import { iconSvg, defaultIconFor, iconRegistryVersion, uiSvg } from "../icons.svelte";
+  import { iconSvg, defaultIconFor, iconRegistryVersion, isArtworkIcon, uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
 
   let { id, data, selected }: NodeProps = $props();
@@ -25,12 +25,15 @@
   const iconKey = $derived(
     ((data as any).icon as string | undefined) ?? defaultIconFor("vpcs")
   );
-  const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, 28)));
+  // Artwork icons carry their own plate and render full-bleed, PNetLab-style.
+  const artwork = $derived((iconRegistryVersion(), isArtworkIcon(iconKey)));
+  const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, artwork ? 58 : 28)));
 </script>
 
 <div
   class="node face-node vpcs"
   class:selected
+  class:artwork
   class:drop-target={isDropTarget}
   class:linking={isLinkSource}
   data-state={state}
@@ -128,6 +131,26 @@
   .glyph :global(img) {
     width: 28px;
     height: 28px;
+  }
+  /* Artwork icons ARE the node: hide the tile, let the icon fill the face.
+     Selection/drop rings are re-asserted below so they survive this reset. */
+  .node.artwork .face {
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  .node.artwork .glyph :global(svg),
+  .node.artwork .glyph :global(img) {
+    width: 58px;
+    height: 58px;
+  }
+  .node.artwork.selected .face {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 26%, transparent);
+  }
+  .node.artwork.drop-target .face {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 34%, transparent);
   }
   .led {
     position: absolute;

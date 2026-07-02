@@ -119,6 +119,18 @@ export function isBuiltinIcon(key: string): boolean {
   return key in BUILTIN;
 }
 
+/**
+ * True when the icon is self-contained artwork (EVE-style builtins with their
+ * own viewBox+fills, or any user-imported image) rather than a tintable
+ * stroke glyph. Node faces render artwork full-bleed with no tile chrome —
+ * the artwork carries its own plate — matching the PNetLab/EVE canvas look.
+ */
+export function isArtworkIcon(key: string | undefined): boolean {
+  const entry = resolveIcon(key);
+  if (!entry) return false;
+  return entry.viewBox !== undefined || entry.kind !== "builtin";
+}
+
 export function resolveIcon(key: string | undefined): IconEntry | undefined {
   if (!key) return undefined;
   if (key in BUILTIN) {
