@@ -101,6 +101,40 @@ project VMs touched. Supervisor + both images + VPCS 0.8.3 deployed to `/opt/iol
    `startupConfig` written to NVRAM (`internal/nvram`), so they come up configured
    and IOS-XE PnP never interferes.
 
+## FULL END-TO-END through the real supervisor — 2026-07-02 ✅
+
+Ran the actual supervisor on the runtime VM (`drive-supervisor.py`: `hello →
+image.register → lab.load → lab.start → status`) with a 2×IOL lab whose
+startup-configs (IP + `no shutdown` on Et0/0) were injected into NVRAM. Result:
+
+```
+image.register: id=b858503827356c55 class=l3 arch=x86_64
+lab.start: node 1 console 9000 running; node 2 console 9001 running
+# connected to R1's console via the supervisor's pty->telnet bridge:
+R1> enable
+R1# show ip interface brief | include Ethernet0/0
+Ethernet0/0   10.0.0.1   YES NVRAM   up   up
+R1# ping 10.0.0.2 repeat 5
+.!!!!  Success rate is 80 percent (4/5), round-trip min/avg/max = 1/1/1 ms
+```
+
+Everything validated at once through the real orchestrator:
+- ✅ image sniff (class l3, arch x86_64)
+- ✅ pty→telnet console bridge (interactive `R1>` prompt over TCP)
+- ✅ NVRAM injection (booted as hostname `R1`, IP `10.0.0.1` shown as `NVRAM` source,
+  IOS-XE PnP never engaged — the boot-configured approach works)
+- ✅ native NETMAP wiring (Et0/0 `up/up`)
+- ✅ **ping succeeds** (80% = 4/5; the single drop is the normal first-packet ARP miss)
+
+**One bug found + fixed:** IOL rejects **instance id 0** (valid range 1–1024). The
+supervisor used lab `node.id` directly as the IOL instance id, so a node with id 0
+exited immediately. Fix: map node id → IOL instance id (`nodeID+1`, guarded ≤1024)
+consistently across argv + NETMAP + nvram filename. Validated above with ids 1,2;
+re-validated with ids 0,1 after the fix.
+
+Remaining P0 items (not risk — plumbing): VPCS↔IOL and Wireshark capture via the
+`internal/iouyap` bridge (built, not yet wired into the server link path).
+
 ## P0 status: core risks RETIRED ✅
 
 Every hard unknown is now confirmed against real IOL 17.18.02: image sniff, iourc
