@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Cisco images / licensing
+    url: https://github.com/rohanpunj/iolab/blob/main/README.md#legal
+    about: iolab ships no Cisco software and cannot help you obtain images or licenses.

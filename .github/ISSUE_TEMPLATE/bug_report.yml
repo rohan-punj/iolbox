@@ -1,0 +1,32 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! **Do not paste Cisco images, licenses, or serials.**
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Runtime provider
+      options: [vmware, wsl2, remote, qemu, not sure]
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: "e.g. Windows 11 23H2"
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what actually happened.
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Supervisor / app logs. Scrub anything sensitive.
+      render: shell
