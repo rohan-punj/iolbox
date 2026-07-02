@@ -1,21 +1,75 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
+  import { consoleUiStore } from "../consoleUiStore.svelte";
   import ConsoleTerm from "./ConsoleTerm.svelte";
 
   let collapsed = $state(false);
+
+  // Inline icon glyphs (kept local per turf rules — no shared icons.svelte.ts).
+  const DOCK_BOTTOM =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="1.5" y="9.5" width="13" height="4" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
+  const DOCK_RIGHT =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="9.5" y="2.5" width="5" height="11" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
+  const PAINT =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 9.5 9 3.5l3.5 3.5-6 6H3z"/><path d="M2 14.5h6" stroke-linecap="round"/></svg>';
+  const TELNET =
+    '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M4 5.5l2 1.5-2 1.5M7.5 9h4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   function nodeName(id: number): string {
     return labStore.lab.nodes.find((n) => n.id === id)?.name ?? `#${id}`;
   }
 
-  function openExternal(nodeId: number) {
-    // TODO(P2): invoke Tauri `open_external_console` — shells out to
-    // Windows Terminal / telnet.exe pointed at the node's console port.
-    labStore.pushLog("info", `open_external_console stub for node ${nodeId} (not wired to Tauri yet)`);
+  /** host:port for a node's telnet console, or null if the port isn't known yet. */
+  function consoleAddr(nodeId: number): { host: string; port: number } | null {
+    const port = labStore.consolePorts[nodeId];
+    if (!port) return null;
+    return { host: location.hostname || "localhost", port };
+  }
+
+  function telnetTitle(nodeId: number): string {
+    const a = consoleAddr(nodeId);
+    return a ? `telnet ${a.host}:${a.port}` : "console port not assigned yet";
+  }
+
+  /** Flip a console to a native telnet client via the telnet:// scheme handler
+   *  (PuTTY etc. on Windows). If no handler is registered the navigation fails
+   *  silently — that's fine; the tooltip + copy-chip still tell the user the
+   *  address to dial manually. */
+  function openNative(nodeId: number) {
+    const a = consoleAddr(nodeId);
+    if (!a) {
+      labStore.pushLog("warn", `node ${nodeId}: console port not assigned yet`, nodeId);
+      return;
+    }
+    const url = `telnet://${a.host}:${a.port}`;
+    try {
+      window.open(url, "_self");
+    } catch {
+      /* no telnet:// handler — tooltip/copy chip cover it */
+    }
+    labStore.pushLog("info", `native console for ${nodeName(nodeId)} → ${url}`, nodeId);
+  }
+
+  /** Click-to-copy host:port. clipboard API needs a secure context and this page
+   *  is plain-HTTP, so fall back to prompt() when it's unavailable/denied. */
+  async function copyAddr(nodeId: number) {
+    const a = consoleAddr(nodeId);
+    if (!a) return;
+    const text = `${a.host}:${a.port}`;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        labStore.pushLog("info", `copied ${text}`, nodeId);
+        return;
+      }
+    } catch {
+      /* fall through to prompt */
+    }
+    window.prompt("Copy console address:", text);
   }
 </script>
 
-<div class="console-dock" class:collapsed>
+<div class="console-dock" class:collapsed class:side-right={consoleUiStore.dockSide === "right"}>
   <div class="dock-bar">
     <button class="collapse-btn" onclick={() => (collapsed = !collapsed)} aria-expanded={!collapsed}>
       <span class="chevron" class:flipped={collapsed}>▾</span>
@@ -39,16 +93,47 @@
             </button>
             <button
               class="tab-ext"
-              title="Open in external terminal"
-              onclick={() => openExternal(nodeId)}
+              title={telnetTitle(nodeId)}
+              aria-label="Open in native telnet client"
+              onclick={() => openNative(nodeId)}
             >
-              ⧉
+              {@html TELNET}
             </button>
             <button class="tab-close" title="Close" onclick={() => labStore.closeConsole(nodeId)}>
               ✕
             </button>
           </div>
         {/each}
+      </div>
+
+      <div class="dock-actions">
+        {#if labStore.activeConsoleTab !== null && consoleAddr(labStore.activeConsoleTab)}
+          {@const a = consoleAddr(labStore.activeConsoleTab)}
+          <button
+            class="addr-chip mono"
+            title="Click to copy — {a?.host}:{a?.port}"
+            onclick={() => copyAddr(labStore.activeConsoleTab!)}
+          >
+            {a?.host}:{a?.port}
+          </button>
+        {/if}
+        <button
+          class="dock-icon"
+          class:on={consoleUiStore.colorize}
+          title={consoleUiStore.colorize ? "Colorizing on — click to disable" : "Colorizing off — click to enable"}
+          aria-pressed={consoleUiStore.colorize}
+          onclick={() => consoleUiStore.toggleColorize()}
+        >
+          {@html PAINT}
+        </button>
+        <button
+          class="dock-icon"
+          title={consoleUiStore.dockSide === "bottom" ? "Dock to right" : "Dock to bottom"}
+          aria-label="Toggle dock side"
+          onclick={() => consoleUiStore.toggleDockSide()}
+        >
+          {@html consoleUiStore.dockSide === "bottom" ? DOCK_RIGHT : DOCK_BOTTOM}
+        </button>
       </div>
     {/if}
   </div>
@@ -60,9 +145,6 @@
           <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
         </div>
       {/each}
-      {#if labStore.openConsoleTabs.length === 0}
-        <div class="empty">No consoles open. Right-click a running node → Console.</div>
-      {/if}
     </div>
   {/if}
 </div>
@@ -74,6 +156,12 @@
     height: 100%;
     background: var(--bg-1);
     border-top: 1px solid var(--border);
+  }
+  /* Right-docked: the pane is a full-height vertical column, so the top border
+     of the bottom-dock becomes a left border instead. */
+  .console-dock.side-right {
+    border-top: none;
+    border-left: 1px solid var(--border);
   }
   .console-dock.collapsed {
     height: auto;
@@ -98,6 +186,7 @@
     cursor: pointer;
     padding: 4px 6px;
     border-radius: var(--radius-sm);
+    flex-shrink: 0;
   }
   .collapse-btn:hover {
     background: var(--bg-hover);
@@ -149,6 +238,8 @@
   .tab-ext,
   .tab-close {
     all: unset;
+    display: inline-flex;
+    align-items: center;
     font-size: 11px;
     color: var(--text-tertiary);
     cursor: pointer;
@@ -159,6 +250,45 @@
   .tab-close:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+  .dock-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  .addr-chip {
+    all: unset;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    white-space: nowrap;
+  }
+  .addr-chip:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border);
+  }
+  .dock-icon {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+  }
+  .dock-icon:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .dock-icon.on {
+    color: var(--accent);
   }
   .term-area {
     flex: 1;
@@ -173,13 +303,5 @@
   .term-slot.hidden {
     visibility: hidden;
     pointer-events: none;
-  }
-  .empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    color: var(--text-tertiary);
-    font-size: var(--fs-sm);
   }
 </style>

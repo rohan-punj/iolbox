@@ -5,7 +5,9 @@
   import "@xterm/xterm/css/xterm.css";
   import { labStore } from "../labStore.svelte";
   import { themeStore } from "../themeStore.svelte";
+  import { consoleUiStore } from "../consoleUiStore.svelte";
   import { ConsoleTransport } from "../consoleTransport";
+  import { ConsoleColorizer } from "../consoleColorizer";
 
   let { nodeId, active }: { nodeId: number; active: boolean } = $props();
 
@@ -54,8 +56,14 @@
       // Real supervisor: pipe xterm <-> ws(s)://<host>/console/<nodeId>
       // (binary frames; see consoleTransport.ts / wsbridge.go).
       const decoder = new TextDecoder();
+      const colorizer = new ConsoleColorizer();
       const rc = new ConsoleTransport(nodeId, {
-        onData: (bytes) => term?.write(decoder.decode(bytes, { stream: true })),
+        onData: (bytes) => {
+          const text = decoder.decode(bytes, { stream: true });
+          // Colorize completed lines only (chunk-safe); passthrough when the
+          // user has disabled highlighting. See consoleColorizer.ts.
+          term?.write(consoleUiStore.colorize ? colorizer.push(text) : text);
+        },
         onOpen: () => {
           if (fit) rc.sendResize(term?.cols ?? 80, term?.rows ?? 24);
         },
@@ -90,6 +98,18 @@
       queueMicrotask(() => fit?.fit());
       term?.focus();
     }
+  });
+
+  // Refit + re-send NAWS when the dock side flips (bottom<->right changes the
+  // pane's aspect ratio drastically). Depends on dockSide so it re-runs on
+  // toggle; the microtask lets the new layout settle before measuring.
+  $effect(() => {
+    void consoleUiStore.dockSide;
+    if (!active) return;
+    queueMicrotask(() => {
+      fit?.fit();
+      if (term) realConsole?.sendResize(term.cols, term.rows);
+    });
   });
 
   // Repaint the terminal palette when the app theme flips.

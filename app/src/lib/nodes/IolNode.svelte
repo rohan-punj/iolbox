@@ -4,6 +4,7 @@
   import { stateLabel } from "../nodeVisuals";
   import { iconSvg, defaultIconFor, iconRegistryVersion, isArtworkIcon, uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
+  import NodeActions from "./NodeActions.svelte";
 
   let { id, data, selected }: NodeProps = $props();
 
@@ -51,6 +52,7 @@
   <Handle type="source" position={Position.Left} id="left" />
 
   <div class="face">
+    <NodeActions {nodeId} {state} />
     <span class="led" title={stateLabel(state)}></span>
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
     <button
@@ -195,9 +197,10 @@
     }
   }
   .name {
-    font-size: var(--fs-xs);
+    /* Readability — up ~1px and a touch more opaque backing vs the dot grid. */
+    font-size: calc(var(--fs-xs) + 1px);
     color: var(--ink);
-    background: var(--chip-bg);
+    background: color-mix(in oklab, var(--chip-bg) 92%, var(--ground));
     -webkit-backdrop-filter: var(--blur);
     backdrop-filter: var(--blur);
     border: 1px solid var(--border);

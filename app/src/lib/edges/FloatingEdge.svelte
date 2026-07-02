@@ -12,7 +12,6 @@
   import {
     BaseEdge,
     EdgeLabel,
-    getBezierPath,
     useInternalNode,
     type EdgeProps,
   } from "@xyflow/svelte";
@@ -31,37 +30,69 @@
 
   type EndpointInfo = { name: string; iface: string; telnet?: number };
   const info = $derived(
-    (data as { source?: EndpointInfo; target?: EndpointInfo; capture?: boolean } | undefined) ?? {}
+    (data as {
+      source?: EndpointInfo;
+      target?: EndpointInfo;
+      capture?: boolean;
+      parallelIndex?: number;
+      parallelCount?: number;
+    } | undefined) ?? {}
   );
 
   // R2.3 — hovering either chip glows the whole cable (same as hovering the
   // edge). `hot` mirrors the edge path's hover state to the chips and vice-versa.
   let hot = $state(false);
 
-  // Bezier path + label anchor points, recomputed whenever either node moves.
+  // R2.x — PNetLab-style parallel-link fan-out. Each edge in a group of parallel
+  // links (same unordered node pair) curves out symmetrically. The signed offset
+  // is (index - (count-1)/2) * spacing: a lone link → 0 (straight), two links →
+  // ±spacing/2, three → -spacing/0/+spacing, etc. Sign is anchored to the
+  // source→target vector so A↔B and B↔A parallels don't collapse onto each other.
+  const PARALLEL_SPACING = 26;
+  const parallelOffset = $derived.by(() => {
+    const idx = info.parallelIndex ?? 0;
+    const count = info.parallelCount ?? 1;
+    if (count <= 1) return 0;
+    return (idx - (count - 1) / 2) * PARALLEL_SPACING;
+  });
+
+  // Quadratic-bezier path + label anchor points, recomputed whenever either node
+  // moves. The control point sits at the segment midpoint pushed perpendicular to
+  // the source→target line by parallelOffset, so parallel links bow apart. Chips
+  // ride the curve (evaluated near each endpoint) so they fan out with the cable.
   const geom = $derived.by(() => {
     const s = sourceNode.current;
     const t = targetNode.current;
     if (!s || !t) return null;
-    const { sx, sy, tx, ty, sourcePos, targetPos } = getEdgeParams(s, t);
-    const [path] = getBezierPath({
-      sourceX: sx,
-      sourceY: sy,
-      sourcePosition: sourcePos,
-      targetPosition: targetPos,
-      targetX: tx,
-      targetY: ty,
-    });
-    // Nudge each chip a little in from the node toward the link so it clears the
-    // node face; transform-origin then points back toward the node.
+    const { sx, sy, tx, ty } = getEdgeParams(s, t);
+
     const dx = tx - sx;
     const dy = ty - sy;
     const len = Math.hypot(dx, dy) || 1;
-    const off = 15;
+    // Unit perpendicular to the endpoint line.
+    const px = -dy / len;
+    const py = dx / len;
+    // Control point: midpoint pushed out. Doubling the offset makes the curve
+    // *pass* near ±offset at its apex (a quadratic reaches half its control
+    // displacement at t=0.5), matching the intended fan spacing.
+    const off = parallelOffset;
+    const cx = (sx + tx) / 2 + px * off * 2;
+    const cy = (sy + ty) / 2 + py * off * 2;
+
+    const path = `M ${sx} ${sy} Q ${cx} ${cy} ${tx} ${ty}`;
+
+    // Evaluate the quadratic B(u) so each chip follows ITS end of the curve.
+    const at = (u: number) => {
+      const m = 1 - u;
+      return {
+        x: m * m * sx + 2 * m * u * cx + u * u * tx,
+        y: m * m * sy + 2 * m * u * cy + u * u * ty,
+      };
+    };
     return {
       path,
-      sChip: { x: sx + (dx / len) * off, y: sy + (dy / len) * off },
-      tChip: { x: tx - (dx / len) * off, y: ty - (dy / len) * off },
+      sChip: at(0.16),
+      tChip: at(0.84),
       // origin inside each chip pointing back at its own node
       sOrigin: dx >= 0 ? "left" : "right",
       tOrigin: dx >= 0 ? "right" : "left",
@@ -173,10 +204,12 @@
   .port-chip {
     display: inline-block;
     font-family: var(--font-mono);
-    font-size: var(--fs-chip);
+    /* Readability — chip labels were small/dim. Up ~1px from --fs-chip and use
+       the primary ink for contrast against a more-opaque chip background. */
+    font-size: calc(var(--fs-chip) + 1px);
     line-height: 1;
-    color: var(--ink-2);
-    background: var(--chip-bg);
+    color: var(--ink);
+    background: color-mix(in oklab, var(--chip-bg) 92%, var(--ground));
     -webkit-backdrop-filter: var(--blur);
     backdrop-filter: var(--blur);
     border: 1px solid var(--border);
@@ -190,12 +223,12 @@
   }
   .chip-detail {
     display: none;
-    color: var(--ink-3);
+    color: var(--ink-2);
   }
   .chip-sep {
     display: none;
     margin: 0 4px;
-    color: var(--ink-3);
+    color: var(--ink-2);
   }
   .port-chip:hover {
     transform: scale(1.65);

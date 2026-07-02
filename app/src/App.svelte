@@ -1,5 +1,6 @@
 <script lang="ts">
   import { labStore } from "./lib/labStore.svelte";
+  import { consoleUiStore } from "./lib/consoleUiStore.svelte";
   import TopBar from "./lib/components/TopBar.svelte";
   import Palette from "./lib/components/Palette.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
@@ -12,6 +13,13 @@
   let paletteWidth = $state(220);
   let inspectorWidth = $state(300);
   let consoleHeight = $state(240);
+  let consoleWidth = $state(420);
+
+  // Only show the console dock when at least one tab is open — an empty dock
+  // just steals canvas space. Placement (bottom bar vs right pane) is the
+  // persisted user choice from consoleUiStore.
+  const showConsole = $derived(labStore.openConsoleTabs.length > 0);
+  const dockRight = $derived(consoleUiStore.dockSide === "right");
 </script>
 
 <div class="shell">
@@ -26,14 +34,22 @@
       <div class="canvas-area">
         <Canvas />
       </div>
-      <SplitPane direction="vertical" edge="end" bind:size={consoleHeight} min={80} max={520}>
-        <Console />
-      </SplitPane>
+      {#if showConsole && !dockRight}
+        <SplitPane direction="vertical" edge="end" bind:size={consoleHeight} min={80} max={520}>
+          <Console />
+        </SplitPane>
+      {/if}
     </div>
 
     <div class="inspector-pane" style:flex-basis={`${inspectorWidth}px`}>
       <Inspector />
     </div>
+
+    {#if showConsole && dockRight}
+      <SplitPane direction="horizontal" edge="end" bind:size={consoleWidth} min={280} max={720}>
+        <Console />
+      </SplitPane>
+    {/if}
   </div>
 </div>
 

@@ -237,6 +237,13 @@ class LabStore {
     await this.guarded("wipe lab", () => this.client.labWipe(this.lab.id, null));
   }
 
+  /** Wipe saved configs/state for a single node. Destructive — the caller (UI)
+   *  must confirm with the user first. Mirrors wipeLab: mock lab.wipe isn't
+   *  implemented, so a rejection is logged + swallowed via guarded(). */
+  async wipeNode(nodeId: number) {
+    await this.guarded(`wipe node ${nodeId}`, () => this.client.labWipe(this.lab.id, [nodeId]));
+  }
+
   async startNode(nodeId: number) {
     await this.guarded(`start node ${nodeId}`, () => this.client.nodeStart(this.lab.id, nodeId));
   }

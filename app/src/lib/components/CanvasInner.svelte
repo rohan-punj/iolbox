@@ -75,7 +75,11 @@
     };
   }
 
-  function toFlowEdge(l: (typeof labStore.lab.links)[number]): Edge {
+  function toFlowEdge(
+    l: (typeof labStore.lab.links)[number],
+    parallelIndex: number,
+    parallelCount: number
+  ): Edge {
     const [a, b] = l.endpoints;
     return {
       id: `link-${l.id}`,
@@ -88,8 +92,35 @@
         capture: l.capture?.enabled ?? false,
         source: endpointInfo(a?.node ?? 0, a?.interface ?? ""),
         target: endpointInfo(b?.node ?? 0, b?.interface ?? ""),
+        // R2.x — PNetLab-style parallel-link fan-out. Links sharing the same
+        // unordered node pair each get an index within the group so FloatingEdge
+        // can curve them out symmetrically (see buildEdges).
+        parallelIndex,
+        parallelCount,
       },
     };
+  }
+
+  // Group links by their unordered node-id pair so N parallel links between the
+  // same two nodes fan out instead of stacking. Each link is tagged with its
+  // index within the group and the group size; FloatingEdge derives a
+  // perpendicular offset from these. The pair key sorts the two node ids so
+  // A↔B and B↔A land in the same group; the source/target sign difference is
+  // handled inside FloatingEdge (offset is signed by the source→target vector).
+  function buildEdges(): Edge[] {
+    const groups = new Map<string, number>();
+    return labStore.lab.links.map((l) => {
+      const [a, b] = l.endpoints;
+      const na = a?.node ?? 0;
+      const nb = b?.node ?? 0;
+      const key = na < nb ? `${na}-${nb}` : `${nb}-${na}`;
+      const idx = groups.get(key) ?? 0;
+      groups.set(key, idx + 1);
+      return { link: l, key, idx };
+    }).map(({ link, key, idx }) => {
+      const count = groups.get(key) ?? 1;
+      return toFlowEdge(link, idx, count);
+    });
   }
 
   let nodes = $state.raw<Node[]>([]);
@@ -121,7 +152,7 @@
     // Recompute edges whenever links, node names, states or console ports change.
     void labStore.nodeStates;
     void labStore.consolePorts;
-    edges = labStore.lab.links.map(toFlowEdge);
+    edges = buildEdges();
   });
 
   // Sync dragged positions back into the lab doc (debounced via drag-stop).

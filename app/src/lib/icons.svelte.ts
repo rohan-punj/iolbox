@@ -102,6 +102,8 @@ export const UI_GLYPHS: Record<string, string> = {
   link: '<path d="M9 12h6M8.5 8.5 6 11a3.5 3.5 0 0 0 5 5l1.5-1.5m3-3L17 10a3.5 3.5 0 0 0-5-5l-1.5 1.5"/>',
   edit: '<path d="M4 20h4l10-10-4-4L4 16v4Zm10-14 4 4"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  console: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
+  wipe: '<path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12"/><path d="M10 11v5m4-5v5"/>',
 };
 
 /** Runtime store of user-imported icons, keyed by registry key. */

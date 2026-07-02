@@ -82,7 +82,10 @@
       </span>
       <div class="item-text">
         <div class="item-name">{img.filename}</div>
-        <div class="item-sub">{img.class.toUpperCase()} · {img.arch}</div>
+        <div class="item-sub">
+          <span class="class-badge" class:l2={img.class === "l2"}>{img.class.toUpperCase()}</span>
+          <span class="arch">{img.arch}</span>
+        </div>
       </div>
     </div>
   {/each}
@@ -106,7 +109,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-tertiary);
+    color: var(--ink-2);
     margin: var(--sp-2) 0 2px;
   }
   .section-title:first-child {
@@ -130,14 +133,15 @@
     gap: var(--sp-2);
     padding: 7px 8px;
     border-radius: var(--radius-md);
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-1);
+    /* Stronger row border so cards read as discrete, tappable rows in dark. */
+    border: 1px solid var(--border-strong);
+    background: var(--bg-2);
     cursor: grab;
     transition: background var(--transition-fast), border-color var(--transition-fast);
   }
   .palette-item:hover {
     background: var(--bg-hover);
-    border-color: var(--border);
+    border-color: var(--accent);
   }
   .palette-item:active {
     cursor: grabbing;
@@ -157,15 +161,41 @@
     min-width: 0;
   }
   .item-name {
+    /* Full-ink filename — the dimmer --text-primary alias already maps to --ink,
+       but be explicit so this row never inherits a muted color. */
     font-size: var(--fs-sm);
-    color: var(--text-primary);
+    font-weight: 550;
+    color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .item-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+  /* Class badge (L3/L2): filled pill, high-contrast against the row so the
+     class is legible at a glance even in the dark Glass theme. */
+  .class-badge {
+    font-weight: 700;
     font-size: 10px;
-    color: var(--text-tertiary);
+    letter-spacing: 0.03em;
+    color: var(--accent-ink);
+    background: var(--node-iol-l3);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+  }
+  .class-badge.l2 {
+    background: var(--node-iol-l2);
+  }
+  .arch {
+    /* "x86_64"/"i386" — secondary ink, not tertiary, so it stays readable. */
+    color: var(--ink-2);
+    font-family: var(--font-mono);
   }
   .empty-hint {
     font-size: var(--fs-xs);
