@@ -1,0 +1,92 @@
+// Command supervisor is the iolab control + data plane daemon. It runs inside
+// the Linux runtime (WSL2 / VMware helper VM / remote / qemu) and speaks the
+// NDJSON control protocol (see docs/protocol.md) to the Windows GUI over a
+// loopback TCP connection.
+package main
+
+import (
+	"context"
+	"encoding/binary"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	"github.com/rohanpunj/iolab/supervisor/internal/iourc"
+	"github.com/rohanpunj/iolab/supervisor/internal/server"
+)
+
+// version is the supervisor build version reported in the hello handshake.
+const version = "0.1.0"
+
+func main() {
+	controlAddr := flag.String("control-addr", "127.0.0.1:4000", "control API bind address (loopback only)")
+	imageDir := flag.String("image-dir", "/opt/iolab/images", "directory holding IOL image files")
+	runDir := flag.String("run-dir", "/run/iolab", "base directory for per-node working directories")
+	genIourc := flag.Bool("gen-iourc", false, "generate the IOU license file to stdout from this host's hostid+hostname, then exit (used by the runtime firstboot script)")
+	flag.Parse()
+
+	// Keygen-only mode: print ~/.iourc content and exit without starting the
+	// server. The runtime's firstboot-iourc.sh relies on this exact flag.
+	if *genIourc {
+		if err := generateIourc(os.Stdout); err != nil {
+			log.Fatalf("supervisor -gen-iourc: %v", err)
+		}
+		return
+	}
+
+	srv := server.New(server.Config{
+		ControlAddr: *controlAddr,
+		ImageDir:    *imageDir,
+		RunDir:      *runDir,
+		Version:     version,
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	log.Printf("iolab supervisor %s listening on %s (images=%s run=%s)", version, *controlAddr, *imageDir, *runDir)
+	if err := srv.ListenAndServe(ctx); err != nil {
+		log.Fatalf("supervisor: %v", err)
+	}
+	log.Printf("iolab supervisor shut down cleanly")
+}
+
+// generateIourc writes the ~/.iourc license file content for this host to w.
+func generateIourc(w io.Writer) error {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("hostname: %w", err)
+	}
+	hostid, err := hostID()
+	if err != nil {
+		return err
+	}
+	content, err := iourc.File(hostid, hostname)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, content)
+	return err
+}
+
+// hostID returns the 8-hex-digit host id used as the keygen input, matching the
+// output of the Linux `hostid` command (the community keygen's expected input).
+// Falls back to reading /etc/hostid (4 bytes, host-endian) if the command is
+// unavailable.
+func hostID() (string, error) {
+	if out, err := exec.Command("hostid").Output(); err == nil {
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return s, nil
+		}
+	}
+	if b, err := os.ReadFile("/etc/hostid"); err == nil && len(b) >= 4 {
+		return fmt.Sprintf("%08x", binary.LittleEndian.Uint32(b[:4])), nil
+	}
+	return "", fmt.Errorf("could not determine hostid (no `hostid` command and no /etc/hostid)")
+}
