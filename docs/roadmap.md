@@ -27,7 +27,15 @@ D1 and D2 can start together (different files). One integration pass at the end.
 
 | Phase | Scope | Model | Depends on |
 |---|---|---|---|
-| **P0 — Spike** ⏳ | `docs/p0-spike.md`: boot IOL, console, wire 2×IOL+VPCS, ping, Wireshark tee; confirm the pinned assumptions | Fable+Opus | **a real IOL `.bin`** |
+| **P0 — Spike** 🔜 | `docs/p0-spike.md`: boot IOL, console, wire 2×IOL+VPCS, ping, Wireshark tee; confirm the pinned assumptions | Fable+Opus | a Linux runtime to execute in (image now available) |
+
+**P0 image (confirmed available):** `D:\GNS3 IOS Cisco ALL\Pnet images\` —
+targets `x86_64_crb_linux-adventerprisek9-ms.iol17.18.02.bin` (L3) and
+`x86_64_crb_linux_l2-adventerprisek9-ms.iol17.18.02.bin` (L2). Both verified
+**ELF64 x86-64** → 64-bit IOL, so the runtime needs only x86_64 glibc for these
+(i386 multiarch is for the older `i86bi_linux` 32-bit images). Remaining P0
+blocker is purely the *execution environment* (a Linux runtime on this
+VMware-only, WSL-disallowed box — see below).
 | **P1 — Control plane** ◻ | Implement `TcpTransport` (currently a stub) over Tauri; replace MockTransport; wire real provider bodies (vmware first) | Opus | P0 |
 | **P2 — Live consoles/capture** ◻ | Real telnet consoles in xterm; `capture-helper` launch from the app | Sonnet | P1 |
 | **P3 — Config & images** ◻ | NVRAM save/extract UI; image sync into the runtime; lab-pack import UI | Sonnet | P1 |

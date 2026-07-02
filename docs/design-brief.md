@@ -107,6 +107,32 @@ its audience instead of like a generic dashboard. It's the signature.
 - No gratuitous motion — every animation is functional (hover-pop, LED pulse,
   cable re-anchor, theme fade).
 
+## Revisions from review (2026-07-02)
+
+Three changes requested after seeing the "Bench & Glass" mockup:
+
+1. **Icons must be uploadable (PNetLab-style).** Beyond the bundled set + picker,
+   the user imports their own icons exactly like PNetLab's icon management: an
+   "Import icon…" action accepts SVG/PNG, stores it in a per-user icon library
+   (`%APPDATA%\iolab\icons`), and it appears in the picker for any node. Custom
+   raster icons render as-is; SVG icons are tintable when single-colour. The node
+   `icon` field stores the library key. This is part of D4.
+
+2. **Consoles modeled on PNetLab's webconsole.** The in-app terminal should match
+   PNetLab's web console behaviour and features: a browser-grade **telnet-over-
+   WebSocket** terminal (xterm.js) — telnet IAC negotiation handled server-side,
+   window-size (NAWS) propagation, copy/paste, reconnect-on-drop, and multiple
+   concurrent node consoles as tabs. Because browsers can't open raw telnet, this
+   WS bridge is the *same* mechanism that makes the browser build's consoles work
+   — desktop and browser consoles unify on it. Lives in the supervisor (WS bridge)
+   + Console components. Folds into the console work and Track 3.
+
+3. **Improve text readability.** The mockup's smaller mono labels trade legibility
+   for density. Raise the floor: minimum 12px for any persistent UI text, stronger
+   ink/secondary contrast (hit WCAG AA on both themes), slightly looser line-height
+   on config/console text, and keep the tiny sizes only for the rest-state port
+   chips (which enlarge on hover anyway). Verify contrast in D6.
+
 ## Themeability (so it stays "modernizable")
 
 All of the above is driven by `theme.css` custom properties under
