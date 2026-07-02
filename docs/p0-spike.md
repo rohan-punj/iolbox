@@ -167,6 +167,12 @@ and pinged 20× to generate traffic; `tshark` analyzed the captured pcapng strea
   IOL sees frames addressed to its own interface (same requirement VPCS↔IOL needs:
   strip header toward VPCS, add a correctly-addressed header toward IOL).
 
+**VPCS spawn model validated (2026-07-02):** VPCS 0.8.3 runs via the supervisor's
+forking-daemon path (`-p ConsolePort -i N -s/-c/-t`, no `-N`); its `VPCS>` console
+is reachable through the supervisor-assigned port; process-group + /proc-owner kill
+cleans it up. VPCS↔IOL ping still `not reachable` — SAME netio-header root cause as
+capture (below), not a VPCS-spawn issue.
+
 **Remaining deep piece (the one real unknown left):** reverse-engineer IOL's exact
 8-byte netio header semantics (src/dst instance + port fields) by decoding real
 native-IOL netio datagrams, then implement per-hop header rewriting in
