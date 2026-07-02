@@ -25,7 +25,7 @@ supervisor/
   internal/lab/        lab.schema.json Go structs + Validate()
   internal/netmap/     IOL interface addressing (e0/0 -> a/p token) + whole-lab NETMAP file
   internal/relay/      UDP data plane: p2p forward, segment hub, pcapng capture tee (bridged links)
-  internal/iouyap/     netio<->UDP bridge for bridged links (built separately; NOT imported by server)
+  internal/iouyap/     netio<->UDP bridge for bridged links (wired by server on linux; see bridgeplan.go)
   internal/node/       process mgmt: state machine, port alloc, IOL/VPCS argv, pty console spawn
   internal/iourc/      IOU license (iourc) generation from hostid+hostname
   internal/nvram/      IOL NVRAM startup-config encode/decode (GNS3 iou codec)
@@ -141,15 +141,66 @@ the NETMAP file uses.)
   `iouyap` netio↔UDP bridge. `nativeLinkSpecs` deliberately excludes bridged
   links from the NETMAP so a port is never double-wired.
 
-### iouyap seam (do not import here)
+### Bridged links: iouyap netio↔UDP bridge + pseudo-instances
 
-The netio↔UDP bridge itself lives in `internal/iouyap` (built in parallel). This
-package **does not import it**. The seam is left as clearly-marked `TODO(iouyap)`
-branches at exactly the three spots a bridged link needs one: `handleLinkAdd`
-(runtime add of a bridged link), `buildRelayConfig` (the UDP side of an IOL
-endpoint on a bridged link), and `startNodes` (per-node bridge instantiation).
-When iouyap lands, wire `iouyap.New(...)` in only at those branches — the native
-path is complete and needs no bridge.
+A **bridged** link cannot use native netio, so its IOL endpoint(s) route through
+the `internal/iouyap` netio↔UDP bridge in front of the UDP relay (which forwards
+and, when capture is on, tees clean Ethernet frames to a pcapng `CapturePort`).
+The wiring is computed once per (re)start as a whole-lab **bridge plan**
+(`internal/server/bridgeplan.go`) so the NETMAP and the bridges agree.
+
+**IOL netio socket convention (P0-confirmed via `lsof`).** Each IOL binds a unix
+**datagram** socket at `/tmp/netio<uid>/<instance-id>` (`<uid>` = `os.Getuid()`;
+instance-id = `netmap.InstanceID(nodeID)`). IOL derives a NETMAP peer's socket
+path from that peer's instance id and sends its frames there (8-byte header). So
+to bridge/capture a link we point the IOL endpoint's NETMAP entry at a
+**pseudo-instance** that iouyap owns:
+
+- **Pseudo-instance scheme** (`netmap.PseudoInstanceBase` /
+  `AllocPseudoInstances`): each bridged IOL endpoint gets a pseudo-instance id
+  from the reserved high pool **[500, 1024]**, allocated ascending and **skipping
+  any id a real node already uses** (real nodes use `InstanceID(nodeID)=nodeID+1`,
+  which starts at 1). The base is high enough to clear real instances in every
+  practical single-host lab, and the skip guarantees no collision even if real
+  instances reach into the pool. iouyap binds `/tmp/netio<uid>/<pseudoInstance>`.
+- **NETMAP representation.** `netmap.Build(native, bridged...)` emits, for each
+  bridged IOL endpoint, a line `<realInstance>:<adapter>/<port> <pseudoInstance>:0/0`.
+  IOL treats the right-hand id like any peer and writes that interface's frames
+  to `/tmp/netio<uid>/<pseudoInstance>` — the iouyap socket, not a peer IOL.
+  `nativeLinkSpecs` still excludes bridged links from the native lines, so a port
+  is never double-wired.
+
+**The three seams** (all in `internal/server`, iouyap imported only in
+`bridgeplan_linux.go`):
+
+1. **NETMAP** — `netmapFor` renders native lines **plus** the plan's bridged
+   pseudo-instance lines (`bridgePlan.bridgedEndpointsForNetmap`), written by
+   `prepareLabDir` before any node spawns.
+2. **iouyap bridges** — `prepareLabDir` → `startBridges` (Linux) creates
+   `/tmp/netio<uid>` and starts one `iouyap.Bridge` per bridged IOL endpoint
+   **before** IOL spawns (so the pseudo-instance socket exists when IOL
+   connects), `go bridge.Run(ctx)`, tracked in `loadedLab.bridges` and
+   `Close`d on stop (`stopBridges`, wired into `shutdown`/`lab.stop`).
+3. **relay** — `relayConfigFor` returns the link's relay config **from the
+   plan**, so the relay's UDP ports match the bridges. For each bridged IOL
+   endpoint the bridge's `UDPRemote` = relay endpoint `LocalPort` (IOL→relay) and
+   its `UDPLocal` = relay endpoint `RemotePort` (relay→IOL). `capture.start`
+   records the intent, rebuilds the plan (flipping an IOL↔IOL link to bridged),
+   and restarts the relay with the tee; `capture.stop` reverses it.
+
+**Two supported cases:**
+
+- **Capture on IOL↔IOL** — both endpoints become bridged: **2 iouyap bridges +
+  1 p2p relay with the pcapng tee**. `capture.start` returns the `capturePort`.
+  Because NETMAP is read once at boot, turning capture on/off on an
+  already-running IOL↔IOL link only takes effect after the affected nodes
+  **restart** (they re-read the NETMAP through the pseudo-instances).
+- **VPCS↔IOL** — the IOL endpoint is bridged (pseudo-instance → iouyap → relay);
+  the VPCS endpoint speaks UDP natively. `node.Spec.VPCSUDPLocal/Remote` (set in
+  `buildSpec` from `bridgePlan.vpcsUDPFor`) become VPCS argv `-s <localUdp> -c
+  <remoteUdp> -t 127.0.0.1`: VPCS **binds** the relay's delivery port (`-s` =
+  relay `RemotePort`) and **sends** to the relay's receiving port (`-c` = relay
+  `LocalPort`). The relay bridges the two endpoints (and tees if capture is on).
 
 ### Node id → IOL instance id (`netmap.InstanceID`)
 
@@ -325,15 +376,20 @@ exactly one place. None of it embeds Cisco code.
    and `-n` sizing are accepted by every image line, and console readability
    end-to-end through the pty bridge under load.
 
-5. **VPCS argv** — `node.Spec.VPCSArgv`.
-   `vpcs -N <name> -p <consolePort>`, up to 9 PCs per process, per-PC UDP tunnels
-   wired by the relay layer. **Verify** the exact VPCS UDP tunnel flags
-   (`-s`/`-c`/`-e`) for the bundled VPCS build.
+5. **VPCS argv + UDP tunnel flags** — `node.Spec.VPCSArgv`.
+   `vpcs -N <name> -p <consolePort> -s <localUdp> -c <remoteUdp> -t 127.0.0.1`,
+   up to 9 PCs per process. Wired: `-s` binds the relay's delivery port, `-c`
+   targets the relay's receiving port (see the bridged-links section). **Verify**
+   the bundled VPCS build accepts this `-s`/`-c`/`-t` form (some builds use `-e`
+   or a runtime `set` command) and that a PC pings the IOL LAN through the
+   iouyap+relay path (P0 step 6).
 
-6. **UDP tunnel port pairing** — `server.buildRelayConfig`.
-   Each endpoint gets a local (relay-receives) and remote (node-receives) port.
-   **Verify** how `iol_wrapper` / VPCS expect the local/remote UDP ports to be
-   configured (NETMAP + per-instance socket paths vs. explicit UDP ports).
+6. **UDP tunnel port pairing** — `server.bridgePlan` (bridgeplan.go).
+   Each bridged link endpoint gets a local (relay-receives) and remote
+   (node-receives) UDP port; the IOL side's iouyap bridge pairs
+   `UDPRemote=LocalPort` / `UDPLocal=RemotePort`, the VPCS side maps `-c`/`-s` to
+   the same ports. **Verify** on the VM that frames flow both directions across
+   the pairing (captured pcap shows the ICMP echoes, P0 step 7).
 
 7. **L2/L3 class heuristic** — `image.SniffClass`.
    Presence of >=2 switching markers (`spanning-tree`, `mac-address-table`,

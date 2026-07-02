@@ -222,6 +222,7 @@ func (s *Server) shutdown() {
 	s.mu.Unlock()
 	if ll != nil {
 		ll.stopAll()
+		s.stopBridges(ll)
 	}
 }
 

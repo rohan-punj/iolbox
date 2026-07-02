@@ -85,6 +85,58 @@ func TestBuildMatchesP0Format(t *testing.T) {
 	}
 }
 
+// TestAllocPseudoInstances checks the reserved pseudo-instance pool: ids start
+// at PseudoInstanceBase, are handed out ascending, and never collide with a real
+// instance id already in use.
+func TestAllocPseudoInstances(t *testing.T) {
+	// No real instances in the pool range: first ids are the base upward.
+	got, err := AllocPseudoInstances(map[int]bool{1: true, 2: true}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{PseudoInstanceBase, PseudoInstanceBase + 1, PseudoInstanceBase + 2}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("got %v want %v", got, want)
+	}
+
+	// A real instance sitting inside the pool must be skipped.
+	reals := map[int]bool{PseudoInstanceBase: true, PseudoInstanceBase + 2: true}
+	got, err = AllocPseudoInstances(reals, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range got {
+		if reals[id] {
+			t.Fatalf("pseudo-instance %d collides with a real instance", id)
+		}
+	}
+	if got[0] != PseudoInstanceBase+1 || got[1] != PseudoInstanceBase+3 {
+		t.Fatalf("skip-collision alloc wrong: %v", got)
+	}
+
+	// Exhaustion: asking for more than the pool can supply errors.
+	if _, err := AllocPseudoInstances(nil, MaxIOLInstance); err == nil {
+		t.Fatal("expected pool exhaustion error")
+	}
+}
+
+// TestBuildBridgedLines confirms a bridged IOL endpoint produces the
+// "<realInstance>:<iface> <pseudoInstance>:0/0" NETMAP line, alongside native
+// lines, sorted.
+func TestBuildBridgedLines(t *testing.T) {
+	native := []LinkSpec{{P2P: true, Endpoints: []EndpointSpec{
+		{NodeID: 0, Interface: "e0/0", IsIOL: true},
+		{NodeID: 1, Interface: "e0/0", IsIOL: true},
+	}}}
+	// Lab node 0 -> instance 1; bridged interface e0/1 -> pseudo-instance 500.
+	bridged := []BridgedEndpoint{{NodeID: 0, Interface: "e0/1", PseudoInstance: 500}}
+	got := Build(native, bridged...)
+	want := "1:0/0 2:0/0\n1:0/1 500:0/0\n"
+	if got != want {
+		t.Fatalf("bridged NETMAP:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestInstanceIDMapping pins the node.id -> IOL instance id mapping and its
 // range validation (IOL refuses 0; valid 1..1024).
 func TestInstanceIDMapping(t *testing.T) {

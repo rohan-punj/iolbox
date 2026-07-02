@@ -45,6 +45,40 @@ func InstanceID(nodeID int) int {
 	return nodeID + 1
 }
 
+// PseudoInstanceBase is the low end of the reserved pseudo-instance pool used to
+// wire BRIDGED IOL endpoints (capture / VPCS / cross-host). A bridged IOL
+// endpoint's NETMAP entry points at a pseudo-instance that iouyap owns (it binds
+// /tmp/netio<uid>/<pseudoInstance>) instead of a peer IOL's real instance. The
+// pool starts high (500) so it clears the real-instance range in every practical
+// lab: real nodes use InstanceID(nodeID)=nodeID+1, and a lab dense enough to
+// reach node id 499 (real instance 500) is far beyond any single-host lab. When
+// real instances DO reach into the pool, AllocPseudoInstances skips them, so the
+// scheme stays collision-free up to MaxIOLInstance regardless.
+const PseudoInstanceBase = 500
+
+// AllocPseudoInstances returns n distinct pseudo-instance ids in
+// [PseudoInstanceBase, MaxIOLInstance] that do NOT collide with any id in
+// realInstances (the set of real-node IOL instance ids already in use). Ids are
+// handed out in ascending order for deterministic NETMAP output. It errors if
+// the pool cannot satisfy n ids without colliding.
+//
+// realInstances holds IOL *instance* ids (InstanceID(nodeID)), not raw node ids.
+// Callers build it from every IOL node in the lab so a pseudo-instance can never
+// alias a running IOL's netio socket path.
+func AllocPseudoInstances(realInstances map[int]bool, n int) ([]int, error) {
+	out := make([]int, 0, n)
+	for id := PseudoInstanceBase; id <= MaxIOLInstance && len(out) < n; id++ {
+		if realInstances[id] {
+			continue
+		}
+		out = append(out, id)
+	}
+	if len(out) < n {
+		return nil, fmt.Errorf("pseudo-instance pool [%d,%d] exhausted: need %d, got %d (too many bridged endpoints)", PseudoInstanceBase, MaxIOLInstance, n, len(out))
+	}
+	return out, nil
+}
+
 // ValidateInstance checks that a lab node.id maps to an IOL instance id within
 // IOL's 1..MaxIOLInstance range. It returns a descriptive error otherwise, for
 // use at lab.load.
@@ -171,10 +205,44 @@ type EndpointSpec struct {
 	IsIOL bool
 }
 
-// Build produces the NETMAP file content from link specs. Only IOL-to-IOL p2p
-// pairings appear; VPCS endpoints and segment links are wired by the relay
-// layer instead. Lines are sorted for deterministic output.
-func Build(links []LinkSpec) string {
+// BridgedEndpoint is one IOL endpoint of a bridged link: the real node's IOL
+// interface, plus the pseudo-instance id that iouyap owns for it. The bridged
+// endpoint's NETMAP line points the real IOL interface at the pseudo-instance's
+// port 0/0, so IOL sends that interface's frames to /tmp/netio<uid>/<pseudo>
+// (the iouyap socket) instead of a peer IOL. See docs/p0-spike.md "IOL netio
+// socket convention".
+type BridgedEndpoint struct {
+	// NodeID is the real IOL lab node id (its NETMAP id is InstanceID(NodeID)).
+	NodeID int
+	// Interface is the real IOL interface string, e.g. "e0/1".
+	Interface string
+	// PseudoInstance is the reserved instance id iouyap binds for this endpoint.
+	PseudoInstance int
+}
+
+// bridgedLine renders one bridged endpoint's NETMAP line:
+//
+//	<realInstance>:<adapter>/<port> <pseudoInstance>:0/0
+//
+// IOL treats the right-hand id like any peer instance and writes this
+// interface's frames to that instance's netio socket path — which is the iouyap
+// bridge, not a peer IOL. Returns ("", false) if the interface is unparseable
+// (validation catches that earlier).
+func bridgedLine(be BridgedEndpoint) (string, bool) {
+	ifc, err := ParseIface(be.Interface)
+	if err != nil {
+		return "", false
+	}
+	real := Entry{NodeID: be.NodeID, Iface: ifc}
+	return fmt.Sprintf("%s %d:0/0", real.String(), be.PseudoInstance), true
+}
+
+// Build produces the NETMAP file content from native IOL-to-IOL p2p pairings and
+// bridged IOL endpoints. Native lines wire two real IOL instances directly;
+// bridged lines point a real IOL interface at an iouyap-owned pseudo-instance.
+// VPCS endpoints and segment links contribute no native line (the relay layer
+// handles those). Lines are sorted for deterministic output.
+func Build(links []LinkSpec, bridged ...BridgedEndpoint) string {
 	var lines []string
 	for _, link := range links {
 		var iol []Entry
@@ -190,6 +258,11 @@ func Build(links []LinkSpec) string {
 		}
 		if link.P2P && len(iol) == 2 {
 			lines = append(lines, iol[0].String()+" "+iol[1].String())
+		}
+	}
+	for _, be := range bridged {
+		if line, ok := bridgedLine(be); ok {
+			lines = append(lines, line)
 		}
 	}
 	sort.Strings(lines)

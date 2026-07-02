@@ -18,6 +18,14 @@ type loadedLab struct {
 	nodes    map[int]*nodeRuntime // by node id
 	captures map[int]int          // linkID -> capturePort
 	runDir   string
+
+	// bridge is the whole-lab bridged-link wiring (pseudo-instances + iouyap +
+	// relay pairing). It is (re)computed by prepareLabDir before every spawn so
+	// the NETMAP and the iouyap bridges agree; nil until first prepared.
+	bridge *bridgePlan
+	// bridges holds the live iouyap bridges started for this lab, keyed by netio
+	// socket path, so they can be Closed on stop (Linux only). Guarded by mu.
+	bridges map[string]*labBridge
 }
 
 // nodeRuntime is the runtime state of a single node.
@@ -36,6 +44,7 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		nodes:    make(map[int]*nodeRuntime),
 		captures: make(map[int]int),
 		runDir:   runDir,
+		bridges:  make(map[string]*labBridge),
 	}
 }
 

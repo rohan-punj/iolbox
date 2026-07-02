@@ -51,11 +51,10 @@ func (w linkWiring) String() string {
 //
 // isIOL maps node id -> whether that node is an IOL node.
 //
-// TODO(iouyap): when internal/iouyap lands, the wiringBridged branch in
-// server.startNodes / server.buildRelayConfig is where a bridged link gets its
-// netio<->UDP bridge instance. Do NOT import iouyap from here; keep this
-// predicate pure so it stays unit-testable on any OS. See docs/p0-spike.md
-// "Architecture corrections" #2.
+// Keep this predicate pure (no imports of iouyap/relay) so it stays
+// unit-testable on any OS. A wiringBridged result feeds bridgePlan
+// (bridgeplan.go), which allocates the pseudo-instance + iouyap bridge + relay
+// for the link. See docs/p0-spike.md "Architecture corrections" #2.
 func wiringFor(link *lab.Link, isIOL map[int]bool) linkWiring {
 	if link.EffectiveType() != lab.LinkP2P {
 		return wiringBridged

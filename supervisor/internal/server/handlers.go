@@ -185,6 +185,7 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	all := args.Nodes == nil
 	ids := args.Nodes
 	if ids == nil {
 		for _, n := range ll.doc.Nodes {
@@ -193,6 +194,11 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 	}
 	for _, id := range ids {
 		s.stopNode(ll, id)
+	}
+	// A full lab stop tears down the iouyap bridges too (per-node stop leaves them
+	// up; they restart idempotently on the next spawn).
+	if all {
+		s.stopBridges(ll)
 	}
 	return protocol.StartResult{Started: []protocol.StartedNode{}}, nil
 }
@@ -242,6 +248,13 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 // startupConfig injected. IOL reads all of these from its cwd at boot, so they
 // must exist first. prepareLabDir is a no-op off Linux.
 func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
+	// (Re)compute the whole-lab bridge plan (pseudo-instances + relay/iouyap
+	// pairing) first: prepareLabDir's NETMAP and the iouyap bridges both derive
+	// from it, so it must exist before either. This is pure (no sockets) and runs
+	// on every platform so control-plane tests see the same NETMAP.
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+	}
 	if err := s.prepareLabDir(ll); err != nil {
 		return nil, err
 	}
@@ -301,6 +314,14 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 		spec.NVRAMKiB = node.NVRAMKiBFor(len(n.StartupConfig))
 	case lab.KindVPCS:
 		spec.VPCSCount = 1
+		// Wire the PC's UDP tunnel to the relay if this VPCS is a bridged-link
+		// endpoint in the plan (the IOL side reaches the same relay via iouyap).
+		if ll.bridge != nil {
+			if send, listen, ok := ll.bridge.vpcsUDPFor(n.ID); ok {
+				spec.VPCSUDPLocal = listen // VPCS binds the relay's delivery port (-s)
+				spec.VPCSUDPRemote = send  // VPCS sends to the relay's receiving port (-c)
+			}
+		}
 	}
 	return spec, nil
 }
@@ -365,18 +386,25 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	// boot needs a restart to take effect; we still report link.up so the GUI
 	// reflects intent.
 	//
-	// TODO(iouyap): bridged links (capture/VPCS/cross-host) start a UDP relay
-	// today; once internal/iouyap lands, insert its netio<->UDP bridge here so
-	// the IOL side speaks netio into the bridge and the relay tees/floods UDP.
+	// Native same-host IOL<->IOL links carry traffic purely via the whole-lab
+	// NETMAP; there is no relay to start. (A native link added at runtime that
+	// wasn't in the boot NETMAP needs a node restart to take effect; we still
+	// report link.up so the GUI reflects intent.)
 	if wiringFor(&args.Link, isIOLMap(ll.doc)) == wiringNative {
 		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
 		return protocol.LinkData{Link: args.Link.ID}, nil
 	}
 
-	cfg, err := s.buildRelayConfig(ll, &args.Link, 0)
+	// Bridged link: start (or restart) its UDP relay from the whole-lab bridge
+	// plan so the relay's ports match the iouyap bridges started at node spawn.
+	// The iouyap netio<->UDP bridges for this link's IOL endpoints are created in
+	// prepareLabDir (startBridges) before the IOL nodes spawn; here we only bring
+	// up the UDP relay half.
+	cfg, err := s.relayConfigFor(ll, args.Link.ID)
 	if err != nil {
 		return nil, err
 	}
+	_ = s.relays.Stop(args.Link.ID)
 	if _, err := s.relays.Start(cfg); err != nil {
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
 	}
@@ -397,38 +425,26 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	return protocol.LinkData{Link: args.Link.ID}, nil
 }
 
-// buildRelayConfig derives the relay Config for a BRIDGED link (capture / VPCS /
-// segment / cross-host). Native same-host IOL<->IOL links never reach here —
-// they are wired via the whole-lab NETMAP (see wiringFor / netmapFor). UDP
-// endpoint ports are allocated per node interface, modelling the VPCS UDP tunnel
-// and the (future) iouyap netio<->UDP bridge pairing.
+// relayConfigFor returns the relay.Config for a BRIDGED link, sourced from the
+// whole-lab bridge plan so the relay's UDP ports match the iouyap netio<->UDP
+// bridges (IOL endpoints) and the VPCS UDP tunnel ports. Native same-host
+// IOL<->IOL links never reach here — they are wired via the whole-lab NETMAP
+// (see wiringFor / netmapFor). The plan carries the pcapng CapturePort for any
+// link with an active capture intent (ll.captures), so the returned config tees
+// automatically when capture is on.
 //
-// TODO(iouyap): for IOL endpoints on a bridged link, the IOL side actually
-// speaks unix-socket netio, so a netio<->UDP bridge (internal/iouyap, built in
-// parallel) must sit between IOL and this UDP relay. This function allocates the
-// UDP side; the iouyap bridge instance is created where startNodes handles a
-// bridged link's IOL endpoints. Do NOT import iouyap here.
-func (s *Server) buildRelayConfig(ll *loadedLab, link *lab.Link, capturePort int) (relay.Config, error) {
-	kind := relay.KindP2P
-	if link.EffectiveType() == lab.LinkSegment {
-		kind = relay.KindHub
+// The plan is (re)built lazily if absent (e.g. link.add before lab.start) using
+// the current capture intents, so a relay started here always agrees with the
+// pseudo-instance NETMAP and the iouyap bridges.
+func (s *Server) relayConfigFor(ll *loadedLab, linkID int) (relay.Config, error) {
+	if ll.bridge == nil {
+		if err := s.rebuildBridgePlan(ll); err != nil {
+			return relay.Config{}, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+		}
 	}
-	cfg := relay.Config{LinkID: link.ID, Kind: kind, CapturePort: capturePort}
-	for _, ep := range link.Endpoints {
-		if ll.findNode(ep.Node) == nil {
-			return cfg, protocol.Errorf(protocol.CodeBadRequest, "link %d: unknown node %d", link.ID, ep.Node)
-		}
-		local, err := s.udpPorts.Next()
-		if err != nil {
-			return cfg, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
-		}
-		remote, err := s.udpPorts.Next()
-		if err != nil {
-			return cfg, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
-		}
-		cfg.Endpoints = append(cfg.Endpoints, relay.UDPEndpoint{
-			Host: "127.0.0.1", LocalPort: local, RemotePort: remote,
-		})
+	cfg, ok := ll.bridge.relayConfigFor(linkID)
+	if !ok {
+		return relay.Config{}, protocol.Errorf(protocol.CodeBadRequest, "link %d is not a bridged link", linkID)
 	}
 	return cfg, nil
 }
@@ -450,9 +466,31 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
 	}
+	// Record the capture intent, then rebuild the plan so this link becomes
+	// bridged with a pcapng tee on its relay. NOTE: an IOL<->IOL link that booted
+	// NATIVE (no bridging) only routes through the relay/tee after the affected
+	// IOL nodes RESTART to re-read the NETMAP (now pointing at iouyap
+	// pseudo-instances) — NETMAP is read once at boot. A link that was already
+	// bridged (VPCS, segment) picks up the tee immediately on relay restart.
+	ll.mu.Lock()
+	ll.captures[link.ID] = port
+	ll.mu.Unlock()
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		ll.mu.Lock()
+		delete(ll.captures, link.ID)
+		ll.mu.Unlock()
+		s.capturePorts.Release(port)
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+	}
+	// Restart iouyap bridges so a newly-bridged IOL endpoint's netio socket
+	// exists for when its node restarts (no-op off Linux / for already-bridged
+	// links whose sockets are up).
+	if err := s.startBridges(ll); err != nil {
+		return nil, err
+	}
 	// Re-create the relay with a tee on the capture port.
 	_ = s.relays.Stop(link.ID)
-	cfg, err := s.buildRelayConfig(ll, link, port)
+	cfg, err := s.relayConfigFor(ll, link.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -492,10 +530,17 @@ func (s *Server) handleCaptureStop(raw json.RawMessage) (any, error) {
 	if ok {
 		s.capturePorts.Release(port)
 	}
-	// Rebuild the relay without a tee.
+	// Rebuild the plan without this link's tee. If the link is IOL<->IOL it is now
+	// native again (wiringFor flips back once capture is off); the relay is torn
+	// down and traffic returns to native netio only after the affected nodes
+	// restart to re-read the NETMAP. VPCS/segment links stay bridged and get a
+	// fresh relay without the tee.
 	_ = s.relays.Stop(args.Link)
-	if link := ll.findLink(args.Link); link != nil {
-		if cfg, cerr := s.buildRelayConfig(ll, link, 0); cerr == nil {
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+	}
+	if link := ll.findLink(args.Link); link != nil && wiringFor(link, isIOLMap(ll.doc)) == wiringBridged {
+		if cfg, ok := ll.bridge.relayConfigFor(args.Link); ok {
 			_, _ = s.relays.Start(cfg)
 		}
 	}
@@ -580,11 +625,17 @@ func intOr(p *int, def int) int {
 	return *p
 }
 
-// netmapFor renders the whole-lab NETMAP for every natively-wired IOL<->IOL
-// link (see nativeLinkSpecs / wiringFor). It is written once, into the shared
-// lab dir, before any IOL node spawns (Linux prepareLabDir); bridged links
-// (capture/VPCS/cross-host) are intentionally absent and are wired via
-// iouyap+relay instead.
+// netmapFor renders the whole-lab NETMAP: a native IOL<->IOL line for every
+// natively-wired link (see nativeLinkSpecs / wiringFor) PLUS a bridged line for
+// every bridged IOL endpoint (capture/VPCS/segment/cross-host), pointing that
+// interface at the iouyap-owned pseudo-instance from the lab's bridge plan. It
+// is written once, into the shared lab dir, before any IOL node spawns (Linux
+// prepareLabDir). The plan must be built first (prepareLabDir does that); if it
+// is nil (no bridged links, or off-Linux tests), only native lines are emitted.
 func (s *Server) netmapFor(ll *loadedLab) string {
-	return netmap.Build(nativeLinkSpecs(ll.doc))
+	var bridged []netmap.BridgedEndpoint
+	if ll.bridge != nil {
+		bridged = ll.bridge.bridgedEndpointsForNetmap()
+	}
+	return netmap.Build(nativeLinkSpecs(ll.doc), bridged...)
 }

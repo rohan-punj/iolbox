@@ -25,6 +25,12 @@ type Spec struct {
 
 	// VPCS fields.
 	VPCSCount int // number of PCs (<= 9)
+	// VPCSUDPLocal is the UDP port VPCS binds to RECEIVE frames the relay
+	// forwards to it (VPCS's -s). 0 means no UDP tunnel (an unconnected PC).
+	VPCSUDPLocal int
+	// VPCSUDPRemote is the UDP port VPCS SENDS frames to — the relay's receiving
+	// port (VPCS's -c). 0 means no UDP tunnel.
+	VPCSUDPRemote int
 }
 
 // DefaultNVRAMKiB is the NVRAM size used when Spec.NVRAMKiB is 0. IOL rounds
@@ -99,18 +105,39 @@ func (s Spec) Environ() []string {
 // VPCSArgv builds the argv for a VPCS process hosting up to 9 PCs with its
 // built-in telnet console.
 //
-//	vpcs -N <name> -p <consolePort> [-m <startMac>] [-s <startUdp> -c <startUdp>]
+//	vpcs -N <name> -p <consolePort> [-s <localUdp> -c <remoteUdp> -t 127.0.0.1]
 //
-// VPCS connects each PC over UDP tunnels configured via its runtime commands or
-// -s/-c options. We expose the console port with -p; per-PC UDP endpoints are
-// wired by the relay layer using the ports recorded in the Spec by the caller.
+// VPCS speaks the UDP tunnel protocol natively (it never speaks IOL netio), so a
+// VPCS<->IOL link is realized by connecting VPCS's UDP tunnel straight to the
+// supervisor's relay (the IOL side reaches the same relay through an iouyap
+// netio<->UDP bridge). The port pairing (from server.bridgePlan.vpcsUDPFor):
+//
+//   - -s <localUdp>  : the port VPCS BINDS to receive frames the relay forwards
+//     to it — i.e. the relay endpoint's RemotePort for this VPCS.
+//   - -c <remoteUdp> : the port VPCS SENDS frames to — the relay endpoint's
+//     receiving LocalPort.
+//   - -t 127.0.0.1   : the tunnel peer host (the relay runs on loopback).
+//
+// This is VPCS's classic ubridge/GNS3 UDP-tunnel wiring: -s/-c set the first
+// PC's local/remote UDP ports and VPCS increments per PC. With one PC per VPCS
+// node today, only the first pair is used. -p exposes the telnet console.
+// When no UDP tunnel is wired (VPCSUDPLocal/Remote == 0) the -s/-c/-t flags are
+// omitted and the PC is unconnected.
 func (s Spec) VPCSArgv(name string) ([]string, error) {
 	if s.VPCSCount < 1 || s.VPCSCount > 9 {
 		return nil, fmt.Errorf("vpcs count must be 1..9, got %d", s.VPCSCount)
 	}
-	return []string{
+	argv := []string{
 		"vpcs",
 		"-N", name,
 		"-p", strconv.Itoa(s.ConsolePort),
-	}, nil
+	}
+	if s.VPCSUDPLocal > 0 && s.VPCSUDPRemote > 0 {
+		argv = append(argv,
+			"-s", strconv.Itoa(s.VPCSUDPLocal),
+			"-c", strconv.Itoa(s.VPCSUDPRemote),
+			"-t", "127.0.0.1",
+		)
+	}
+	return argv, nil
 }

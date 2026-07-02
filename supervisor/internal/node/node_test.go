@@ -160,6 +160,34 @@ func TestVPCSArgv(t *testing.T) {
 	}
 }
 
+// TestVPCSArgvUDPTunnel checks the UDP tunnel flags: -s binds VPCSUDPLocal (the
+// relay's delivery port), -c targets VPCSUDPRemote (the relay's receiving port),
+// with -t 127.0.0.1. Absent ports => no tunnel flags.
+func TestVPCSArgvUDPTunnel(t *testing.T) {
+	s := Spec{NodeID: 2, Kind: "vpcs", ConsolePort: 9001, VPCSCount: 1,
+		VPCSUDPLocal: 10005, VPCSUDPRemote: 10004}
+	argv, err := s.VPCSArgv("pc2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := ""
+	for _, a := range argv {
+		joined += a + " "
+	}
+	if !contains(joined, "-s 10005 ") || !contains(joined, "-c 10004 ") || !contains(joined, "-t 127.0.0.1 ") {
+		t.Fatalf("vpcs UDP tunnel flags missing/wrong: %s", joined)
+	}
+
+	// No tunnel wired => no -s/-c/-t.
+	s.VPCSUDPLocal, s.VPCSUDPRemote = 0, 0
+	argv, _ = s.VPCSArgv("pc2")
+	for _, a := range argv {
+		if a == "-s" || a == "-c" || a == "-t" {
+			t.Fatalf("unconnected VPCS must have no UDP tunnel flags: %v", argv)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

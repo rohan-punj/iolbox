@@ -30,10 +30,19 @@ func (s *Server) prepareLabDir(ll *loadedLab) error {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "lab dir %s: %v", dir, err)
 	}
 
-	// Whole-lab NETMAP (native IOL<->IOL links only).
+	// Whole-lab NETMAP: native IOL<->IOL lines PLUS bridged-endpoint lines that
+	// point each bridged IOL interface at its iouyap pseudo-instance (the plan is
+	// already built by startNodes -> rebuildBridgePlan).
 	netmapPath := filepath.Join(dir, "NETMAP")
 	if err := os.WriteFile(netmapPath, []byte(s.netmapFor(ll)), 0o644); err != nil {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "write NETMAP: %v", err)
+	}
+
+	// Start one iouyap netio<->UDP bridge per bridged IOL endpoint BEFORE any IOL
+	// spawns, so each pseudo-instance's /tmp/netio<uid>/<pseudo> socket exists
+	// when IOL connects to it per its NETMAP line. Idempotent across restarts.
+	if err := s.startBridges(ll); err != nil {
+		return err
 	}
 
 	// Shared iourc license.
