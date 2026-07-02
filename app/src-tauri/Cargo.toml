@@ -1,0 +1,27 @@
+[package]
+name = "iolab"
+version = "0.1.0"
+description = "iolab — lightweight Windows-native lab tool for Cisco IOL images and VPCS"
+authors = ["iolab"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "iolab_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+
+[features]
+# Compile-time toggle for the Tauri custom protocol on production builds.
+custom-protocol = ["tauri/custom-protocol"]
