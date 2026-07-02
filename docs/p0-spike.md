@@ -137,6 +137,16 @@ consistently across argv + NETMAP + nvram filename. Validated with ids 1,2;
 Remaining P0 items (not risk — plumbing): VPCS↔IOL and Wireshark capture via the
 `internal/iouyap` bridge (built, not yet wired into the server link path).
 
+**IOL netio socket convention (confirmed via lsof on real IOL):** each IOL binds a
+unix **DGRAM** socket at **`/tmp/netio<uid>/<instance-id>`** (e.g. instance 1 →
+`/tmp/netio1000/1`, instance 2 → `/tmp/netio1000/2`; `<uid>` = numeric user id).
+IOL derives a NETMAP peer's socket path from the peer's instance id and sends
+datagrams there (8-byte header carrying the port channel). So to bridge/capture a
+link, `iouyap` binds `/tmp/netio<uid>/<pseudo-instance>` and the bridged endpoint's
+NETMAP entry points at that pseudo-instance; iouyap relays netio↔UDP into the
+supervisor's relay (pcapng tee + forward). This is the exact seam `internal/iouyap`
+was built for.
+
 ## P0 status: core risks RETIRED ✅
 
 Every hard unknown is now confirmed against real IOL 17.18.02: image sniff, iourc
