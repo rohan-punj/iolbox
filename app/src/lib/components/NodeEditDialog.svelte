@@ -79,6 +79,13 @@
         imageId !== node.image?.id)
   );
 
+  // Extract the node's saved NVRAM config into the doc, then mirror it into the
+  // local editable copy so the user sees it immediately (feature 4).
+  async function saveConfigFromNvram() {
+    await labStore.saveNodeConfig(nodeId);
+    startupConfig = node?.startupConfig ?? startupConfig;
+  }
+
   let iconPickerPos = $state<{ x: number; y: number } | null>(null);
   function openIconPicker(e: MouseEvent) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -178,6 +185,13 @@
 
           <div class="field">
             <span class="label">Startup-config</span>
+            {#if running}
+              <button
+                class="btn btn-ghost savecfg-btn"
+                title="Runs on the node's saved NVRAM — do write memory on the node first"
+                onclick={saveConfigFromNvram}
+              >Save config from NVRAM</button>
+            {/if}
             <textarea
               class="mono cfg"
               spellcheck="false"
@@ -287,6 +301,11 @@
     min-height: 80px;
     line-height: 1.5;
     resize: vertical;
+  }
+  .savecfg-btn {
+    align-self: flex-start;
+    font-size: var(--fs-xs);
+    margin-bottom: 2px;
   }
   .icon-inline {
     display: flex;

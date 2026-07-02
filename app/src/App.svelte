@@ -8,6 +8,7 @@
   import Console from "./lib/components/Console.svelte";
   import Preflight from "./lib/components/Preflight.svelte";
   import ImageManager from "./lib/components/ImageManager.svelte";
+  import LabBrowser from "./lib/components/LabBrowser.svelte";
   import SplitPane from "./lib/components/SplitPane.svelte";
 
   let paletteWidth = $state(220);
@@ -18,7 +19,9 @@
   // Only show the console dock when at least one tab is open — an empty dock
   // just steals canvas space. Placement (bottom bar vs right pane) is the
   // persisted user choice from consoleUiStore.
-  const showConsole = $derived(labStore.openConsoleTabs.length > 0);
+  const showConsole = $derived(
+    labStore.openConsoleTabs.length > 0 || labStore.openCaptureTabs.length > 0
+  );
   const dockRight = $derived(consoleUiStore.dockSide === "right");
 
   // Right Inspector pane only exists when something is selected. Clicking empty
@@ -89,6 +92,10 @@
 
 {#if labStore.showImageManager}
   <ImageManager onClose={() => (labStore.showImageManager = false)} />
+{/if}
+
+{#if labStore.showLabBrowser}
+  <LabBrowser onClose={() => (labStore.showLabBrowser = false)} />
 {/if}
 
 <style>

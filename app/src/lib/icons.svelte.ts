@@ -88,6 +88,18 @@ const BUILTIN: Record<string, { label: string; inner: string; viewBox?: string }
     label: "Access Point",
     inner: '<circle cx="12" cy="17" r="2"/><path d="M8.5 13.5a5 5 0 0 1 7 0M6 11a8 8 0 0 1 12 0M12 19v-2"/>',
   },
+  // NAT gateway — a globe with an outward arrow (translation to the outside).
+  nat: {
+    label: "NAT Gateway",
+    inner:
+      '<circle cx="10" cy="12" r="7"/><path d="M3 12h14M10 5c2 2 2 12 0 14M10 5c-2 2-2 12 0 14"/><path d="M17 6h4v4M21 6l-5 5"/>',
+  },
+  // MGMT bridge — a wrench crossing a link, denoting an out-of-band mgmt bridge.
+  mgmt: {
+    label: "MGMT Bridge",
+    inner:
+      '<path d="M14.5 4.5a3.5 3.5 0 0 0-4.8 4.3L4 14.5 6.5 17l5.7-5.7a3.5 3.5 0 0 0 4.3-4.8l-2.2 2.2-2-2 2.2-2.2Z"/><circle cx="17.5" cy="17.5" r="2.5"/><path d="M15.7 15.7 13 13"/>',
+  },
 };
 
 // ---- UI (chrome) glyphs, not device icons ----
@@ -97,6 +109,10 @@ export const UI_GLYPHS: Record<string, string> = {
   fit: '<path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4m11-5v4a1 1 0 0 1-1 1h-4"/>',
   reset: '<path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 10a8 8 0 0 0-14.5-4.3L4 10M4 14a8 8 0 0 0 14.5 4.3L20 14"/>',
   upload: '<path d="M12 15V4m0 0-4 4m4-4 4 4M5 19h14"/>',
+  download: '<path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  folder: '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6Z"/>',
+  save: '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 21v-6h8v6"/>',
   images: '<rect x="3" y="4" width="18" height="14" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 16 5-4 4 3 3-2 4 3"/>',
   net: '<path d="M12 3v6m0 0-3 3m3-3 3 3M6 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm12 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-6-9v0M8 17l3-3m5 3-3-3"/>',
   link: '<path d="M9 12h6M8.5 8.5 6 11a3.5 3.5 0 0 0 5 5l1.5-1.5m3-3L17 10a3.5 3.5 0 0 0-5-5l-1.5 1.5"/>',
@@ -104,6 +120,9 @@ export const UI_GLYPHS: Record<string, string> = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   console: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
   wipe: '<path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12"/><path d="M10 11v5m4-5v5"/>',
+  // Floppy-disk "save config" glyph.
+  savecfg:
+    '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 21v-6h8v6"/>',
 };
 
 /** Runtime store of user-imported icons, keyed by registry key. */
@@ -182,6 +201,8 @@ export function uiSvg(name: keyof typeof UI_GLYPHS | string, size = 15): string 
 /** Default icon derived from image class / node kind. */
 export function defaultIconFor(kind: string, imageClass?: string): string {
   if (kind === "vpcs") return "pc";
+  if (kind === "nat") return "nat";
+  if (kind === "mgmt") return "mgmt";
   if (imageClass === "l2") return "switch";
   return "router"; // l3 / unknown
 }

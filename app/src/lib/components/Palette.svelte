@@ -1,7 +1,8 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
+  import { iconSvg } from "../icons.svelte";
 
-  function onDragStart(e: DragEvent, kind: "iol" | "vpcs", imageId?: string) {
+  function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat" | "mgmt", imageId?: string) {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(
@@ -12,6 +13,16 @@
 
   const iolImages = $derived(labStore.images);
   const running = $derived(labStore.labRunning);
+  // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
+  // advertised the capability in its hello handshake.
+  const hasNat = $derived(labStore.features.includes("natgw"));
+  const hasMgmt = $derived(labStore.features.includes("mgmt"));
+  // "Save configs" only makes sense when running IOL nodes exist.
+  const hasRunningIol = $derived(
+    labStore.lab.nodes.some(
+      (n) => n.kind === "iol" && labStore.nodeStates[n.id] === "running"
+    )
+  );
 
   async function startAll() {
     await labStore.startLab();
@@ -23,6 +34,9 @@
     if (!confirm("Wipe all saved configs/state for this lab? This cannot be undone.")) return;
     await labStore.wipeLab();
   }
+  async function saveConfigs() {
+    await labStore.saveAllConfigs();
+  }
 </script>
 
 <div class="palette">
@@ -30,6 +44,12 @@
   <div class="lab-controls">
     <button class="btn lab-btn" onclick={startAll} disabled={running}>Start all</button>
     <button class="btn lab-btn" onclick={stopAll} disabled={!running}>Stop all</button>
+    <button
+      class="btn lab-btn"
+      onclick={saveConfigs}
+      disabled={!hasRunningIol}
+      title="Extract each running IOL node's saved NVRAM startup-config into the lab — write memory on the nodes first"
+    >Save configs</button>
     <button class="btn lab-btn btn-danger" onclick={wipeAll} disabled={running}>Wipe all</button>
   </div>
 
@@ -53,6 +73,40 @@
       <div class="item-sub">Virtual PC</div>
     </div>
   </div>
+
+  {#if hasNat}
+    <div
+      class="palette-item"
+      draggable="true"
+      role="button"
+      tabindex="0"
+      ondragstart={(e) => onDragStart(e, "nat")}
+      title="NAT gateway to the outside network (single eth0)"
+    >
+      <span class="swatch nat" aria-hidden="true">{@html iconSvg("nat", 16)}</span>
+      <div class="item-text">
+        <div class="item-name">NAT Gateway</div>
+        <div class="item-sub">Internet egress</div>
+      </div>
+    </div>
+  {/if}
+
+  {#if hasMgmt}
+    <div
+      class="palette-item"
+      draggable="true"
+      role="button"
+      tabindex="0"
+      ondragstart={(e) => onDragStart(e, "mgmt")}
+      title="Out-of-band management bridge (single eth0)"
+    >
+      <span class="swatch mgmt" aria-hidden="true">{@html iconSvg("mgmt", 16)}</span>
+      <div class="item-text">
+        <div class="item-name">MGMT Bridge</div>
+        <div class="item-sub">Management net</div>
+      </div>
+    </div>
+  {/if}
 
   <div class="section-title">IOL images</div>
   {#if iolImages.length === 0}
@@ -153,6 +207,14 @@
   }
   .swatch.vpcs {
     color: var(--node-vpcs);
+  }
+  .swatch.nat,
+  .swatch.mgmt {
+    color: var(--accent);
+  }
+  .swatch :global(svg) {
+    width: 16px;
+    height: 16px;
   }
   .swatch.l2 {
     color: var(--node-iol-l2);

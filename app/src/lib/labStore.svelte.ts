@@ -36,6 +36,24 @@ class LabStore {
   activeConsoleTab = $state<number | null>(null);
   showPreflight = $state(true);
   showImageManager = $state(false);
+  showLabBrowser = $state(false);
+  /** Supervisor feature flags from the hello handshake (e.g. "natgw","mgmt").
+   *  Drives feature-gated palette entries. */
+  features = $state<string[]>([]);
+  /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
+   *  these to drive the traffic glow; entries older than ~5s are treated stale. */
+  linkStats = $state<Record<number, { fps: number; bps: number; ts: number }>>({});
+  /** Coarse ~1s wall clock so glow readers can decay stats to zero when the
+   *  events stop arriving (link.stats is silent for idle links). */
+  nowTick = $state(Date.now());
+  /** Open live-capture console tabs (feature 1), keyed by link id. Kept separate
+   *  from node console tabs (openConsoleTabs) which are keyed by node id. */
+  openCaptureTabs = $state<number[]>([]);
+  /** Ids of docs previously saved to the durable store — gates autosave (only
+   *  autosave a lab the user has explicitly saved at least once). */
+  private savedDocIds = new Set<string>();
+  lastSavedAt = $state<number | null>(null);
+  private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   client: SupervisorClient;
   /** Only set when the mock transport was actually selected; see mockTransport getter. */
@@ -57,6 +75,11 @@ class LabStore {
       void this.connect();
     }
     this.seedDemoLab();
+    // Drive glow decay: bump a coarse clock every second so FloatingEdge
+    // re-evaluates staleness even when no new link.stats events arrive.
+    setInterval(() => {
+      this.nowTick = Date.now();
+    }, 1000);
   }
 
   /** Small starter topology so the canvas isn't empty on first launch. */
@@ -124,7 +147,8 @@ class LabStore {
     // arriving mid-connect is dropped.
     this.client.onEvent((evt) => this.handleEvent(evt));
     try {
-      await this.client.connect();
+      const hello = await this.client.connect();
+      this.features = hello.features ?? [];
       this.providerStatus = "connected";
       // Real supervisor: the runtime provider is whatever process spawned it,
       // not a Windows-side choice — leave activeProvider as Preflight (mock
@@ -178,6 +202,14 @@ class LabStore {
       case "node.console":
         this.consolePorts = { ...this.consolePorts, [evt.data.node]: evt.data.consolePort };
         break;
+      case "link.stats":
+        // Replace the whole record so $derived/$effect readers re-run; carry a
+        // receive timestamp so FloatingEdge can expire stale glow.
+        this.linkStats = {
+          ...this.linkStats,
+          [evt.data.link]: { fps: evt.data.fps, bps: evt.data.bps, ts: Date.now() },
+        };
+        break;
       case "log":
         this.pushLog(evt.data.level, evt.data.message, evt.data.node);
         break;
@@ -192,6 +224,13 @@ class LabStore {
 
   async loadLab(lab: LabDocument) {
     this.lab = lab;
+    // Remap image ids against this supervisor's registry (same as connect()).
+    this.reconcileNodeImages();
+    // Clear any lingering runtime/glow state from the previous lab.
+    this.linkStats = {};
+    this.openConsoleTabs = [];
+    this.openCaptureTabs = [];
+    this.activeConsoleTab = null;
     const res = await this.client.labLoad(lab);
     const ports: Record<number, number> = {};
     const states: Record<number, NodeState> = {};
@@ -203,6 +242,88 @@ class LabStore {
     }
     this.consolePorts = ports;
     this.nodeStates = states;
+  }
+
+  // ---- durable lab-document store (feature 3) ----
+
+  /** True once the current lab has been saved to the durable store this session. */
+  get currentLabSaved(): boolean {
+    return this.savedDocIds.has(this.lab.id);
+  }
+
+  /** Persist the current doc, stamping `modified`. Returns true on success. */
+  async saveLab(): Promise<boolean> {
+    this.lab.modified = new Date().toISOString();
+    let ok = false;
+    await this.guarded("save lab", async () => {
+      const res = await this.client.labSaveDoc($state.snapshot(this.lab) as LabDocument);
+      this.savedDocIds.add(res.id ?? this.lab.id);
+      this.lastSavedAt = Date.now();
+      ok = true;
+    });
+    return ok;
+  }
+
+  async listLabs(): Promise<LabDocument[]> {
+    const res = await this.client.labListDocs();
+    // Any doc that came back from disk is, by definition, already saved.
+    for (const l of res.labs) this.savedDocIds.add(l.id);
+    return res.labs;
+  }
+
+  async deleteLab(labId: string) {
+    await this.guarded("delete lab", async () => {
+      await this.client.labDeleteDoc(labId);
+      this.savedDocIds.delete(labId);
+    });
+  }
+
+  /** Open a doc into the workspace (reuses loadLab's connect-time path). Pass
+   *  fromStore=true when the doc came from the durable store (so it's treated as
+   *  already-saved and eligible for autosave); false for New/Import of a doc the
+   *  user hasn't persisted yet. */
+  async openLab(lab: LabDocument, fromStore = false) {
+    await this.guarded("open lab", async () => {
+      if (fromStore) this.savedDocIds.add(lab.id);
+      else this.savedDocIds.delete(lab.id);
+      await this.loadLab(lab);
+    });
+  }
+
+  /** Debounced autosave after topology edits — only for already-saved labs on a
+   *  real supervisor (mock has no durable store worth pinging). */
+  scheduleAutosave() {
+    if (this.transportKind !== "ws") return;
+    if (!this.currentLabSaved) return;
+    if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
+    this.autosaveTimer = setTimeout(() => {
+      this.autosaveTimer = null;
+      void this.saveLab();
+    }, 2000);
+  }
+
+  // ---- live-capture console tabs (feature 1) ----
+
+  openCapture(linkId: number) {
+    const link = this.lab.links.find((l) => l.id === linkId);
+    if (link) {
+      // Mark the link for capture so the next lab start bridges it. If it's not
+      // already enabled and the lab is running natively, traffic won't flow
+      // until restart — the tab surfaces that hint itself.
+      link.capture = { enabled: true, mode: "live" };
+    }
+    if (!this.openCaptureTabs.includes(linkId)) {
+      this.openCaptureTabs = [...this.openCaptureTabs, linkId];
+    }
+    // Ask the supervisor to start teeing this link (idempotent; harmless when
+    // the lab is stopped — it'll bridge on next start).
+    if (this.lab.id) void this.client.captureStart(this.lab.id, linkId).catch(() => {});
+    this.scheduleAutosave();
+  }
+
+  closeCapture(linkId: number) {
+    this.openCaptureTabs = this.openCaptureTabs.filter((id) => id !== linkId);
+    if (this.lab.id) void this.client.captureStop(this.lab.id, linkId).catch(() => {});
   }
 
   async startLab() {
@@ -287,6 +408,7 @@ class LabStore {
   addNode(node: LabNode) {
     this.lab.nodes = [...this.lab.nodes, node];
     this.nodeStates = { ...this.nodeStates, [node.id]: "stopped" };
+    this.scheduleAutosave();
   }
 
   removeNode(nodeId: number) {
@@ -295,15 +417,23 @@ class LabStore {
       (l) => !l.endpoints.some((e) => e.node === nodeId)
     );
     if (this.selectedNodeId === nodeId) this.selectedNodeId = null;
+    this.scheduleAutosave();
   }
 
   addLink(link: LabLink) {
     this.lab.links = [...this.lab.links, link];
+    this.scheduleAutosave();
   }
 
   removeLink(linkId: number) {
     this.lab.links = this.lab.links.filter((l) => l.id !== linkId);
     if (this.selectedLinkId === linkId) this.selectedLinkId = null;
+    this.scheduleAutosave();
+  }
+
+  /** Called after a node-drag settles to persist positions (autosaved). */
+  notifyTopologyChanged() {
+    this.scheduleAutosave();
   }
 
   nextNodeId(): number {
@@ -341,6 +471,41 @@ class LabStore {
 
   get selectedNode(): LabNode | null {
     return this.lab.nodes.find((n) => n.id === this.selectedNodeId) ?? null;
+  }
+
+  // ---- per-node / lab config extraction into the doc (feature 4) ----
+
+  /** Extract NVRAM startup-config for one node into node.startupConfig. Runs on
+   *  the node's SAVED config, so the user must `write memory` first. */
+  async saveNodeConfig(nodeId: number) {
+    await this.guarded(`save config for node ${nodeId}`, async () => {
+      const res = await this.client.configExtract(this.lab.id, [nodeId]);
+      this.applyExtractedConfigs(res.configs);
+    });
+    this.scheduleAutosave();
+  }
+
+  /** Extract startup-configs for every running IOL node into the doc. */
+  async saveAllConfigs() {
+    const targets = this.lab.nodes
+      .filter((n) => n.kind === "iol" && this.nodeStates[n.id] === "running")
+      .map((n) => n.id);
+    if (targets.length === 0) {
+      this.pushLog("warn", "no running IOL nodes to extract config from");
+      return;
+    }
+    await this.guarded("save configs", async () => {
+      const res = await this.client.configExtract(this.lab.id, targets);
+      this.applyExtractedConfigs(res.configs);
+    });
+    this.scheduleAutosave();
+  }
+
+  private applyExtractedConfigs(configs: { node: number; startupConfig: string }[]) {
+    for (const c of configs) {
+      const node = this.lab.nodes.find((n) => n.id === c.node);
+      if (node) node.startupConfig = c.startupConfig;
+    }
   }
 }
 

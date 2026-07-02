@@ -2,12 +2,17 @@
   import { labStore } from "../labStore.svelte";
   import { themeStore } from "../themeStore.svelte";
   import { uiSvg } from "../icons.svelte";
+  import { emptyLab, type LabDocument } from "../labTypes";
 
   const anyRunning = $derived(labStore.labRunning);
   const providerLabel = $derived(
     labStore.activeProvider ? labStore.activeProvider : "—"
   );
   const nodeCount = $derived(labStore.lab.nodes.length);
+
+  // Brief "Saved ✓" confirmation after a manual save.
+  let justSaved = $state(false);
+  let importInput: HTMLInputElement | undefined = $state();
 
   function updateName(e: Event) {
     labStore.lab.name = (e.target as HTMLInputElement).value;
@@ -18,6 +23,57 @@
       await labStore.stopLab();
     } else {
       await labStore.startLab();
+    }
+  }
+
+  // Start a fresh empty lab through the same open/load path (image reconcile +
+  // runtime reset). Guard against discarding unsaved work.
+  async function newLab() {
+    if (labStore.lab.nodes.length > 0 && !labStore.currentLabSaved) {
+      if (!confirm("The current lab hasn't been saved. Discard it and start a new lab?")) return;
+    }
+    await labStore.openLab(emptyLab("Untitled lab"));
+  }
+
+  async function save() {
+    const ok = await labStore.saveLab();
+    if (ok) {
+      justSaved = true;
+      setTimeout(() => (justSaved = false), 1600);
+    }
+  }
+
+  // Export the current doc as a downloadable .json file.
+  function exportJson() {
+    const doc = JSON.stringify($state.snapshot(labStore.lab), null, 2);
+    const blob = new Blob([doc], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(labStore.lab.name || "lab").replace(/[^\w.-]+/g, "_")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function pickImport() {
+    importInput?.click();
+  }
+  async function onImportFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ""; // allow re-importing the same file
+    if (!file) return;
+    try {
+      const doc = JSON.parse(await file.text()) as LabDocument;
+      if (!doc || !Array.isArray(doc.nodes) || !Array.isArray(doc.links)) {
+        throw new Error("not a lab document");
+      }
+      if (labStore.lab.nodes.length > 0 && !labStore.currentLabSaved) {
+        if (!confirm("The current lab hasn't been saved. Discard it and import this file?")) return;
+      }
+      await labStore.openLab(doc);
+    } catch (err) {
+      labStore.lastError = `import failed: ${(err as Error).message}`;
     }
   }
 </script>
@@ -69,6 +125,34 @@
       onclick={() => themeStore.set("glass")}>Glass</button
     >
   </div>
+
+  <button class="btn" onclick={newLab} title="Start a new empty lab">
+    {@html uiSvg("plus", 13)} New
+  </button>
+
+  <button class="btn" onclick={() => (labStore.showLabBrowser = true)}>
+    {@html uiSvg("folder", 13)} Labs
+  </button>
+
+  <button class="btn" class:saved={justSaved} onclick={save} title="Save lab to the store">
+    {@html uiSvg("save", 13)} {justSaved ? "Saved ✓" : "Save"}
+  </button>
+
+  <div class="seg io-seg" role="group" aria-label="Import / export">
+    <button title="Export lab as JSON" aria-label="Export JSON" onclick={exportJson}>
+      {@html uiSvg("download", 13)}
+    </button>
+    <button title="Import lab from JSON" aria-label="Import JSON" onclick={pickImport}>
+      {@html uiSvg("upload", 13)}
+    </button>
+  </div>
+  <input
+    bind:this={importInput}
+    type="file"
+    accept="application/json,.json"
+    style="display:none"
+    onchange={onImportFile}
+  />
 
   <button class="btn" onclick={() => (labStore.showImageManager = true)}>
     {@html uiSvg("images", 13)} Images
@@ -201,6 +285,26 @@
   }
 
   .btn :global(svg) {
+    width: 13px;
+    height: 13px;
+  }
+  .btn.saved {
+    color: var(--state-running);
+    border-color: color-mix(in oklab, var(--state-running) 55%, transparent);
+  }
+  .io-seg {
+    padding: 3px;
+  }
+  .io-seg button {
+    display: grid;
+    place-items: center;
+    padding: 4px 8px;
+    color: var(--ink-3);
+  }
+  .io-seg button:hover {
+    color: var(--ink);
+  }
+  .io-seg :global(svg) {
     width: 13px;
     height: 13px;
   }

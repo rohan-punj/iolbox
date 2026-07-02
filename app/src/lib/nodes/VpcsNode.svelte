@@ -23,8 +23,11 @@
     linking.requestEdit?.(nodeId);
   }
   const label = $derived((data as any).label as string);
+  // NAT/MGMT builtin nodes reuse this component; take the real kind from the
+  // lab doc so their default glyph differs from a plain VPCS.
+  const kind = $derived(labStore.lab.nodes.find((n) => n.id === nodeId)?.kind ?? "vpcs");
   const iconKey = $derived(
-    ((data as any).icon as string | undefined) ?? defaultIconFor("vpcs")
+    ((data as any).icon as string | undefined) ?? defaultIconFor(kind)
   );
   // Artwork icons carry their own plate and render full-bleed, PNetLab-style.
   const artwork = $derived((iconRegistryVersion(), isArtworkIcon(iconKey)));

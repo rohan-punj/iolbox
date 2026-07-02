@@ -62,6 +62,12 @@ export interface LogEvent {
   event: "log";
   data: { level: "debug" | "info" | "warn" | "error"; message: string; node?: number };
 }
+/** Per-link forwarded throughput over the last ~2s. Bridged (relay-backed)
+ *  links only — native IOL↔IOL links never emit this (see docs/protocol.md). */
+export interface LinkStatsEvent {
+  event: "link.stats";
+  data: { link: number; fps: number; bps: number };
+}
 
 export type SupervisorEvent =
   | NodeStateEvent
@@ -70,6 +76,7 @@ export type SupervisorEvent =
   | LinkDownEvent
   | CaptureStartedEvent
   | CaptureStoppedEvent
+  | LinkStatsEvent
   | LogEvent;
 
 // ---- Result shapes per verb ----
@@ -145,4 +152,16 @@ export interface StatusResult {
 export interface LinkAddArgs {
   labId: string;
   link: LabLink;
+}
+
+// ---- Durable lab-document store (lab.saveDoc / listDocs / getDoc / deleteDoc) ----
+// Distinct from the runtime lab.load path: these persist full docs to disk.
+export interface LabSaveDocResult {
+  id: string;
+}
+export interface LabListDocsResult {
+  labs: LabDocument[];
+}
+export interface LabGetDocResult {
+  lab: LabDocument;
 }

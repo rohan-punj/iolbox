@@ -7,7 +7,9 @@ import { labStore } from "./labStore.svelte";
 
 /** All interface ids a node *could* expose given its adapter counts. */
 export function allInterfaces(node: LabNode): string[] {
-  if (node.kind === "vpcs") return ["eth0"];
+  // VPCS + the single-interface builtin nodes (NAT gateway, MGMT bridge) all
+  // expose exactly one "eth0" port.
+  if (node.kind === "vpcs" || node.kind === "nat" || node.kind === "mgmt") return ["eth0"];
   const list: string[] = [];
   const eth = Math.max(node.ethernet ?? 1, 0);
   const ser = Math.max(node.serial ?? 0, 0);
@@ -41,5 +43,5 @@ export function freeInterfaces(node: LabNode): string[] {
 export function nextFreeInterface(node: LabNode): string {
   const free = freeInterfaces(node);
   if (free.length) return free[0];
-  return node.kind === "vpcs" ? "eth0" : "e0/0";
+  return node.kind === "iol" ? "e0/0" : "eth0";
 }

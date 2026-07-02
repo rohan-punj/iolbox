@@ -66,6 +66,7 @@ export class MockTransport implements Transport {
   private captures = new Map<number, number>(); // linkId -> capturePort
   private captureCounter = 5501;
   private consoleBuffers = new Map<number, string[]>();
+  private docs = new Map<string, LabDocument>(); // durable lab-doc store (mock)
 
   async connect(): Promise<void> {
     await delay(150);
@@ -74,6 +75,7 @@ export class MockTransport implements Transport {
 
   disconnect(): void {
     this.connected = false;
+    this.stopLinkStats();
     this.handlers.clear();
   }
 
@@ -125,7 +127,7 @@ export class MockTransport implements Transport {
           supervisor: "0.1.0-mock",
           runtime: "debian-slim-12",
           arch: "x86_64",
-          features: ["nvram", "capture", "i386"],
+          features: ["nvram", "capture", "i386", "natgw", "mgmt"],
         });
         return;
       }
@@ -193,6 +195,10 @@ export class MockTransport implements Transport {
           started.push({ node: nid, consolePort: rt.consolePort, pid: rt.pid, state: rt.state });
         }
         this.ok<LabStartResult>(id, { started });
+        // Dev-only: emit periodic link.stats for bridged links so the traffic
+        // glow (feature 2) is observable without a real relay. Native IOL↔IOL
+        // p2p links get none, matching production semantics.
+        this.startLinkStats();
         return;
       }
 
@@ -200,6 +206,7 @@ export class MockTransport implements Transport {
         const targetIds: number[] | null = args?.nodes ?? null;
         const ids = targetIds ?? [...this.nodes.keys()];
         for (const nid of ids) void this.stopSequence(nid);
+        if (targetIds === null) this.stopLinkStats();
         this.ok(id, {});
         return;
       }
@@ -302,6 +309,34 @@ export class MockTransport implements Transport {
         return;
       }
 
+      case "lab.saveDoc": {
+        const doc = args?.lab as LabDocument;
+        this.docs.set(doc.id, JSON.parse(JSON.stringify(doc)));
+        this.ok(id, { id: doc.id });
+        return;
+      }
+
+      case "lab.listDocs": {
+        this.ok(id, { labs: [...this.docs.values()] });
+        return;
+      }
+
+      case "lab.getDoc": {
+        const doc = this.docs.get(args?.labId as string);
+        if (!doc) {
+          this.err(id, "not_loaded", `lab ${args?.labId} not found`);
+          return;
+        }
+        this.ok(id, { lab: doc });
+        return;
+      }
+
+      case "lab.deleteDoc": {
+        this.docs.delete(args?.labId as string);
+        this.ok(id, {});
+        return;
+      }
+
       case "status": {
         const nodes = [...this.nodes.values()].map((rt) => ({
           id: rt.id,
@@ -320,6 +355,40 @@ export class MockTransport implements Transport {
 
       default:
         this.err(id, "unsupported", `unknown op ${op}`);
+    }
+  }
+
+  private statsTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Dev-only synthetic link.stats for bridged links (any link touching a VPCS
+   *  node, or with capture enabled — mirrors "bridged links only" from the wire
+   *  spec). Native IOL↔IOL p2p links stay silent. */
+  private startLinkStats() {
+    this.stopLinkStats();
+    const isBridged = (l: { endpoints: { node: number }[]; capture?: { enabled?: boolean } }) => {
+      if (l.capture?.enabled) return true;
+      const kinds = l.endpoints.map(
+        (e) => this.lab?.nodes.find((n) => n.id === e.node)?.kind
+      );
+      return kinds.some((k) => k === "vpcs" || k === "nat" || k === "mgmt");
+    };
+    this.statsTimer = setInterval(() => {
+      for (const l of this.lab?.links ?? []) {
+        if (!isBridged(l)) continue;
+        // Random-walk-ish traffic so the glow visibly modulates.
+        const fps = Math.round((5 + Math.random() * 400) * 10) / 10;
+        this.emit({
+          event: "link.stats",
+          data: { link: l.id, fps, bps: Math.round(fps * (64 + Math.random() * 1400)) },
+        } as SupervisorEvent);
+      }
+    }, 2000);
+  }
+
+  private stopLinkStats() {
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = null;
     }
   }
 

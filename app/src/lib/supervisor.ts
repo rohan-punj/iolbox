@@ -5,7 +5,10 @@ import type {
   HelloResult,
   ImageListResult,
   ImageRegisterResult,
+  LabGetDocResult,
+  LabListDocsResult,
   LabLoadResult,
+  LabSaveDocResult,
   LabStartResult,
   LabWipeResult,
   NodeSetImageResult,
@@ -157,6 +160,23 @@ export class SupervisorClient {
 
   configSave(labId: string, nodes: number[] | null = null) {
     return this.call<ConfigResult>("config.save", { labId, nodes });
+  }
+
+  // ---- durable lab-document store ----
+  labSaveDoc(lab: LabDocument) {
+    return this.call<LabSaveDocResult>("lab.saveDoc", { lab });
+  }
+
+  labListDocs() {
+    return this.call<LabListDocsResult>("lab.listDocs", {});
+  }
+
+  labGetDoc(labId: string) {
+    return this.call<LabGetDocResult>("lab.getDoc", { labId });
+  }
+
+  labDeleteDoc(labId: string) {
+    return this.call<Record<string, never>>("lab.deleteDoc", { labId });
   }
 
   configExtract(labId: string, nodes: number[] | null = null) {

@@ -16,6 +16,7 @@
     type EdgeProps,
   } from "@xyflow/svelte";
   import { getEdgeParams } from "./floating";
+  import { labStore } from "../labStore.svelte";
 
   let { id, source, target, selected, data }: EdgeProps = $props();
 
@@ -31,6 +32,7 @@
   type EndpointInfo = { name: string; iface: string; telnet?: number };
   const info = $derived(
     (data as {
+      linkId?: number;
       source?: EndpointInfo;
       target?: EndpointInfo;
       capture?: boolean;
@@ -38,6 +40,28 @@
       parallelCount?: number;
     } | undefined) ?? {}
   );
+
+  // Feature 2 — traffic-driven glow. Read this link's most recent throughput
+  // sample; treat it as live only when it arrived within STALE_MS (link.stats
+  // fires at most every 2s and only for links that forwarded traffic, so idle
+  // links naturally decay to no-glow once the clock ticks past the window).
+  const STALE_MS = 5000;
+  const traffic = $derived.by(() => {
+    const linkId = info.linkId;
+    if (linkId === undefined) return null;
+    const s = labStore.linkStats[linkId];
+    if (!s) return null;
+    const age = labStore.nowTick - s.ts;
+    if (age > STALE_MS) return null;
+    return s;
+  });
+  const glowing = $derived(traffic !== null);
+  // Intensity 0..1 scaled by log(fps), clamped. ~1 fps → dim, ~1000 fps → full.
+  const glowIntensity = $derived.by(() => {
+    if (!traffic) return 0;
+    const v = Math.log10(Math.max(traffic.fps, 1)) / 3; // log10(1000)=3
+    return Math.min(1, Math.max(0.15, v));
+  });
 
   // R2.3 — hovering either chip glows the whole cable (same as hovering the
   // edge). `hot` mirrors the edge path's hover state to the chips and vice-versa.
@@ -101,12 +125,22 @@
 </script>
 
 {#if geom}
+  {#if glowing}
+    <!-- Traffic glow: a wide, soft accent underlay beneath the cable. Opacity +
+         width scale with log(fps) so a busy link reads hotter. -->
+    <path
+      class="traffic-glow"
+      d={geom.path}
+      style={`stroke-width:${6 + glowIntensity * 10}px;opacity:${0.18 + glowIntensity * 0.4}`}
+    />
+  {/if}
   <BaseEdge
     {id}
     path={geom.path}
     class={"floating-edge" +
       (selected ? " is-selected" : "") +
       (info.capture ? " is-capture" : "") +
+      (glowing ? " is-traffic" : "") +
       (hot ? " is-hot" : "")}
   />
 
@@ -120,7 +154,7 @@
         onpointerleave={() => (hot = false)}
         role="presentation"
       >
-        <span class="chip-detail">{info.source.name} </span>{info.source.iface}
+        <span class="chip-detail">{info.source.name}</span><span class="chip-sep">&nbsp;</span>{info.source.iface}{#if glowing && traffic}<span class="chip-fps"> · {traffic.fps.toFixed(1)} fps</span>{/if}
       </span>
     </EdgeLabel>
   {/if}
@@ -135,7 +169,7 @@
         onpointerleave={() => (hot = false)}
         role="presentation"
       >
-        <span class="chip-detail">{info.target.name} </span>{info.target.iface}
+        <span class="chip-detail">{info.target.name}</span><span class="chip-sep">&nbsp;</span>{info.target.iface}
       </span>
     </EdgeLabel>
   {/if}
@@ -157,6 +191,25 @@
     stroke: var(--state-starting);
     stroke-width: 2.5;
     filter: drop-shadow(0 0 5px color-mix(in oklab, var(--state-starting) 60%, transparent));
+  }
+
+  /* Feature 2 — traffic glow underlay. A soft, wide accent halo drawn beneath
+     the cable; width/opacity are set inline from log(fps). Non-interactive so
+     it never steals the cable's hover. */
+  .traffic-glow {
+    fill: none;
+    stroke: var(--accent);
+    stroke-linecap: round;
+    pointer-events: none;
+    filter: blur(2px);
+    transition: opacity 400ms ease, stroke-width 400ms ease;
+  }
+  :global(.svelte-flow__edge .floating-edge.is-traffic) {
+    stroke: color-mix(in oklab, var(--accent) 80%, var(--cable));
+  }
+  .chip-fps {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
   }
 
   /* R2.3 — link hover glow. `is-hot` is set when the edge OR either chip is
@@ -217,7 +270,8 @@
     transition: transform 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2), color 140ms ease,
       background 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
   }
-  .chip-detail {
+  .chip-detail,
+  .chip-sep {
     display: none;
     color: var(--ink-2);
   }
@@ -230,7 +284,8 @@
     position: relative;
     z-index: 20;
   }
-  .port-chip:hover .chip-detail {
+  .port-chip:hover .chip-detail,
+  .port-chip:hover .chip-sep {
     display: inline;
   }
   /* When the edge (or its sibling chip) is hovered, signal both chips. */

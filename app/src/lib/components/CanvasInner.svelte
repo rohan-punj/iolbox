@@ -29,7 +29,9 @@
   import { nextFreeInterface } from "../interfaces";
   import type { LabNode } from "../labTypes";
 
-  const nodeTypes: NodeTypes = { iol: IolNode, vpcs: VpcsNode };
+  // NAT gateway + MGMT bridge reuse the VPCS single-interface node chrome; the
+  // distinct glyph comes from their default icon (defaultIconFor).
+  const nodeTypes: NodeTypes = { iol: IolNode, vpcs: VpcsNode, nat: VpcsNode, mgmt: VpcsNode };
   const edgeTypes: EdgeTypes = { floating: FloatingEdge };
 
   // Fixed node box. Provided explicitly (width/height + a handle on every side)
@@ -164,6 +166,7 @@
         ln.y = fn.position.y;
       }
     }
+    labStore.notifyTopologyChanged();
   }
 
   function onConnect(connection: Connection) {
@@ -194,8 +197,27 @@
 
   // --- drag from palette to create nodes ---
   let canvasEl: HTMLDivElement | undefined = $state();
-  const { screenToFlowPosition, flowToScreenPosition, fitView, zoomIn, zoomOut, setViewport } =
+  const { screenToFlowPosition, flowToScreenPosition, fitView, getViewport, setViewport } =
     useSvelteFlow();
+
+  // Zoom around the canvas centre. The built-in zoomIn/zoomOut helpers proved
+  // unreliable here (they drive a d3 transition on the pane that no-ops in this
+  // embed), so we compute the new viewport directly and animate via setViewport
+  // — the same path fit/reset use, which is known-good. Scaling about the
+  // viewport centre keeps the focal point stable.
+  const ZOOM_STEP = 1.2;
+  function zoomBy(factor: number) {
+    const vp = getViewport();
+    const rect = canvasEl?.getBoundingClientRect();
+    const cx = (rect?.width ?? 0) / 2;
+    const cy = (rect?.height ?? 0) / 2;
+    const nextZoom = Math.min(2.5, Math.max(0.15, vp.zoom * factor));
+    // Keep the flow-point under the centre pinned: x' = cx - (cx - x)*(z'/z).
+    const k = nextZoom / vp.zoom;
+    const x = cx - (cx - vp.x) * k;
+    const y = cy - (cy - vp.y) * k;
+    void setViewport({ x, y, zoom: nextZoom }, { duration: 150 });
+  }
 
   // --- R2.1: PNetLab-style link-add (connector → rubber-band → drop → picker) ---
   // The rubber-band is drawn in the canvas-wrap's LOCAL screen coordinates. The
@@ -294,32 +316,49 @@
     e.preventDefault();
     const raw = e.dataTransfer?.getData("application/iolab-node");
     if (!raw) return;
-    const { kind, imageId } = JSON.parse(raw) as { kind: "iol" | "vpcs"; imageId?: string };
+    const { kind, imageId } = JSON.parse(raw) as {
+      kind: "iol" | "vpcs" | "nat" | "mgmt";
+      imageId?: string;
+    };
     const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     const id = labStore.nextNodeId();
     const img = labStore.images.find((i) => i.id === imageId);
-    const node: LabNode =
-      kind === "iol"
-        ? {
-            id,
-            kind,
-            name: `R${id}`,
-            x: pos.x,
-            y: pos.y,
-            ram: 1024,
-            ethernet: 1,
-            serial: 1,
-            image: img ? { id: img.id, filename: img.filename, class: img.class } : undefined,
-          }
-        : {
-            id,
-            kind,
-            name: `PC${id}`,
-            x: pos.x,
-            y: pos.y,
-          };
+    const node: LabNode = buildDroppedNode(kind, id, pos, img);
     labStore.addNode(node);
     labStore.selectedNodeId = id;
+  }
+
+  // Count existing nodes of a kind, for stable NAT1/MGMT1 naming.
+  function nameForKind(kind: "nat" | "mgmt"): string {
+    const prefix = kind === "nat" ? "NAT" : "MGMT";
+    const n = labStore.lab.nodes.filter((x) => x.kind === kind).length + 1;
+    return `${prefix}${n}`;
+  }
+
+  function buildDroppedNode(
+    kind: "iol" | "vpcs" | "nat" | "mgmt",
+    id: number,
+    pos: { x: number; y: number },
+    img?: (typeof labStore.images)[number]
+  ): LabNode {
+    if (kind === "iol") {
+      return {
+        id,
+        kind,
+        name: `R${id}`,
+        x: pos.x,
+        y: pos.y,
+        ram: 1024,
+        ethernet: 1,
+        serial: 1,
+        image: img ? { id: img.id, filename: img.filename, class: img.class } : undefined,
+      };
+    }
+    if (kind === "nat" || kind === "mgmt") {
+      // Single-interface builtin nodes (eth0), doc shape mirrors a VPCS node.
+      return { id, kind, name: nameForKind(kind), x: pos.x, y: pos.y };
+    }
+    return { id, kind: "vpcs", name: `PC${id}`, x: pos.x, y: pos.y };
   }
 
   // --- context menus / popovers ---
@@ -412,6 +451,10 @@
     const capturing = link?.capture?.enabled ?? false;
     return [
       {
+        label: "Live capture…",
+        action: () => labStore.openCapture(menu.linkId),
+      },
+      {
         label: capturing ? "Stop capture" : "Capture in Wireshark",
         action: () => {
           const l = labStore.lab.links.find((x) => x.id === menu.linkId);
@@ -470,8 +513,8 @@
 
   <!-- D5: bench view controls -->
   <div class="view-controls">
-    <button class="vc" title="Zoom in" onclick={() => void zoomIn({ duration: 150 })} aria-label="Zoom in">+</button>
-    <button class="vc" title="Zoom out" onclick={() => void zoomOut({ duration: 150 })} aria-label="Zoom out">−</button>
+    <button class="vc" title="Zoom in" onclick={() => zoomBy(ZOOM_STEP)} aria-label="Zoom in">+</button>
+    <button class="vc" title="Zoom out" onclick={() => zoomBy(1 / ZOOM_STEP)} aria-label="Zoom out">−</button>
     <button class="vc" title="Fit to content" onclick={fitContent} aria-label="Fit to content">{@html uiSvg("fit", 15)}</button>
     <button class="vc" title="Reset view" onclick={resetView} aria-label="Reset view">{@html uiSvg("reset", 15)}</button>
   </div>

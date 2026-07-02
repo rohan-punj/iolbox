@@ -14,6 +14,8 @@
     onClose,
   }: { x: number; y: number; items: MenuItem[]; onClose: () => void } = $props();
 
+  import { onMount } from "svelte";
+
   let menuEl: HTMLDivElement | undefined = $state();
 
   function handleClick(item: MenuItem) {
@@ -22,16 +24,40 @@
     onClose();
   }
 
-  function handleWindowClick(e: MouseEvent) {
+  // Dismiss on any pointerdown outside the menu. Uses a CAPTURE-phase document
+  // listener rather than <svelte:window onmousedown> because Svelte Flow calls
+  // stopPropagation() on pointer events inside the pane, which would otherwise
+  // swallow the dismiss when the user clicks back onto the canvas. Also dismiss
+  // when the canvas starts panning/zooming (wheel / pane drag) so the menu never
+  // floats detached from the node it belongs to.
+  function handlePointerDown(e: PointerEvent) {
     if (menuEl && !menuEl.contains(e.target as Node)) onClose();
   }
-
+  function handleWheel() {
+    onClose();
+  }
   function handleKey(e: KeyboardEvent) {
     if (e.key === "Escape") onClose();
   }
+
+  onMount(() => {
+    // Defer attaching until after the current event loop tick so the very
+    // right-click/contextmenu event that opened this menu doesn't immediately
+    // close it.
+    const attach = () => {
+      document.addEventListener("pointerdown", handlePointerDown, true);
+      document.addEventListener("wheel", handleWheel, true);
+    };
+    const t = setTimeout(attach, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("wheel", handleWheel, true);
+    };
+  });
 </script>
 
-<svelte:window onmousedown={handleWindowClick} onkeydown={handleKey} />
+<svelte:window onkeydown={handleKey} />
 
 <div class="menu" bind:this={menuEl} style:left={`${x}px`} style:top={`${y}px`} role="menu">
   {#each items as item (item.label)}

@@ -2,8 +2,39 @@
   import { labStore } from "../labStore.svelte";
   import { consoleUiStore } from "../consoleUiStore.svelte";
   import ConsoleTerm from "./ConsoleTerm.svelte";
+  import CaptureTerm from "./CaptureTerm.svelte";
 
   let collapsed = $state(false);
+  // The dock's active tab is either a node console (activeConsoleTab) or a
+  // capture view. We track a capture selection separately and prefer whichever
+  // was most recently activated.
+  let activeCapture = $state<number | null>(null);
+
+  // Live-capture tab title: "R1 e0/0 ⇄ e0/0 SW1" from the link's endpoints.
+  function captureTitle(linkId: number): string {
+    const link = labStore.lab.links.find((l) => l.id === linkId);
+    if (!link) return `capture #${linkId}`;
+    const [a, b] = link.endpoints;
+    const an = labStore.lab.nodes.find((n) => n.id === a?.node)?.name ?? `#${a?.node}`;
+    const bn = labStore.lab.nodes.find((n) => n.id === b?.node)?.name ?? `#${b?.node}`;
+    return `${an} ${a?.interface ?? ""} ⇄ ${b?.interface ?? ""} ${bn}`;
+  }
+
+  function selectCapture(linkId: number) {
+    activeCapture = linkId;
+    labStore.activeConsoleTab = null;
+  }
+  function selectConsole(nodeId: number) {
+    labStore.activeConsoleTab = nodeId;
+    activeCapture = null;
+  }
+  function closeCapture(linkId: number) {
+    labStore.closeCapture(linkId);
+    if (activeCapture === linkId) {
+      activeCapture = labStore.openCaptureTabs[0] ?? null;
+      if (activeCapture === null) labStore.activeConsoleTab = labStore.openConsoleTabs[0] ?? null;
+    }
+  }
 
   // Inline icon glyphs (kept local per turf rules — no shared icons.svelte.ts).
   const DOCK_BOTTOM =
@@ -14,6 +45,9 @@
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 9.5 9 3.5l3.5 3.5-6 6H3z"/><path d="M2 14.5h6" stroke-linecap="round"/></svg>';
   const TELNET =
     '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M4 5.5l2 1.5-2 1.5M7.5 9h4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // Small "waveform" glyph marking a live-capture tab.
+  const CAPTURE =
+    '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h2l1.5-4 2 8 2-6 1.5 4h2"/></svg>';
 
   function nodeName(id: number): string {
     return labStore.lab.nodes.find((n) => n.id === id)?.name ?? `#${id}`;
@@ -74,8 +108,8 @@
     <button class="collapse-btn" onclick={() => (collapsed = !collapsed)} aria-expanded={!collapsed}>
       <span class="chevron" class:flipped={collapsed}>▾</span>
       Consoles
-      {#if labStore.openConsoleTabs.length > 0}
-        <span class="count">{labStore.openConsoleTabs.length}</span>
+      {#if labStore.openConsoleTabs.length + labStore.openCaptureTabs.length > 0}
+        <span class="count">{labStore.openConsoleTabs.length + labStore.openCaptureTabs.length}</span>
       {/if}
     </button>
 
@@ -87,7 +121,7 @@
               class="tab-label"
               role="tab"
               aria-selected={labStore.activeConsoleTab === nodeId}
-              onclick={() => (labStore.activeConsoleTab = nodeId)}
+              onclick={() => selectConsole(nodeId)}
             >
               {nodeName(nodeId)}
             </button>
@@ -100,6 +134,23 @@
               {@html TELNET}
             </button>
             <button class="tab-close" title="Close" onclick={() => labStore.closeConsole(nodeId)}>
+              ✕
+            </button>
+          </div>
+        {/each}
+        {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
+          <div class="tab tab-capture" class:active={activeCapture === linkId}>
+            <button
+              class="tab-label"
+              role="tab"
+              aria-selected={activeCapture === linkId}
+              title={captureTitle(linkId)}
+              onclick={() => selectCapture(linkId)}
+            >
+              {@html CAPTURE}
+              {captureTitle(linkId)}
+            </button>
+            <button class="tab-close" title="Close capture" onclick={() => closeCapture(linkId)}>
               ✕
             </button>
           </div>
@@ -143,6 +194,11 @@
       {#each labStore.openConsoleTabs as nodeId (nodeId)}
         <div class="term-slot" class:hidden={labStore.activeConsoleTab !== nodeId}>
           <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
+        </div>
+      {/each}
+      {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
+        <div class="term-slot" class:hidden={activeCapture !== linkId}>
+          <CaptureTerm {linkId} active={activeCapture === linkId} />
         </div>
       {/each}
     </div>
@@ -231,6 +287,19 @@
     color: var(--text-secondary);
     cursor: pointer;
     padding: 2px 4px;
+  }
+  .tab-capture .tab-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+  }
+  .tab-capture.active {
+    border-bottom-color: var(--state-starting);
+  }
+  .tab-capture :global(svg) {
+    color: var(--state-starting);
+    flex-shrink: 0;
   }
   .tab.active .tab-label {
     color: var(--text-primary);

@@ -16,6 +16,10 @@
 
   const isRunning = $derived(state === "running");
   const isBusy = $derived(state === "running" || state === "starting");
+  // "Save config" (NVRAM extract) only applies to running IOL nodes.
+  const isIol = $derived(
+    labStore.lab.nodes.find((n) => n.id === nodeId)?.kind === "iol"
+  );
 
   function start() {
     void labStore.startNode(nodeId);
@@ -25,6 +29,9 @@
   }
   function console_() {
     labStore.openConsole(nodeId);
+  }
+  function saveConfig() {
+    void labStore.saveNodeConfig(nodeId);
   }
   function wipe() {
     const node = labStore.lab.nodes.find((n) => n.id === nodeId);
@@ -45,6 +52,15 @@
   {#if isRunning}
     <button class="na-btn" title="Console" aria-label="Console" onpointerdown={(e) => e.stopPropagation()} onclick={console_}
       >{@html uiSvg("console", 12)}</button>
+  {/if}
+  {#if isRunning && isIol}
+    <button
+      class="na-btn"
+      title="Save config — extracts the node's saved NVRAM startup-config into the lab. Do write memory on the node first."
+      aria-label="Save config"
+      onpointerdown={(e) => e.stopPropagation()}
+      onclick={saveConfig}
+    >{@html uiSvg("savecfg", 12)}</button>
   {/if}
   {#if !isBusy}
     <button class="na-btn na-danger" title="Wipe" aria-label="Wipe" onpointerdown={(e) => e.stopPropagation()} onclick={wipe}
