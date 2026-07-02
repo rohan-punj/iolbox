@@ -6,18 +6,6 @@ import (
 	"testing"
 )
 
-func TestStripIOLHeader(t *testing.T) {
-	frame := []byte{0xAA, 0xBB, 0xCC}
-	datagram := append(make([]byte, IOLHeaderSize), frame...)
-	got := StripIOLHeader(datagram)
-	if !bytes.Equal(got, frame) {
-		t.Fatalf("strip: %v", got)
-	}
-	if StripIOLHeader([]byte{1, 2, 3}) != nil {
-		t.Fatal("short datagram should return nil")
-	}
-}
-
 func TestPcapngStructure(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewPcapngWriter(&buf)

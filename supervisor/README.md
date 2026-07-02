@@ -124,8 +124,8 @@ each other. `prepareLabDir` writes all three artifacts before any node spawns
 The NETMAP line format is IOL's **`<nodeid>:<adapter>/<port>`** token, e.g.
 `1:0/0 2:0/0` — the exact form the P0 test used to bring two real IOL
 `Ethernet0/0` line protocols up. (`netmap.Iface.Index()`, the flat
-`adapter*16+port`, is retained for the UDP/iouyap bridge path but is **not** what
-the NETMAP file uses.)
+`adapter*16+port`, is **not** what the NETMAP file uses — and note the netio
+header's port byte is the reverse nibble order, `iouyap.EncodePortByte`.)
 
 ### Native vs. bridged links (`internal/server/links.go`)
 
@@ -344,11 +344,13 @@ Every item below is implemented from the community-standard behaviour (GNS3 /
 iouyap) and pinned to a **named constant or function** so P0 can correct it in
 exactly one place. None of it embeds Cisco code.
 
-1. **IOL UDP header size = 8 bytes** — `relay.IOLHeaderSize`.
-   The iouyap header is `dst_ids[2] src_ids[2] dst_port[1] src_port[1]
-   msg_type[1] channel[1]`. The capture tee strips these 8 bytes so the pcapng
-   contains clean Ethernet frames. **Verify** the real on-wire header length and
-   that the Ethernet frame begins immediately after it.
+1. **IOL netio header = 8 bytes** — `iouyap.HeaderSize`. ✅ CONFIRMED on real
+   IOL 17.18.02 (docs/p0-spike.md "netio header layout"): big-endian
+   `dst_id[2] src_id[2] dst_port[1] src_port[1] msg_type[1] channel[1]`, port
+   byte packed `port<<4|adapter`, data msg_type `1`. The header exists only on
+   the netio unix-socket side: `internal/iouyap` strips it toward UDP and
+   constructs a correctly-addressed one toward IOL, so the UDP mesh (relay,
+   VPCS, pcapng tee) carries raw Ethernet frames.
 
 2. **IOU keygen algorithm** — `iourc.Key`.
    `key = int(hostid,16) + sum(ord(c) for hostname)`, then

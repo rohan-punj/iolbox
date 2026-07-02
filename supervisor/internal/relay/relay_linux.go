@@ -79,11 +79,11 @@ func (r *udpRelay) pump(src int) {
 		}
 		datagram := buf[:n]
 
-		// Tee the clean ethernet frame for capture.
-		if r.tee != nil {
-			if frame := StripIOLHeader(datagram); frame != nil {
-				r.tee.Broadcast(frame)
-			}
+		// Tee for capture: the datagram already IS the clean ethernet frame
+		// (the mesh is headerless; iouyap strips IOL's netio header at the
+		// unix-socket edge).
+		if r.tee != nil && len(datagram) > 0 {
+			r.tee.Broadcast(datagram)
 		}
 
 		// Forward per relay kind.

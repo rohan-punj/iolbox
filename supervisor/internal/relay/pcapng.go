@@ -1,9 +1,15 @@
 // Package relay is the UDP data plane: p2p forwards, segment hubs, and an
 // optional capture tee that serves a pcapng byte stream for Wireshark.
 //
-// This file implements the platform-independent pieces: a minimal pcapng writer
-// and the IOL UDP header stripper. Both are unit-tested on any OS. The actual
-// UDP socket wiring lives in the //go:build linux files.
+// Every UDP datagram on the relay mesh is one raw ethernet frame, headerless:
+// VPCS speaks that natively, and the iouyap bridge strips/constructs IOL's
+// 8-byte netio header at the unix-socket edge (internal/iouyap, confirmed
+// layout in docs/p0-spike.md "netio header layout"), so nothing here parses
+// any framing.
+//
+// This file implements the platform-independent piece: a minimal pcapng
+// writer, unit-tested on any OS. The actual UDP socket wiring lives in the
+// //go:build linux files.
 package relay
 
 import (
@@ -13,24 +19,6 @@ import (
 
 // LinkTypeEthernet is the pcapng LINKTYPE for Ethernet frames.
 const LinkTypeEthernet = 1
-
-// IOLHeaderSize is the number of bytes the IOL/iouyap UDP framing prepends
-// before the ethernet frame. Per the iouyap header (dst_ids[2], src_ids[2],
-// dst_port[1], src_port[1], msg_type[1], channel[1]) this is 8 bytes.
-//
-// ASSUMPTION (verify in P0 against a real IOL image): that IOL prepends exactly
-// this 8-byte header on the wire and that the ethernet frame begins immediately
-// after it. This is a named constant precisely so P0 can adjust it in one place.
-const IOLHeaderSize = 8
-
-// StripIOLHeader removes the IOL UDP header from a datagram, returning the clean
-// ethernet frame. If the datagram is shorter than the header it returns nil.
-func StripIOLHeader(datagram []byte) []byte {
-	if len(datagram) < IOLHeaderSize {
-		return nil
-	}
-	return datagram[IOLHeaderSize:]
-}
 
 // PcapngWriter writes a pcapng stream: a Section Header Block, one Interface
 // Description Block (LINKTYPE_ETHERNET), then an Enhanced Packet Block per

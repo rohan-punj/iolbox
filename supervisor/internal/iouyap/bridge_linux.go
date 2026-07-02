@@ -154,7 +154,7 @@ func (b *Bridge) pumpNetioToUDP(ctx context.Context, errs chan<- error) {
 		_, err := b.udpConn.WriteToUDP(datagram, b.udpRaddr)
 		return err
 	}
-	runPump(ctx, read, write, b.cfg.StripHeader, errs)
+	runPump(ctx, read, write, stripToUDP, errs)
 }
 
 // pumpUDPToNetio reads datagrams the relay forwards over UDP and delivers
@@ -195,7 +195,7 @@ func (b *Bridge) pumpUDPToNetio(ctx context.Context, errs chan<- error) {
 		_, err := b.unixConn.WriteToUnix(datagram, peer)
 		return err
 	}
-	runPump(ctx, read, write, b.cfg.StripHeader, errs)
+	runPump(ctx, read, write, b.cfg.wrapToNetio, errs)
 }
 
 // Close shuts down both sockets and removes the netio socket file. It is

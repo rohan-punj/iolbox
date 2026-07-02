@@ -12,32 +12,32 @@ package iouyap
 
 import "encoding/binary"
 
-// HeaderSize is the number of bytes the netio/iouyap framing prepends before
-// the raw ethernet frame on every datagram, in both directions (IOL->iouyap
-// and iouyap->IOL). It matches relay.IOLHeaderSize exactly: both packages
-// frame the SAME datagram, just on opposite sides of the netio<->UDP hop, so
-// the header must round-trip unchanged in size. This package does not import
-// internal/relay (to avoid a dependency between sibling internal packages);
-// keep this constant in sync with relay.IOLHeaderSize if either changes.
+// HeaderSize is the number of bytes the netio framing prepends before the raw
+// ethernet frame on every unix-domain datagram IOL sends or receives. The
+// header exists ONLY on the netio (unix socket) side: this bridge strips it
+// when forwarding to UDP and constructs a fresh one when delivering from UDP,
+// so the UDP mesh (relay, VPCS, capture tee, cross-host tunnels) carries raw
+// ethernet frames with no header at all.
 //
-// ASSUMPTION (P0-VERIFY): the classic iouyap/IOU netio header is 8 bytes,
-// big-endian, laid out as:
+// CONFIRMED against real IOL 17.18.02 wire bytes (docs/p0-spike.md "netio
+// header layout", 2026-07-02): an instance-1 Ethernet0/1 interface wired to
+// pseudo-instance 501 emits datagrams beginning
 //
-//	offset 0: dst_ids  uint16  destination "bridge" id (peer's netio channel id)
-//	offset 2: src_ids  uint16  source "bridge" id (this side's netio channel id)
-//	offset 4: dst_port uint8   destination port index within the peer's node
-//	offset 5: src_port uint8   source port index within this node
-//	offset 6: msg_type uint8   0 = data frame, other values reserved (keepalive/ctl)
-//	offset 7: unused   uint8   padding/channel byte, historically unused by iouyap
+//	01 f5 00 01 00 10 01 00
 //
-// This is the field layout the original iouyap.c / dynamips netio_filter code
-// uses; we adopt it here because it is the only documented framing that real
-// IOL images are known to speak. It has NOT yet been confirmed against actual
-// wire captures of an IOL process talking to a unix netio socket (P0 step 7
-// exercises the UDP relay's pcapng tee, not this bridge directly). Confirm by
-// capturing the unix-domain datagrams IOL sends to iouyap's socket and diffing
-// against this layout; adjust the field offsets/constants here (and the
-// mirrored relay.IOLHeaderSize) if real IOL differs.
+// which decodes, big-endian, as:
+//
+//	offset 0: dst_id   uint16  destination instance id (0x01f5 = 501)
+//	offset 2: src_id   uint16  source instance id (0x0001 = 1)
+//	offset 4: dst_port uint8   destination interface, port*16+adapter (0/0 = 0x00)
+//	offset 5: src_port uint8   source interface, port*16+adapter (Et0/1 = 0x10)
+//	offset 6: msg_type uint8   1 = data frame (every observed frame)
+//	offset 7: channel  uint8   0 on every observed frame
+//
+// Note two corrections vs the classic iouyap.c assumption this package
+// originally carried: the port byte nibble order is port<<4|adapter (Et0/1 ->
+// 0x10, Et1/0 -> 0x01, verified with both), and data frames carry msg_type 1,
+// not 0.
 const HeaderSize = 8
 
 // Byte offsets within the 8-byte netio header.
@@ -50,13 +50,22 @@ const (
 	offUnused  = 7 // uint8
 )
 
-// MsgType values for offMsgType. Only msgTypeData is currently produced or
-// expected; other values are reserved per the ASSUMPTION above and are
-// preserved (not interpreted) when relaying.
+// MsgType values for offMsgType. Real IOL marks every data frame with 1
+// (confirmed on the wire, see HeaderSize); other values were never observed
+// and are preserved (not interpreted) when relaying.
 const (
 	// MsgTypeData marks an ordinary ethernet-frame payload.
-	MsgTypeData uint8 = 0
+	MsgTypeData uint8 = 1
 )
+
+// EncodePortByte packs an interface's adapter/port coordinates into the
+// single netio header port byte. Confirmed nibble order on real IOL 17.18.02:
+// port in the high nibble, adapter in the low nibble (Ethernet0/1 -> 0x10,
+// Ethernet1/0 -> 0x01). This is the REVERSE of netmap.Iface.Index()'s flat
+// adapter*16+port index; the two encodings must not be conflated.
+func EncodePortByte(adapter, port int) uint8 {
+	return uint8(port<<4 | adapter&0x0f)
+}
 
 // Header is the parsed form of the 8-byte netio/iouyap framing prefix. See
 // the ASSUMPTION comment on HeaderSize for what each field means and its

@@ -86,13 +86,19 @@ type bridgedEndpoint struct {
 
 // iouyapConfig mirrors iouyap.Config without importing internal/iouyap into the
 // pure plan (iouyap is imported only in bridgeplan_linux.go where the bridge is
-// actually created). Field meanings match iouyap.Config exactly.
+// actually created). Field meanings match iouyap.Config exactly: the bridge
+// constructs the netio header for delivered frames from LocalInstance /
+// LocalAdapter / LocalPort / PseudoInstance (the UDP mesh itself carries raw
+// ethernet frames, headerless).
 type iouyapConfig struct {
-	NetioPath   string
-	UDPLocal    int
-	UDPRemote   int
-	Host        string
-	StripHeader bool
+	NetioPath      string
+	UDPLocal       int
+	UDPRemote      int
+	Host           string
+	LocalInstance  int
+	LocalAdapter   int
+	LocalPort      int
+	PseudoInstance int
 }
 
 // netioDir returns the per-uid netio socket directory IOL uses, /tmp/netio<uid>.
@@ -202,19 +208,29 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 				relayEP:  relayEP,
 			}
 			if be.isIOL {
+				iface, perr := netmap.ParseIface(ep.Interface)
+				if perr != nil {
+					return nil, fmt.Errorf("link %d node %d: %w", l.ID, ep.Node, perr)
+				}
 				be.pseudo = pseudos[pi]
 				pi++
 				be.netioPath = netioPathFor(uid, be.pseudo)
 				// iouyap sends IOL's outbound frames to the relay's receiving
 				// port (relayEP.LocalPort) and binds the relay's delivery port
 				// (relayEP.RemotePort) so the relay's forward direction lands on
-				// this bridge, which writes into IOL's netio socket.
+				// this bridge, which writes into IOL's netio socket. Frames it
+				// delivers get a netio header addressed to the REAL instance +
+				// interface, sourced from the pseudo-instance the IOL's NETMAP
+				// names as this interface's peer.
 				be.iouyap = iouyapConfig{
-					NetioPath:   be.netioPath,
-					UDPLocal:    relayEP.RemotePort,
-					UDPRemote:   relayEP.LocalPort,
-					Host:        "127.0.0.1",
-					StripHeader: true,
+					NetioPath:      be.netioPath,
+					UDPLocal:       relayEP.RemotePort,
+					UDPRemote:      relayEP.LocalPort,
+					Host:           "127.0.0.1",
+					LocalInstance:  netmap.InstanceID(ep.Node),
+					LocalAdapter:   iface.Adapter,
+					LocalPort:      iface.Port,
+					PseudoInstance: be.pseudo,
 				}
 			} else {
 				// VPCS endpoint: speaks UDP natively into the relay. Its send

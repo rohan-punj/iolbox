@@ -42,35 +42,60 @@ func (f *fakeChan) writeFunc() func([]byte) error {
 	}
 }
 
-func TestTransformPassesValidDatagram(t *testing.T) {
-	datagram := WithPayload(Header{DstID: 1, SrcID: 2}, []byte("hello"))
-	out, ok := transform(datagram, true)
+func TestStripToUDPStripsHeader(t *testing.T) {
+	frame := []byte("hello")
+	datagram := WithPayload(Header{DstID: 501, SrcID: 1, MsgType: MsgTypeData}, frame)
+	out, ok := stripToUDP(datagram)
 	if !ok {
-		t.Fatal("transform reported not-ok for a valid framed datagram")
+		t.Fatal("stripToUDP reported not-ok for a valid framed datagram")
 	}
-	if !bytes.Equal(out, datagram) {
-		t.Fatalf("transform mutated a datagram it should pass through: got % x, want % x", out, datagram)
-	}
-}
-
-func TestTransformDropsShortDatagramWhenHeaderExpected(t *testing.T) {
-	short := make([]byte, HeaderSize-1)
-	_, ok := transform(short, true)
-	if ok {
-		t.Fatal("transform accepted a too-short datagram when StripHeader=true")
+	if !bytes.Equal(out, frame) {
+		t.Fatalf("stripToUDP = % x, want the raw frame % x", out, frame)
 	}
 }
 
-func TestTransformPassthroughWhenHeaderNotExpected(t *testing.T) {
-	// StripHeader=false: no header interpretation at all, so even a
-	// zero-length datagram passes through untouched.
-	for _, in := range [][]byte{nil, {}, {0x01}, make([]byte, HeaderSize-1)} {
-		out, ok := transform(in, false)
-		if !ok {
-			t.Fatalf("transform(%v, false) reported not-ok, want pass-through", in)
+func TestStripToUDPDropsShortDatagram(t *testing.T) {
+	for n := 0; n < HeaderSize; n++ {
+		if _, ok := stripToUDP(make([]byte, n)); ok {
+			t.Fatalf("stripToUDP accepted a %d-byte datagram, want drop", n)
 		}
-		if !bytes.Equal(out, in) {
-			t.Fatalf("transform(%v, false) = %v, want unchanged", in, out)
+	}
+}
+
+func TestWrapToNetioAddressesLocalInstance(t *testing.T) {
+	// A bridge serving instance 2's Ethernet1/0, bound as pseudo 502: every
+	// delivered frame must be addressed dst=(2, 1/0) src=(502, 0/0), the
+	// exact header real IOL accepts (docs/p0-spike.md "netio header layout").
+	cfg := Config{LocalInstance: 2, LocalAdapter: 1, LocalPort: 0, PseudoInstance: 502}
+	frame := []byte{0xAA, 0xBB, 0xCC, 0xDD}
+	out, ok := cfg.wrapToNetio(frame)
+	if !ok {
+		t.Fatal("wrapToNetio reported not-ok for a valid frame")
+	}
+	h, hok := ParseHeader(out)
+	if !hok {
+		t.Fatal("wrapToNetio output has no parseable header")
+	}
+	want := Header{
+		DstID:   2,
+		SrcID:   502,
+		DstPort: EncodePortByte(1, 0),
+		SrcPort: EncodePortByte(0, 0),
+		MsgType: MsgTypeData,
+	}
+	if h != want {
+		t.Fatalf("wrapToNetio header = %+v, want %+v", h, want)
+	}
+	if !bytes.Equal(Payload(out), frame) {
+		t.Fatalf("wrapToNetio payload = % x, want % x", Payload(out), frame)
+	}
+}
+
+func TestWrapToNetioDropsEmptyFrame(t *testing.T) {
+	cfg := Config{LocalInstance: 1, PseudoInstance: 501}
+	for _, in := range [][]byte{nil, {}} {
+		if _, ok := cfg.wrapToNetio(in); ok {
+			t.Fatalf("wrapToNetio accepted an empty frame %v, want drop", in)
 		}
 	}
 }
@@ -78,18 +103,18 @@ func TestTransformPassthroughWhenHeaderNotExpected(t *testing.T) {
 func TestPumpOneForwardsOneDatagram(t *testing.T) {
 	in := newFakeChan(1)
 	out := newFakeChan(1)
-	datagram := WithPayload(Header{DstID: 5, SrcID: 6}, []byte("payload"))
-	in.send(datagram)
+	frame := []byte("payload")
+	in.send(WithPayload(Header{DstID: 5, SrcID: 6}, frame))
 
 	ctx := context.Background()
-	if err := pumpOne(in.readFunc(ctx), out.writeFunc(), true); err != nil {
+	if err := pumpOne(in.readFunc(ctx), out.writeFunc(), stripToUDP); err != nil {
 		t.Fatalf("pumpOne returned error: %v", err)
 	}
 
 	select {
 	case got := <-out.ch:
-		if !bytes.Equal(got, datagram) {
-			t.Fatalf("forwarded datagram = % x, want % x", got, datagram)
+		if !bytes.Equal(got, frame) {
+			t.Fatalf("forwarded datagram = % x, want the stripped frame % x", got, frame)
 		}
 	default:
 		t.Fatal("pumpOne did not forward the datagram")
@@ -102,7 +127,7 @@ func TestPumpOneDropsShortDatagramWithoutError(t *testing.T) {
 	in.send([]byte{0x01, 0x02}) // shorter than HeaderSize
 
 	ctx := context.Background()
-	if err := pumpOne(in.readFunc(ctx), out.writeFunc(), true); err != nil {
+	if err := pumpOne(in.readFunc(ctx), out.writeFunc(), stripToUDP); err != nil {
 		t.Fatalf("pumpOne returned error for a short (dropped) datagram: %v", err)
 	}
 	select {
@@ -120,7 +145,7 @@ func TestPumpOnePropagatesReadError(t *testing.T) {
 		t.Fatal("write should not be called when read fails")
 		return nil
 	}
-	if err := pumpOne(read, write, true); !errors.Is(err, wantErr) {
+	if err := pumpOne(read, write, stripToUDP); !errors.Is(err, wantErr) {
 		t.Fatalf("pumpOne error = %v, want %v", err, wantErr)
 	}
 }
@@ -130,7 +155,7 @@ func TestPumpOnePropagatesWriteError(t *testing.T) {
 	datagram := WithPayload(Header{}, []byte("x"))
 	read := func() ([]byte, error) { return datagram, nil }
 	write := func([]byte) error { return wantErr }
-	if err := pumpOne(read, write, true); !errors.Is(err, wantErr) {
+	if err := pumpOne(read, write, stripToUDP); !errors.Is(err, wantErr) {
 		t.Fatalf("pumpOne error = %v, want %v", err, wantErr)
 	}
 }
@@ -138,24 +163,20 @@ func TestPumpOnePropagatesWriteError(t *testing.T) {
 func TestRunPumpForwardsMultipleDatagramsThenStopsOnCancel(t *testing.T) {
 	in := newFakeChan(4)
 	out := newFakeChan(4)
-	want := [][]byte{
-		WithPayload(Header{SrcID: 1}, []byte("a")),
-		WithPayload(Header{SrcID: 2}, []byte("bb")),
-		WithPayload(Header{SrcID: 3}, []byte("ccc")),
-	}
-	for _, d := range want {
-		in.send(d)
+	frames := [][]byte{[]byte("a"), []byte("bb"), []byte("ccc")}
+	for i, f := range frames {
+		in.send(WithPayload(Header{SrcID: uint16(i + 1)}, f))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errs := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
-		runPump(ctx, in.readFunc(ctx), out.writeFunc(), true, errs)
+		runPump(ctx, in.readFunc(ctx), out.writeFunc(), stripToUDP, errs)
 		close(done)
 	}()
 
-	for i, w := range want {
+	for i, w := range frames {
 		select {
 		case got := <-out.ch:
 			if !bytes.Equal(got, w) {
@@ -186,7 +207,7 @@ func TestRunPumpReportsNonCancellationError(t *testing.T) {
 
 	ctx := context.Background()
 	errs := make(chan error, 1)
-	runPump(ctx, read, write, true, errs)
+	runPump(ctx, read, write, stripToUDP, errs)
 
 	select {
 	case err := <-errs:
@@ -210,7 +231,10 @@ func TestConfigResolvedHostDefault(t *testing.T) {
 }
 
 func TestConfigValidate(t *testing.T) {
-	base := Config{NetioPath: "/tmp/link1.sock", UDPLocal: 20001, UDPRemote: 20002}
+	base := Config{
+		NetioPath: "/tmp/link1.sock", UDPLocal: 20001, UDPRemote: 20002,
+		LocalInstance: 1, LocalAdapter: 0, LocalPort: 0, PseudoInstance: 501,
+	}
 	if err := base.validate(); err != nil {
 		t.Fatalf("validate() on a well-formed config returned %v", err)
 	}
@@ -225,6 +249,13 @@ func TestConfigValidate(t *testing.T) {
 		{"local port too large", func(c Config) Config { c.UDPLocal = 70000; return c }},
 		{"zero remote port", func(c Config) Config { c.UDPRemote = 0; return c }},
 		{"remote port too large", func(c Config) Config { c.UDPRemote = 99999; return c }},
+		{"zero local instance", func(c Config) Config { c.LocalInstance = 0; return c }},
+		{"local instance too large", func(c Config) Config { c.LocalInstance = 1025; return c }},
+		{"zero pseudo instance", func(c Config) Config { c.PseudoInstance = 0; return c }},
+		{"pseudo instance too large", func(c Config) Config { c.PseudoInstance = 1025; return c }},
+		{"adapter beyond nibble", func(c Config) Config { c.LocalAdapter = 16; return c }},
+		{"port beyond nibble", func(c Config) Config { c.LocalPort = 16; return c }},
+		{"negative adapter", func(c Config) Config { c.LocalAdapter = -1; return c }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

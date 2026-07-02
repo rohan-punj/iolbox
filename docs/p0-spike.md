@@ -30,7 +30,7 @@ cd tools/capture-helper && GOOS=windows GOARCH=amd64 go build -o capture-helper.
 | 4 | `lab.load` + `node.start` one IOL (R1); telnet its console port from Windows | IOS boots to prompt; **no `-l` flag** → idle CPU low | console mechanism + keepalive-flag fix |
 | 5 | Start R2; `link.add` p2p R1e0/0–R2e0/0; configure /30 both sides | `ping` R1→R2 succeeds | UDP p2p wiring + NETMAP encoding |
 | 6 | Start VPCS PC1; link to R1 e0/1; set PC IP | PC1 pings R1 LAN IP | VPCS UDP tunnel + mixed IOL/VPCS segment |
-| 7 | `capture.start` on the R1–R2 link; run `capture-helper -connect <ip>:<capPort>` | Wireshark opens, shows the ICMP echoes as clean ethernet frames | pcapng tee + UDP-header strip + helper bridge |
+| 7 | `capture.start` on the R1–R2 link; run `capture-helper -connect <ip>:<capPort>` | Wireshark opens, shows the ICMP echoes as clean ethernet frames | pcapng tee + iouyap header strip/rewrite + helper bridge |
 | 8 | Close Wireshark, reopen via helper `-relaunch` | capture resumes with valid header | header-buffer/relaunch logic |
 | 9 | `config.save` R1; stop; start; `config.extract` | startup-config round-trips through NVRAM | NVRAM codec |
 | 10 | Repeat step 1–7 under the **wsl2** provider | same results | provider abstraction holds across backends |
@@ -40,7 +40,9 @@ cd tools/capture-helper && GOOS=windows GOARCH=amd64 go build -o capture-helper.
 These were flagged during the parallel build as needing a real image — P0 is where
 they get confirmed or corrected. Each has a clearly-marked spot in the code:
 
-- **IOL UDP header size** (relay strip length) — `supervisor/internal/relay`.
+- **IOL netio header** (layout + which side of the bridge carries it) —
+  `supervisor/internal/iouyap`. ✅ CONFIRMED, see "netio header layout" below;
+  the UDP mesh is raw ethernet, the header exists only on the unix netio side.
 - **Telnet console mechanism** (native IOL telnet port vs pty bridge) — `supervisor/internal/node`.
 - **iourc keygen** hostid→key — `supervisor/internal/iourc`.
 - **NVRAM format** header/checksum — `supervisor/internal/nvram`.
@@ -179,6 +181,58 @@ native-IOL netio datagrams, then implement per-hop header rewriting in
 `internal/iouyap`. Until then: native same-host IOL↔IOL links work perfectly (ping
 100%), capture yields valid pcaps but interrupts the captured link, and VPCS↔IOL
 needs the same header work. This is focused networking R&D, not architecture risk.
+
+## netio header layout — CONFIRMED (2026-07-02)
+
+Resolved the "remaining deep piece" above. Method: a Python MITM
+(`/opt/iolab/hdr-mitm.py` + `hdr-test.sh` on the runtime VM) bound two
+pseudo-instance sockets (`/tmp/netio1000/501`, `/tmp/netio1000/502`) with
+`NETMAP = "1:0/1 501:0/0" / "2:1/0 502:0/0"` — deliberately asymmetric
+interfaces (Et0/1 vs Et1/0) so the port-byte nibble order is unambiguous —
+then hexdumped and selectively rewrote every datagram between two real IOL
+17.18.02 instances.
+
+**Observed emission** (instance 1, Ethernet0/1, NETMAP peer 501:0/0):
+
+```
+01 f5 00 01 00 10 01 00   + ethernet frame
+```
+
+Confirmed layout, big-endian:
+
+| Offset | Field    | Size | Confirmed value/meaning                             |
+|-------:|----------|-----:|-----------------------------------------------------|
+| 0      | dst_id   | 2    | destination instance id (`0x01f5` = 501)            |
+| 2      | src_id   | 2    | source instance id (`0x0001` = 1)                   |
+| 4      | dst_port | 1    | dest interface, **`port<<4 \| adapter`** (0/0 = 0)  |
+| 5      | src_port | 1    | src interface (Et0/1 = `0x10`, Et1/0 = `0x01`)      |
+| 6      | msg_type | 1    | **`1` = data frame** (every observed frame)         |
+| 7      | channel  | 1    | `0` on every observed frame                         |
+
+Two corrections vs the classic-iouyap assumption previously coded in
+`internal/iouyap/header.go`: the port byte is `port<<4|adapter` (the REVERSE
+of `netmap.Iface.Index()`'s `adapter*16+port`), and data msg_type is **1**,
+not 0.
+
+**Acceptance:** forwarding verbatim → receiving IOL drops the frame (the dst
+fields still name the pseudo-instance; confirmed by the earlier capture test —
+frames reach the tee but the peer never replies). A rewriting MITM delivered
+dst-corrected frames both ways; end-to-end ping through the rewrite is
+validated via the supervisor path (run-capture.sh / run-vpcs.sh), not the MITM
+harness — the MITM run's expect-driven console config proved flaky (PnP DHCP
+kept the test interfaces unconfigured), while the supervisor path uses NVRAM
+injection and avoids console-driving entirely.
+
+**Fix implemented in `internal/iouyap`:** the UDP mesh now carries **raw
+ethernet frames** (VPCS's native convention — no header on UDP at all).
+`stripToUDP` drops the 8-byte header on netio→UDP; `wrapToNetio` constructs a
+fresh header on UDP→netio addressed `dst = (LocalInstance,
+LocalAdapter/LocalPort)`, `src = (PseudoInstance, 0/0)` — exactly the peer the
+served IOL's NETMAP line names. `iouyap.Config` gained those addressing fields
+(populated by `server.buildBridgePlan` from the lab doc), and the relay's
+pcapng tee no longer strips anything (`relay.StripIOLHeader` deleted). This
+one change fixes capture-preserving-links AND VPCS↔IOL, since both were
+dropping on the same mis-addressed header.
 
 ## P0 status: core risks RETIRED ✅
 

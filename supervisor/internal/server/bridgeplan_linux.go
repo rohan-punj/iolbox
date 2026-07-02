@@ -43,11 +43,14 @@ func (s *Server) startBridges(ll *loadedLab) error {
 				continue
 			}
 			cfg := iouyap.Config{
-				NetioPath:   be.iouyap.NetioPath,
-				UDPLocal:    be.iouyap.UDPLocal,
-				UDPRemote:   be.iouyap.UDPRemote,
-				Host:        be.iouyap.Host,
-				StripHeader: be.iouyap.StripHeader,
+				NetioPath:      be.iouyap.NetioPath,
+				UDPLocal:       be.iouyap.UDPLocal,
+				UDPRemote:      be.iouyap.UDPRemote,
+				Host:           be.iouyap.Host,
+				LocalInstance:  be.iouyap.LocalInstance,
+				LocalAdapter:   be.iouyap.LocalAdapter,
+				LocalPort:      be.iouyap.LocalPort,
+				PseudoInstance: be.iouyap.PseudoInstance,
 			}
 			br, err := iouyap.New(cfg)
 			if err != nil {

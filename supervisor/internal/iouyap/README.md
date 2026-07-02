@@ -43,11 +43,14 @@ IOL  <--netio(unix)--  [iouyap.Bridge]  <--UDP--  internal/relay  <--UDP--
 package iouyap
 
 type Config struct {
-    NetioPath   string // unix-domain datagram socket path IOL connects to
-    UDPLocal    int    // local UDP port this bridge binds (relay writes here)
-    UDPRemote   int    // relay's UDP port this bridge forwards to
-    Host        string // default "127.0.0.1" (iouyap.DefaultHost)
-    StripHeader bool   // see "netio header" below
+    NetioPath      string // unix-domain datagram socket path IOL connects to
+    UDPLocal       int    // local UDP port this bridge binds (relay writes here)
+    UDPRemote      int    // relay's UDP port this bridge forwards to
+    Host           string // default "127.0.0.1" (iouyap.DefaultHost)
+    LocalInstance  int    // real IOL instance id this bridge serves (dst_id on delivery)
+    LocalAdapter   int    // served interface adapter (dst_port high... see "netio header")
+    LocalPort      int    // served interface port-within-adapter
+    PseudoInstance int    // pseudo id this socket is named for in IOL's NETMAP (src_id on delivery)
 }
 
 func New(cfg Config) (*Bridge, error)       // binds both sockets (linux only; see below)
@@ -62,9 +65,9 @@ that validates `Config` and returns `ErrUnsupportedPlatform` — matching the
 builds and its pure logic unit-tests on Windows dev boxes.
 
 The framing/parsing (`header.go`) and the pump/transform logic
-(`iouyap.go`'s `transform`/`pumpOne`/`runPump`) are platform-independent and
-fully unit-tested with in-memory fakes — no real sockets needed to exercise
-them.
+(`iouyap.go`'s `stripToUDP`/`wrapToNetio`/`pumpOne`/`runPump`) are
+platform-independent and fully unit-tested with in-memory fakes — no real
+sockets needed to exercise them.
 
 ### Unix-socket peer discovery
 
@@ -75,44 +78,41 @@ traffic. Until IOL has sent at least one datagram, inbound UDP frames are
 dropped (nothing to deliver to yet) — this matches original `iouyap`
 behaviour.
 
-## Netio header — ASSUMPTIONS TO VERIFY IN P0
+## Netio header — CONFIRMED on real IOL 17.18.02
 
-`HeaderSize = 8`, matching `relay.IOLHeaderSize` exactly (both packages frame
-the *same* datagram on opposite sides of the netio↔UDP hop; they are kept
-manually in sync rather than sharing an import, to avoid coupling sibling
-`internal` packages). Layout, big-endian, per the classic iouyap/dynamips
-`netio_filter` framing:
+`HeaderSize = 8`. The header exists **only on the netio (unix socket) side**:
+this bridge strips it on netio→UDP and constructs a fresh one on UDP→netio, so
+the UDP mesh (relay, VPCS, pcapng tee, cross-host tunnels) carries raw
+ethernet frames with no framing at all — VPCS's native convention.
 
-| Offset | Field    | Size | Meaning                                            |
-|-------:|----------|-----:|-----------------------------------------------------|
-| 0      | dst_ids  | 2    | destination "bridge"/netio channel id (peer's id)   |
-| 2      | src_ids  | 2    | source "bridge"/netio channel id (this side's id)   |
-| 4      | dst_port | 1    | destination port index within the peer's node       |
-| 5      | src_port | 1    | source port index within this node                  |
-| 6      | msg_type | 1    | `0` = data frame (`iouyap.MsgTypeData`); other values reserved |
-| 7      | unused   | 1    | padding/channel byte, historically unused by iouyap |
+Layout, big-endian, confirmed by MITM-sniffing real IOL 17.18.02 netio
+datagrams (`docs/p0-spike.md` "netio header layout"; instance 1's Ethernet0/1
+wired to pseudo 501 emits `01 f5 00 01 00 10 01 00`):
 
-**This has NOT been confirmed against a real IOL process's unix-socket
-traffic.** P0 (`docs/p0-spike.md`) confirmed same-host NETMAP wiring carries
-traffic over native netio sockets directly between two IOL instances, and
-confirmed the UDP relay's pcapng tee works — but neither of those exercises
-*this* bridge or captures the raw bytes IOL writes to a unix netio socket.
+| Offset | Field    | Size | Meaning                                              |
+|-------:|----------|-----:|------------------------------------------------------|
+| 0      | dst_id   | 2    | destination instance id                               |
+| 2      | src_id   | 2    | source instance id                                    |
+| 4      | dst_port | 1    | destination interface, `port<<4 \| adapter`           |
+| 5      | src_port | 1    | source interface, `port<<4 \| adapter`                |
+| 6      | msg_type | 1    | `1` = data frame (`iouyap.MsgTypeData`)               |
+| 7      | channel  | 1    | `0` on every observed frame                           |
 
-To verify: run IOL with a NETMAP entry pointing at a unix socket this package
-(or a raw `socat`/`nc -u -U` capture) owns, and inspect the first few bytes of
-what IOL sends. Adjust `HeaderSize` / the `off*` byte-offset constants /
-`Header` fields in `header.go` (and mirror the change in
-`relay.IOLHeaderSize`) if real IOL differs. `transform` in `iouyap.go` is the
-single seam where any required rewriting (e.g. swapping src/dst ids between
-directions, if real IOL turns out to need that) should be added — both pump
-directions call through it, so a fix lands once.
+Two gotchas the wire capture settled, both different from the classic
+iouyap.c assumption: the port byte packs **port in the high nibble, adapter in
+the low** (Ethernet0/1 → `0x10`, Ethernet1/0 → `0x01` — the reverse of
+`netmap.Iface.Index()`'s flat `adapter*16+port`), and data frames carry
+msg_type **1**, not 0. Use `iouyap.EncodePortByte(adapter, port)`.
 
-`Config.StripHeader` documents the currently-assumed default (`true`): the
-header is present end-to-end and is validated/passed through unmodified in
-both directions, it is not dropped. Set it to `false` only if P0 finds IOL's
-netio framing carries **no** header at all (raw ethernet frames on the unix
-socket) — in that mode the bridge does zero header interpretation and passes
-datagrams through byte-for-byte.
+**Why the bridge must rewrite, not pass through:** IOL drops any datagram
+whose `dst_id`/`dst_port` don't name one of its own interfaces. A frame
+emitted by the far side is addressed to the far side's *pseudo*-instance (its
+NETMAP peer), so forwarding it verbatim means the receiving IOL discards it —
+this was the P0 root cause of bridged links (capture, VPCS↔IOL) carrying no
+traffic while native NETMAP links worked. `wrapToNetio` therefore addresses
+every delivered frame `dst = (LocalInstance, LocalAdapter/LocalPort)`,
+`src = (PseudoInstance, 0/0)` — exactly the peer the served IOL's NETMAP line
+(`<real>:<a>/<p> <pseudo>:0/0`) says that interface is wired to.
 
 ## How the supervisor is expected to wire a link through this bridge
 
@@ -142,7 +142,9 @@ lands. The expected shape:
      sends *to* the relay's receiving port).
    - `Host` = `"127.0.0.1"` for same-host; the peer runtime's reachable
      address for the cross-host case.
-   - `StripHeader` = `true` until P0 says otherwise.
+   - `LocalInstance`/`LocalAdapter`/`LocalPort` = the served IOL endpoint's
+     real instance id + interface coordinates; `PseudoInstance` = the pseudo
+     id from step 2 (see "netio header" above).
 5. **`iouyap.New(cfg)` then `go bridge.Run(ctx)`**, tracked alongside the
    link's other lifecycle state so `bridge.Close()` runs when the link/lab is
    torn down (same lifecycle shape as `relay.Manager.Stop`/`StopAll`).

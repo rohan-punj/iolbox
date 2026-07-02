@@ -71,8 +71,20 @@ func TestBridgePlanCapturedIOLtoIOL(t *testing.T) {
 	if b.iouyap.UDPRemote != b.relayEP.LocalPort || b.iouyap.UDPLocal != b.relayEP.RemotePort {
 		t.Fatalf("endpoint B iouyap<->relay pairing wrong: %+v vs %+v", b.iouyap, b.relayEP)
 	}
-	if !a.iouyap.StripHeader || a.iouyap.NetioPath != a.netioPath {
+	if a.iouyap.NetioPath != a.netioPath {
 		t.Fatalf("iouyap cfg wrong: %+v", a.iouyap)
+	}
+	// Header addressing: each bridge must deliver frames addressed to ITS real
+	// IOL instance+interface, sourced from ITS pseudo-instance (nodes 0,1 ->
+	// instances 1,2; both interfaces e0/0).
+	if a.iouyap.LocalInstance != 1 || b.iouyap.LocalInstance != 2 {
+		t.Fatalf("iouyap LocalInstance wrong: a=%+v b=%+v", a.iouyap, b.iouyap)
+	}
+	if a.iouyap.LocalAdapter != 0 || a.iouyap.LocalPort != 0 {
+		t.Fatalf("iouyap interface coords wrong: %+v", a.iouyap)
+	}
+	if a.iouyap.PseudoInstance != a.pseudo || b.iouyap.PseudoInstance != b.pseudo {
+		t.Fatalf("iouyap PseudoInstance must match the endpoint's pseudo: a=%+v b=%+v", a.iouyap, b.iouyap)
 	}
 }
 
@@ -106,6 +118,13 @@ func TestBridgePlanVPCStoIOL(t *testing.T) {
 	}
 	if iolEP.pseudo < netmap.PseudoInstanceBase || iolEP.netioPath == "" {
 		t.Fatalf("IOL endpoint must be bridged with a pseudo-instance: %+v", iolEP)
+	}
+	// e0/1 on node 0 -> instance 1, adapter 0, port 1.
+	if iolEP.iouyap.LocalInstance != 1 || iolEP.iouyap.LocalAdapter != 0 || iolEP.iouyap.LocalPort != 1 {
+		t.Fatalf("IOL endpoint header addressing wrong: %+v", iolEP.iouyap)
+	}
+	if iolEP.iouyap.PseudoInstance != iolEP.pseudo {
+		t.Fatalf("IOL endpoint PseudoInstance must match pseudo: %+v", iolEP.iouyap)
 	}
 	if !vpcsEP.vpcs || vpcsEP.pseudo != 0 {
 		t.Fatalf("VPCS endpoint must not get a pseudo-instance: %+v", vpcsEP)

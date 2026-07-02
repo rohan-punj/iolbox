@@ -29,14 +29,54 @@ func TestHeaderRoundTrip(t *testing.T) {
 
 func TestHeaderFieldOffsets(t *testing.T) {
 	// Pin the exact byte layout so a future accidental reordering is caught:
-	// big-endian dst_ids[2], src_ids[2], dst_port[1], src_port[1],
-	// msg_type[1], unused[1] -- matching relay.IOLHeaderSize's documented
-	// layout for the same 8-byte framing.
+	// big-endian dst_id[2], src_id[2], dst_port[1], src_port[1],
+	// msg_type[1], channel[1] -- the layout confirmed against real IOL
+	// 17.18.02 wire bytes (see HeaderSize).
 	h := Header{DstID: 0x0102, SrcID: 0x0304, DstPort: 0x05, SrcPort: 0x06, MsgType: 0x07, Unused: 0x08}
 	buf := BuildHeader(h)
 	want := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 	if !bytes.Equal(buf, want) {
 		t.Fatalf("BuildHeader byte layout = % x, want % x", buf, want)
+	}
+}
+
+func TestParseHeaderRealIOLWireBytes(t *testing.T) {
+	// Exact bytes captured from real IOL 17.18.02: instance 1's Ethernet0/1
+	// wired to pseudo-instance 501 (docs/p0-spike.md "netio header layout").
+	wire := []byte{0x01, 0xf5, 0x00, 0x01, 0x00, 0x10, 0x01, 0x00}
+	got, ok := ParseHeader(wire)
+	if !ok {
+		t.Fatal("ParseHeader rejected real IOL wire bytes")
+	}
+	want := Header{
+		DstID:   501,
+		SrcID:   1,
+		DstPort: EncodePortByte(0, 0), // peer's 0/0
+		SrcPort: EncodePortByte(0, 1), // Ethernet0/1
+		MsgType: MsgTypeData,
+		Unused:  0,
+	}
+	if got != want {
+		t.Fatalf("real wire bytes parsed as %+v, want %+v", got, want)
+	}
+}
+
+func TestEncodePortByte(t *testing.T) {
+	// Nibble order confirmed on the wire: port high, adapter low.
+	cases := []struct {
+		adapter, port int
+		want          uint8
+	}{
+		{0, 0, 0x00},
+		{0, 1, 0x10}, // Ethernet0/1 observed as 0x10
+		{1, 0, 0x01}, // Ethernet1/0 observed as 0x01
+		{2, 3, 0x32},
+		{15, 15, 0xFF},
+	}
+	for _, c := range cases {
+		if got := EncodePortByte(c.adapter, c.port); got != c.want {
+			t.Fatalf("EncodePortByte(%d, %d) = %#02x, want %#02x", c.adapter, c.port, got, c.want)
+		}
 	}
 }
 
