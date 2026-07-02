@@ -44,7 +44,20 @@ See [PLAN.md](PLAN.md) and [docs/](docs/) for the full design.
 
 ## Status
 
-Early build. Tracking in [PLAN.md](PLAN.md). Not yet released.
+**Scaffold complete — pre-P0.** All components build and verify in isolation; the
+end-to-end run against a real IOL image ([P0 spike](docs/p0-spike.md)) is the next
+milestone. Not yet released.
+
+| Component | State |
+|---|---|
+| Supervisor (Go) | ✅ builds linux/amd64, `go test`/`vet`/`fmt` clean, stdlib-only |
+| Runtime (rootfs + WSL/VMware appliance) | ✅ build scripts authored, `bash -n` clean |
+| Capture helper (Wireshark bridge) | ✅ builds windows/amd64 |
+| GUI (Tauri + Svelte Flow) | ✅ frontend verified interactive (mock backend); native compile in CI |
+| P0 end-to-end (real IOL) | ⏳ needs a user-supplied image |
+
+See [PLAN.md](PLAN.md) for the roadmap and [docs/p0-spike.md](docs/p0-spike.md) for
+the exact next steps.
 
 ## Build from source
 
