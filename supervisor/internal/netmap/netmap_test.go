@@ -61,24 +61,43 @@ func TestBuildNETMAP(t *testing.T) {
 		}},
 	}
 	got := Build(links)
-	// Interface token is IOL's adapter/port form: e0/0 -> 0/0, s1/2 -> 1/2,
-	// s1/3 -> 1/3. This is the format P0 proved works ("1:0/0 2:0/0").
-	want := "0:0/0 1:0/0\n1:1/2 2:1/3\n"
+	// The NETMAP node id is the IOL *instance* id = nodeID+1 (IOL rejects 0), and
+	// the interface token is IOL's adapter/port form: e0/0 -> 0/0, s1/2 -> 1/2.
+	// So lab nodes 0,1 -> instances 1,2 and nodes 1,2 -> instances 2,3.
+	want := "1:0/0 2:0/0\n2:1/2 3:1/3\n"
 	if got != want {
 		t.Fatalf("NETMAP mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 
 // TestBuildMatchesP0Format pins the exact NETMAP line format the P0 manual test
-// used to carry traffic between two real IOL 17.18.02 instances.
+// used to carry traffic between two real IOL 17.18.02 instances. Lab node ids
+// 0 and 1 map to IOL instances 1 and 2, producing "1:0/0 2:0/0".
 func TestBuildMatchesP0Format(t *testing.T) {
 	links := []LinkSpec{
 		{P2P: true, Endpoints: []EndpointSpec{
+			{NodeID: 0, Interface: "e0/0", IsIOL: true},
 			{NodeID: 1, Interface: "e0/0", IsIOL: true},
-			{NodeID: 2, Interface: "e0/0", IsIOL: true},
 		}},
 	}
 	if got := Build(links); got != "1:0/0 2:0/0\n" {
 		t.Fatalf("P0 NETMAP format mismatch: got %q want %q", got, "1:0/0 2:0/0\n")
+	}
+}
+
+// TestInstanceIDMapping pins the node.id -> IOL instance id mapping and its
+// range validation (IOL refuses 0; valid 1..1024).
+func TestInstanceIDMapping(t *testing.T) {
+	if InstanceID(0) != 1 || InstanceID(1) != 2 || InstanceID(1023) != 1024 {
+		t.Fatalf("InstanceID mapping wrong: %d %d %d", InstanceID(0), InstanceID(1), InstanceID(1023))
+	}
+	if err := ValidateInstance(0); err != nil {
+		t.Fatalf("node 0 must be valid (-> instance 1): %v", err)
+	}
+	if err := ValidateInstance(1023); err != nil {
+		t.Fatalf("node 1023 must be valid (-> instance 1024): %v", err)
+	}
+	if err := ValidateInstance(1024); err == nil {
+		t.Fatal("node 1024 -> instance 1025 must be rejected")
 	}
 }

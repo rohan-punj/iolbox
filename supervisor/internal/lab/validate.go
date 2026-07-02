@@ -50,6 +50,12 @@ func (l *Lab) Validate() error {
 			if n.Image == nil || n.Image.ID == "" {
 				return fmt.Errorf("node %d (iol): image reference with id is required", n.ID)
 			}
+			// IOL rejects instance id 0 and only accepts 1..1024; the node id
+			// maps to the instance id (see netmap.InstanceID). Reject a node id
+			// that would map outside that range at load time.
+			if err := netmap.ValidateInstance(n.ID); err != nil {
+				return fmt.Errorf("node %d: %w", n.ID, err)
+			}
 		case KindVPCS:
 			// image is ignored for vpcs
 		default:

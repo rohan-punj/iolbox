@@ -32,6 +32,30 @@ import (
 // PortsPerAdapter is the number of ports in one IOL adapter group.
 const PortsPerAdapter = 16
 
+// MaxIOLInstance is IOL's highest valid instance id. IOL accepts instance ids
+// 1..1024 (it refuses 0), so a lab node.id (schema minimum 0) must be mapped to
+// this range before it is used as the IOL instance id.
+const MaxIOLInstance = 1024
+
+// InstanceID maps a lab node.id to the IOL instance id used consistently in the
+// argv positional, the NETMAP node id, and the nvram_<id> filename. IOL rejects
+// instance id 0, so the mapping is nodeID+1 (node 0 -> instance 1). All three
+// call sites MUST use this one helper so argv/NETMAP/NVRAM stay in sync.
+func InstanceID(nodeID int) int {
+	return nodeID + 1
+}
+
+// ValidateInstance checks that a lab node.id maps to an IOL instance id within
+// IOL's 1..MaxIOLInstance range. It returns a descriptive error otherwise, for
+// use at lab.load.
+func ValidateInstance(nodeID int) error {
+	inst := InstanceID(nodeID)
+	if inst < 1 || inst > MaxIOLInstance {
+		return fmt.Errorf("node id %d maps to IOL instance id %d, outside the valid 1..%d range", nodeID, inst, MaxIOLInstance)
+	}
+	return nil
+}
+
 // IfaceType classifies an IOL interface as Ethernet or Serial.
 type IfaceType int
 
@@ -118,11 +142,13 @@ type Entry struct {
 	Iface  Iface
 }
 
-// String renders "<nodeid>:<adapter>/<port>", the IOL NETMAP interface token
-// (e.g. "2:0/0" for node 2 Ethernet0/0). This is the format real IOL accepts;
-// see the package doc and docs/p0-spike.md.
+// String renders "<instance>:<adapter>/<port>", the IOL NETMAP interface token
+// (e.g. "2:0/0" for lab node 1 -> IOL instance 2, Ethernet0/0). The NETMAP node
+// id is the IOL *instance* id (InstanceID(NodeID)), not the raw lab node id, so
+// it matches the argv positional and nvram filename. This is the format real
+// IOL accepts; see the package doc and docs/p0-spike.md.
 func (e Entry) String() string {
-	return fmt.Sprintf("%d:%d/%d", e.NodeID, e.Iface.Adapter, e.Iface.Port)
+	return fmt.Sprintf("%d:%d/%d", InstanceID(e.NodeID), e.Iface.Adapter, e.Iface.Port)
 }
 
 // LinkSpec is the minimal link description Build needs: whether it is a direct

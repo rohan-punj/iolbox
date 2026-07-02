@@ -79,8 +79,10 @@ func TestIOLArgvStripsKeepalive(t *testing.T) {
 	if argv[0] != "/img/l3.bin" {
 		t.Fatalf("image path first: %v", argv)
 	}
-	if argv[len(argv)-1] != "3" {
-		t.Fatalf("instance id must be last positional: %v", argv)
+	// Node id 3 maps to IOL instance id 4 (nodeID+1); the positional is the
+	// instance id, not the raw node id (IOL rejects 0).
+	if argv[len(argv)-1] != "4" {
+		t.Fatalf("instance id (nodeID+1) must be last positional: %v", argv)
 	}
 	// -e 2 and -s 1 present
 	joined := ""

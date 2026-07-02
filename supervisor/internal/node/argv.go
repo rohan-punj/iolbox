@@ -3,6 +3,8 @@ package node
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
 )
 
 // Spec is the platform-independent description of how to launch a node. It is
@@ -36,9 +38,11 @@ const DefaultNVRAMKiB = 64
 //
 //	<image> [-e <eth groups>] [-s <serial groups>] -n <nvram KiB> <instance-id>
 //
-// The instance id is the last positional argument and matches the NETMAP node
-// id. We deliberately DO NOT pass "-l": the keepalive flag causes a 100% idle
-// CPU spin on this kernel (see PLAN.md).
+// The instance id is the last positional argument. It is netmap.InstanceID(
+// NodeID), not the raw lab node id (IOL rejects 0; valid range 1..1024), and it
+// matches the NETMAP node id and the nvram_<id> filename. We deliberately DO NOT
+// pass "-l": the keepalive flag causes a 100% idle CPU spin on this kernel
+// (see PLAN.md).
 //
 // The IOL binary reads NETMAP, the iourc license, and its NVRAM file from its
 // current working directory (its cwd = the SHARED lab dir; the spawner sets it),
@@ -61,7 +65,10 @@ func (s Spec) IOLArgv() []string {
 	}
 	argv = append(argv, "-n", strconv.Itoa(nvKiB))
 	// NOTE: no "-l" — intentionally omitted (idle CPU spin).
-	argv = append(argv, strconv.Itoa(s.NodeID))
+	// The positional is the IOL *instance* id (netmap.InstanceID), NOT the raw
+	// lab node id: IOL rejects instance id 0 (valid range 1..1024), and this id
+	// must match the NETMAP node id and the nvram_<id> filename.
+	argv = append(argv, strconv.Itoa(netmap.InstanceID(s.NodeID)))
 	return argv
 }
 

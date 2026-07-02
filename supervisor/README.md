@@ -151,6 +151,18 @@ endpoint on a bridged link), and `startNodes` (per-node bridge instantiation).
 When iouyap lands, wire `iouyap.New(...)` in only at those branches — the native
 path is complete and needs no bridge.
 
+### Node id → IOL instance id (`netmap.InstanceID`)
+
+IOL rejects instance id **0** and only accepts **1..1024**, but a lab `node.id`
+is valid from 0 (schema `minimum: 0`). So the raw node id is **not** used as the
+IOL instance id directly — `netmap.InstanceID(nodeID) = nodeID + 1` maps it into
+range (node 0 → instance 1). `lab.Validate` calls `netmap.ValidateInstance` to
+reject a node id that would exceed 1024 at load time. The instance id is applied
+in the three places it must stay in sync — the **argv positional**
+(`node.Spec.IOLArgv`), the **NETMAP node id** (`netmap.Entry.String`), and the
+**`nvram_<id>` filename** (`server.nvramFilename`) — all via the one helper.
+Console-port allocation is independent and stays keyed by node id.
+
 ### NVRAM startup-config injection (`internal/nvram`)
 
 Hand-driving the console fights IOS-XE 17.18 PnP (P0), so nodes boot

@@ -1,9 +1,13 @@
 package server
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
+	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolab/supervisor/internal/node"
 	"github.com/rohanpunj/iolab/supervisor/internal/nvram"
 )
 
@@ -71,7 +75,8 @@ func TestNetmapForOnlyNativeLinks(t *testing.T) {
 	s := newTestServer()
 	ll := newLoadedLab(doc, "/run/iolab")
 	got := s.netmapFor(ll)
-	want := "1:0/0 2:0/0\n"
+	// Lab nodes 1,2 -> IOL instances 2,3 (nodeID+1).
+	want := "2:0/0 3:0/0\n"
 	if got != want {
 		t.Fatalf("netmap:\n got %q\nwant %q", got, want)
 	}
@@ -109,5 +114,43 @@ func TestNVRAMInjectionRoundTrip(t *testing.T) {
 	}
 	if got != cfg {
 		t.Fatalf("round-trip mismatch")
+	}
+}
+
+// TestInstanceIDConsistentAcrossArgvNetmapNvram is the regression guard for the
+// "IOL rejects instance id 0" fix: a lab node with id 0 must map to IOL instance
+// id 1, and that same instance id must appear in (a) the IOL argv positional,
+// (b) the NETMAP node id, and (c) the nvram_<id> filename — all three in sync.
+func TestInstanceIDConsistentAcrossArgvNetmapNvram(t *testing.T) {
+	const nodeID = 0
+	const wantInstance = 1
+
+	if netmap.InstanceID(nodeID) != wantInstance {
+		t.Fatalf("node %d must map to instance %d, got %d", nodeID, wantInstance, netmap.InstanceID(nodeID))
+	}
+
+	// (a) argv positional (last element) is the instance id, not the node id.
+	spec := node.Spec{NodeID: nodeID, Kind: "iol", ImagePath: "/img/L3.bin", Ethernet: 1}
+	argv := spec.IOLArgv()
+	if last := argv[len(argv)-1]; last != strconv.Itoa(wantInstance) {
+		t.Fatalf("argv positional = %q, want %q (instance id, not node id)", last, strconv.Itoa(wantInstance))
+	}
+
+	// (b) NETMAP node id for a node-0 endpoint is the instance id.
+	nm := netmap.Build([]netmap.LinkSpec{{P2P: true, Endpoints: []netmap.EndpointSpec{
+		{NodeID: nodeID, Interface: "e0/0", IsIOL: true},
+		{NodeID: 1, Interface: "e0/0", IsIOL: true},
+	}}})
+	if !strings.HasPrefix(nm, strconv.Itoa(wantInstance)+":0/0 ") {
+		t.Fatalf("NETMAP must start with instance id %d: got %q", wantInstance, nm)
+	}
+	// The peer (lab node 1) must be instance 2 in the same line.
+	if !strings.Contains(nm, " 2:0/0\n") {
+		t.Fatalf("NETMAP peer must be instance 2: got %q", nm)
+	}
+
+	// (c) nvram filename is named for the instance id (5-digit).
+	if fn := nvramFilename(nodeID); fn != "nvram_00001" {
+		t.Fatalf("nvram filename = %q, want nvram_00001 (instance id)", fn)
 	}
 }
