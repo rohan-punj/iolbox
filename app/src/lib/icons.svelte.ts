@@ -17,10 +17,19 @@ export interface IconEntry {
   label: string;
   kind: IconKind;
   /**
-   * For builtin/custom-svg: the inner SVG markup (paths etc), drawn inside a
-   * 0 0 24 24 stroke viewBox. For custom-png: undefined (use `href`).
+   * For builtin/custom-svg: the inner SVG markup (paths etc). Stroke glyphs
+   * draw inside the default 0 0 24 24 stroke viewBox; filled artwork carries
+   * its own `viewBox` and paints its own fills (see viewBox).
+   * For custom-png: undefined (use `href`).
    */
   inner?: string;
+  /**
+   * Present on filled-artwork builtins (the EVE-style device set): the SVG
+   * viewBox the inner markup was drawn against. Its presence switches
+   * iconSvg from the stroke/currentColor wrapper to a plain wrapper so the
+   * artwork's own fills render as designed.
+   */
+  viewBox?: string;
   /** For raster (custom-png) icons and imported single-file SVGs: a data URL. */
   href?: string;
 }
@@ -28,17 +37,23 @@ export interface IconEntry {
 const STROKE_ATTRS =
   'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
 
-// ---- bundled glyphs (stroke = currentColor) ----
-const BUILTIN: Record<string, { label: string; inner: string }> = {
+// ---- bundled glyphs ----
+// Stroke glyphs (no viewBox field) tint via currentColor inside the shared
+// 24x24 stroke wrapper. The router/switch/pc defaults are the EVE-style
+// two-tone artwork (plate #fafafa, glyph #3c708a) used across the user's lab
+// packs; they carry their own viewBox and fills.
+const BUILTIN: Record<string, { label: string; inner: string; viewBox?: string }> = {
   router: {
     label: "Router",
+    viewBox: "-0.5 -0.5 57 57",
     inner:
-      '<circle cx="12" cy="12" r="8"/><path d="M12 5v5m0 0 3-2m-3 2-3-2M19 12h-5m0 0 2 3m-2-3 2-3M5 12h5m0 0-2 3m2-3-2-3M12 19v-5m0 0 3 2m-3-2-3 2"/>',
+      '<ellipse cx="28" cy="28" rx="28" ry="28" fill="#fafafa" stroke="none"/><path d="M 42.65 45.22 L 35.59 38.3 L 32.71 41.23 L 30.51 30.65 L 41.16 32.62 L 38.3 35.52 L 45.37 42.45 Z M 26.8 31.78 L 19.87 38.84 L 22.8 41.72 L 12.23 43.92 L 14.19 33.28 L 17.1 36.12 L 24.02 29.06 Z M 13.46 10.72 L 20.52 17.65 L 23.4 14.72 L 25.6 25.29 L 14.95 23.33 L 17.8 20.42 L 10.74 13.5 Z M 29.02 24.09 L 35.95 17.02 L 33.02 14.14 L 43.59 11.95 L 41.63 22.59 L 38.73 19.74 L 31.8 26.81 Z M 28 0 C 12.54 0 0 12.54 0 28 C 0 43.46 12.54 56 28 56 C 43.46 56 56 43.46 56 28 C 56 12.54 43.46 0 28 0 Z M 28 0.71 C 43.08 0.71 55.29 12.92 55.29 28 C 55.29 43.08 43.08 55.29 28 55.29 C 12.92 55.29 0.71 43.08 0.71 28 C 0.71 12.92 12.92 0.71 28 0.71 Z" fill="#3c708a" stroke="none"/>',
   },
   switch: {
     label: "Switch",
+    viewBox: "-0.5 -0.5 53 53",
     inner:
-      '<rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 4v3m0 13v-3m5-13v3m0 13v-3m5-13v3m0 13v-3M8 11l3-2m-3 4 3 2m8-4-3-2m3 4-3 2"/>',
+      '<path d="M 3.69 -0.28 C 1.93 -0.28 0.5 1.15 0.5 2.9 L 0.5 48.54 C 0.5 50.29 1.93 51.72 3.69 51.72 L 49.31 51.72 C 51.07 51.72 52.5 50.29 52.5 48.54 L 52.5 2.9 C 52.5 1.15 51.07 -0.28 49.31 -0.28 Z" fill="#fafafa" stroke="none"/><path d="M 24.81 41.86 L 24.81 37.72 L 13.79 37.72 L 13.79 34.44 L 4.4 39.98 L 13.79 45.44 L 13.79 41.86 Z M 29.96 22.04 L 29.96 17.9 L 18.94 17.9 L 18.94 14.62 L 9.55 20.17 L 18.94 25.62 L 18.94 22.04 Z M 23.77 32.02 L 23.77 27.88 L 34.8 27.88 L 34.8 24.61 L 44.18 30.15 L 34.8 35.61 L 34.8 32.02 Z M 28.54 12.54 L 28.54 8.4 L 39.56 8.4 L 39.56 5.12 L 48.94 10.67 L 39.56 16.12 L 39.56 12.54 Z M 3.69 -0.28 C 1.93 -0.28 0.5 1.15 0.5 2.9 L 0.5 48.54 C 0.5 50.29 1.93 51.72 3.69 51.72 L 49.31 51.72 C 51.07 51.72 52.5 50.29 52.5 48.54 L 52.5 2.9 C 52.5 1.15 51.07 -0.28 49.31 -0.28 Z M 3.69 1.15 L 49.31 1.15 C 50.29 1.15 51.06 1.92 51.06 2.9 L 51.06 48.54 C 51.06 49.52 50.29 50.29 49.31 50.29 L 3.69 50.29 C 2.71 50.29 1.94 49.52 1.94 48.54 L 1.94 2.9 C 1.94 1.92 2.71 1.15 3.69 1.15 Z" fill="#3c708a" stroke="none"/>',
   },
   "l3-switch": {
     label: "L3 Switch",
@@ -47,7 +62,9 @@ const BUILTIN: Record<string, { label: string; inner: string }> = {
   },
   pc: {
     label: "PC",
-    inner: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8m-4-4v4"/>',
+    viewBox: "-0.5 -0.5 50 40",
+    inner:
+      '<path d="M 5.85 4.65 L 43.84 4.65 L 43.84 26.24 L 5.85 26.24 Z M 4.96 2 L 45.04 2 C 46.61 2 47.85 3.15 47.85 4.61 L 47.85 26.52 C 47.85 27.98 46.61 29.13 45.04 29.13 L 4.96 29.13 C 3.38 29.13 2.15 27.98 2.15 26.52 L 2.15 4.61 C 2.15 3.15 3.38 2 4.96 2 Z M 4.96 0 C 2.23 0 0 2.08 0 4.61 L 0 26.52 C 0 29.06 2.23 31.14 4.96 31.14 L 20.55 31.14 L 20.55 35.7 L 13.1 35.7 C 11.83 35.7 10.79 36.66 10.79 37.84 C 10.79 39.03 11.83 39.99 13.1 39.99 L 36.67 39.99 C 37.94 39.99 38.97 39.03 38.97 37.84 C 38.97 36.66 37.94 35.7 36.67 35.7 L 30.24 35.7 L 30.24 31.14 L 45.04 31.14 C 47.77 31.14 50 29.06 50 26.52 L 50 4.61 C 50 2.08 47.77 0 45.04 0 Z" fill="#3c708a" stroke="none"/>',
   },
   laptop: {
     label: "Laptop",
@@ -105,7 +122,8 @@ export function isBuiltinIcon(key: string): boolean {
 export function resolveIcon(key: string | undefined): IconEntry | undefined {
   if (!key) return undefined;
   if (key in BUILTIN) {
-    return { key, label: BUILTIN[key].label, kind: "builtin", inner: BUILTIN[key].inner };
+    const b = BUILTIN[key];
+    return { key, label: b.label, kind: "builtin", inner: b.inner, viewBox: b.viewBox };
   }
   return custom.get(key);
 }
@@ -119,6 +137,7 @@ export function listIcons(): IconEntry[] {
     label: v.label,
     kind: "builtin",
     inner: v.inner,
+    viewBox: v.viewBox,
   }));
   return [...builtins, ...custom.values()];
 }
@@ -132,6 +151,10 @@ export function iconSvg(key: string | undefined, size = 24): string {
   if (entry.kind === "custom-svg" && entry.href) {
     // Imported single-file SVG kept as-is (may be multi-colour) via <img>.
     return `<img src="${entry.href}" width="${size}" height="${size}" alt="" style="object-fit:contain;display:block" />`;
+  }
+  if (entry.viewBox) {
+    // Filled artwork: its paths paint their own fills; no stroke tinting.
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${entry.viewBox}" width="${size}" height="${size}" style="display:block">${entry.inner}</svg>`;
   }
   return `<svg ${STROKE_ATTRS} width="${size}" height="${size}">${entry.inner}</svg>`;
 }
