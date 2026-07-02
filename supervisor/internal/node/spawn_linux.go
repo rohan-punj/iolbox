@@ -86,8 +86,14 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 	env := append(os.Environ(), spec.Environ()...)
 
 	// Bind the telnet console listener BEFORE spawning so a client that dials
-	// immediately after node.console never races the accept loop.
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(spec.ConsolePort))
+	// immediately after node.console never races the accept loop. Bind host
+	// is configurable (Spec.ConsoleBind) so native telnet from the GUI host
+	// can reach the console; the wsbridge always dials via loopback either way.
+	bind := spec.ConsoleBind
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(bind, strconv.Itoa(spec.ConsolePort)))
 	if err != nil {
 		return nil, fmt.Errorf("node %d: console listen :%d: %w", spec.NodeID, spec.ConsolePort, err)
 	}

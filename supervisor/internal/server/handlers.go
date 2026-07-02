@@ -335,6 +335,7 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 		Kind:        string(n.Kind),
 		WorkDir:     ll.workDir(n.ID),
 		ConsolePort: nr.consolePort,
+		ConsoleBind: s.cfg.ConsoleBind,
 		RAM:         n.RAM,
 	}
 	switch n.Kind {

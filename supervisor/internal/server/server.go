@@ -30,6 +30,11 @@ type Config struct {
 	// lab's shared dir so co-located IOL instances find it. Empty defaults to
 	// <ImageDir>/../iourc then /opt/iolab/iourc (see prepareLabDir).
 	IourcPath string
+	// ConsoleBind is the host the per-node IOL console listeners bind (VPCS
+	// binds its own console on all interfaces already). Default loopback;
+	// set 0.0.0.0 so a native telnet client on the GUI host can dial
+	// <vm-ip>:<consolePort> directly — same trust boundary as -ws-addr.
+	ConsoleBind string
 	// Runtime/Arch are advertised in the hello handshake.
 	Runtime string
 	Arch    string

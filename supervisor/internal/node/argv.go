@@ -21,7 +21,12 @@ type Spec struct {
 	Serial      int    // serial adapter groups
 	RAM         int    // megabytes
 	ConsolePort int    // telnet console TCP port (the supervisor's pty->telnet bridge binds this)
-	NVRAMKiB    int    // IOL NVRAM size in KiB (-n); 0 uses DefaultNVRAMKiB
+	// ConsoleBind is the host the pty->telnet bridge listener binds. Empty
+	// defaults to loopback; 0.0.0.0 lets a native telnet client on the GUI
+	// host reach <vm-ip>:<ConsolePort> directly. (VPCS ignores this: vpcs
+	// binds its own console on all interfaces.)
+	ConsoleBind string
+	NVRAMKiB    int // IOL NVRAM size in KiB (-n); 0 uses DefaultNVRAMKiB
 
 	// VPCS fields.
 	VPCSCount int // number of PCs (<= 9)
