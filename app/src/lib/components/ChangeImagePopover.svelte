@@ -82,12 +82,12 @@
     background: var(--accent-muted);
   }
   .badge {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     padding: 2px 5px;
     border-radius: var(--radius-sm);
     background: var(--node-iol-l3);
-    color: #0d1117;
+    color: var(--ground);
     flex-shrink: 0;
   }
   .badge.l2 {

@@ -131,7 +131,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(3, 5, 8, 0.72);
+    background: var(--scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -239,7 +239,7 @@
   }
   .badge.recommended {
     background: var(--success);
-    color: #05130b;
+    color: var(--ground);
   }
   .badge.unavailable {
     background: var(--bg-3);

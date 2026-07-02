@@ -142,7 +142,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(3, 5, 8, 0.6);
+    background: var(--scrim);
     backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
@@ -217,12 +217,12 @@
     color: var(--text-tertiary);
   }
   .badge {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: var(--node-iol-l3);
-    color: #0d1117;
+    color: var(--ground);
   }
   .badge.l2 {
     background: var(--node-iol-l2);

@@ -1,90 +1,128 @@
 <script lang="ts">
   import { Handle, Position, type NodeProps } from "@xyflow/svelte";
   import { labStore } from "../labStore.svelte";
-  import { stateColor, stateLabel } from "../nodeVisuals";
+  import { stateLabel } from "../nodeVisuals";
+  import { iconSvg, defaultIconFor, iconRegistryVersion } from "../icons.svelte";
 
   let { id, data, selected }: NodeProps = $props();
 
   const nodeId = $derived(Number(id));
   const state = $derived(labStore.nodeStates[nodeId] ?? "stopped");
   const label = $derived((data as any).label as string);
+  const iconKey = $derived(
+    ((data as any).icon as string | undefined) ?? defaultIconFor("vpcs")
+  );
+  const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, 28)));
 </script>
 
-<div class="vpcs-node" class:selected style:--state-color={stateColor(state)}>
+<div class="node face-node vpcs" class:selected data-state={state}>
   <Handle type="source" position={Position.Top} id="top" />
   <Handle type="source" position={Position.Right} id="right" />
   <Handle type="source" position={Position.Bottom} id="bottom" />
   <Handle type="source" position={Position.Left} id="left" />
 
-  <div class="icon" aria-hidden="true">
-    <svg viewBox="0 0 24 24" width="20" height="20">
-      <rect x="3" y="4" width="18" height="12" rx="1.5" fill="currentColor" opacity="0.15" />
-      <rect x="3" y="4" width="18" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" />
-      <path d="M9 20h6M12 16v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-    </svg>
+  <div class="face">
+    <span class="led" title={stateLabel(state)}></span>
+    <span class="glyph" aria-hidden="true">{@html glyph}</span>
   </div>
-
-  <div class="body">
-    <div class="name">{label}</div>
-    <div class="meta">VPCS</div>
-  </div>
-
-  <div class="state-dot" title={stateLabel(state)}></div>
+  <div class="name mono">{label}</div>
 </div>
 
 <style>
-  .vpcs-node {
+  .node {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: var(--sp-2);
-    min-width: 128px;
-    padding: 8px 10px;
-    background: var(--bg-2);
-    border: 1.5px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
+    gap: 5px;
+    width: 64px;
+  }
+  .face {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: 14px;
+    background: linear-gradient(160deg, var(--node-face), var(--node-face-2));
+    border: 1px solid var(--border-strong);
+    display: grid;
+    place-items: center;
+    box-shadow: var(--shadow-md);
     color: var(--node-vpcs);
     transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
   }
-  .vpcs-node.selected {
+  .node.selected .face {
     border-color: var(--accent);
-    box-shadow: var(--shadow-ring);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 26%, transparent), var(--shadow-md);
   }
-  .icon {
-    display: flex;
-    flex-shrink: 0;
+  .node.selected .glyph {
+    color: var(--accent);
   }
-  .body {
-    min-width: 0;
-    flex: 1;
+  .glyph {
+    display: grid;
+    place-items: center;
+    color: inherit;
   }
-  .name {
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .glyph :global(svg),
+  .glyph :global(img) {
+    width: 28px;
+    height: 28px;
   }
-  .meta {
-    font-size: 10px;
-    color: var(--text-tertiary);
-  }
-  .state-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--state-color);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-color) 25%, transparent);
-    flex-shrink: 0;
-  }
-  :global(.vpcs-node .svelte-flow__handle) {
+  .led {
+    position: absolute;
+    top: 7px;
+    right: 7px;
     width: 8px;
     height: 8px;
-    background: var(--border-strong);
-    border: 1.5px solid var(--bg-0);
+    border-radius: 50%;
+    background: var(--state-stopped);
   }
-  :global(.vpcs-node:hover .svelte-flow__handle) {
+  .node[data-state="running"] .led {
+    background: var(--state-running);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-running) 24%, transparent);
+  }
+  .node[data-state="starting"] .led {
+    background: var(--state-starting);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-starting) 24%, transparent);
+    animation: led-pulse 1.1s ease-in-out infinite;
+  }
+  .node[data-state="crashed"] .led {
+    background: var(--state-crashed);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-crashed) 24%, transparent);
+  }
+  @keyframes led-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+  .name {
+    font-size: var(--fs-xs);
+    color: var(--ink);
+    background: var(--chip-bg);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 1px 7px;
+    letter-spacing: 0.02em;
+    max-width: 108px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :global(.face-node .svelte-flow__handle) {
+    width: 9px;
+    height: 9px;
+    background: var(--border-strong);
+    border: 1.5px solid var(--ground);
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+  }
+  :global(.face-node:hover .svelte-flow__handle) {
+    opacity: 1;
     background: var(--accent);
   }
 </style>

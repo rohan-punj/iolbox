@@ -1,10 +1,13 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
+  import { themeStore } from "../themeStore.svelte";
+  import { uiSvg } from "../icons.svelte";
 
   const anyRunning = $derived(labStore.labRunning);
   const providerLabel = $derived(
-    labStore.activeProvider ? labStore.activeProvider.toUpperCase() : "—"
+    labStore.activeProvider ? labStore.activeProvider : "—"
   );
+  const nodeCount = $derived(labStore.lab.nodes.length);
 
   function updateName(e: Event) {
     labStore.lab.name = (e.target as HTMLInputElement).value;
@@ -20,43 +23,51 @@
 </script>
 
 <header class="topbar">
-  <div class="left">
-    <div class="brand">
-      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-        <rect x="2" y="5" width="20" height="14" rx="2.5" fill="none" stroke="var(--accent)" stroke-width="1.6" />
-        <circle cx="8" cy="12" r="1.6" fill="var(--accent)" />
-        <circle cx="16" cy="12" r="1.6" fill="var(--accent)" />
-        <path d="M9.5 12h5" stroke="var(--accent)" stroke-width="1.4" />
-      </svg>
-      <span>iolab</span>
-    </div>
-    <input class="lab-name" value={labStore.lab.name} oninput={updateName} aria-label="Lab name" />
+  <div class="brand">
+    <span class="brand-mark">{@html uiSvg("net", 13)}</span>
+    <input
+      class="lab-name mono"
+      value={labStore.lab.name}
+      oninput={updateName}
+      aria-label="Lab name"
+      spellcheck="false"
+    />
+    <span class="dim mono">· {nodeCount} {nodeCount === 1 ? "node" : "nodes"}</span>
   </div>
 
-  <div class="center">
-    <button class="btn start-stop" class:running={anyRunning} onclick={toggleLab}>
-      {#if anyRunning}
-        <span class="ico">■</span> Stop lab
-      {:else}
-        <span class="ico">▶</span> Start lab
-      {/if}
-    </button>
-  </div>
+  <div class="spacer"></div>
 
-  <div class="right">
-    <button class="btn btn-ghost" onclick={() => (labStore.showImageManager = true)}>
-      Images
-    </button>
-    <span
-      class="pill status-pill"
-      class:connected={labStore.providerStatus === "connected"}
-      class:connecting={labStore.providerStatus === "connecting"}
-      class:error={labStore.providerStatus === "error"}
+  <span
+    class="pill status-pill"
+    class:connected={labStore.providerStatus === "connected"}
+    class:connecting={labStore.providerStatus === "connecting"}
+    class:error={labStore.providerStatus === "error"}
+  >
+    <span class="led"></span>
+    {providerLabel}
+  </span>
+
+  <div class="seg" role="group" aria-label="Theme">
+    <button
+      class:on={themeStore.current === "bench"}
+      aria-pressed={themeStore.current === "bench"}
+      onclick={() => themeStore.set("bench")}>Bench</button
     >
-      <span class="status-dot"></span>
-      {providerLabel}
-    </span>
+    <button
+      class:on={themeStore.current === "glass"}
+      aria-pressed={themeStore.current === "glass"}
+      onclick={() => themeStore.set("glass")}>Glass</button
+    >
   </div>
+
+  <button class="btn" onclick={() => (labStore.showImageManager = true)}>
+    {@html uiSvg("images", 13)} Images
+  </button>
+
+  <button class="btn btn-primary" onclick={toggleLab}>
+    {@html uiSvg(anyRunning ? "stop" : "play", 12)}
+    {anyRunning ? "Stop lab" : "Start lab"}
+  </button>
 </header>
 
 <style>
@@ -64,90 +75,109 @@
     height: var(--topbar-h);
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: var(--sp-3);
     padding: 0 var(--sp-3);
-    background: var(--bg-1);
+    background: var(--panel);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    gap: var(--sp-4);
-  }
-  .left {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    min-width: 0;
+    z-index: 5;
   }
   .brand {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-weight: 700;
-    font-size: var(--fs-md);
-    color: var(--text-primary);
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+  .brand-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    display: grid;
+    place-items: center;
+    background: linear-gradient(
+      150deg,
+      var(--accent),
+      color-mix(in oklab, var(--accent) 55%, #7a5cff)
+    );
+    color: var(--accent-ink);
     flex-shrink: 0;
   }
   .lab-name {
     background: transparent;
     border: 1px solid transparent;
-    font-size: var(--fs-sm);
-    color: var(--text-secondary);
+    font-size: var(--fs-base);
+    color: var(--ink);
     padding: 5px 8px;
-    min-width: 140px;
-    max-width: 280px;
+    min-width: 120px;
+    max-width: 260px;
+    letter-spacing: 0.01em;
   }
   .lab-name:hover {
     border-color: var(--border);
   }
   .lab-name:focus {
-    background: var(--bg-1);
+    background: var(--panel-solid);
     border-color: var(--accent);
-    color: var(--text-primary);
   }
-  .center {
+  .dim {
+    font-size: var(--fs-xs);
+    color: var(--ink-3);
+    white-space: nowrap;
     flex-shrink: 0;
   }
-  .start-stop {
-    min-width: 116px;
-    justify-content: center;
-    background: var(--success);
-    border-color: var(--success);
-    color: #05130b;
-    font-weight: 600;
+  .spacer {
+    flex: 1;
   }
-  .start-stop:hover {
-    filter: brightness(1.08);
-  }
-  .start-stop.running {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: #1a0506;
-  }
-  .ico {
-    font-size: 10px;
-  }
-  .right {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    flex-shrink: 0;
-  }
-  .status-pill {
-    background: var(--bg-3);
-    color: var(--text-tertiary);
-  }
-  .status-pill.connecting {
-    color: var(--warning);
-  }
-  .status-pill.connected {
-    color: var(--success);
-  }
-  .status-pill.error {
-    color: var(--danger);
-  }
-  .status-dot {
-    width: 6px;
-    height: 6px;
+  .status-pill .led {
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: currentColor;
+    background: var(--state-stopped);
+  }
+  .status-pill.connected .led {
+    background: var(--state-running);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-running) 22%, transparent);
+  }
+  .status-pill.connecting .led {
+    background: var(--state-starting);
+  }
+  .status-pill.error .led {
+    background: var(--state-crashed);
+  }
+
+  .seg {
+    display: inline-flex;
+    padding: 3px;
+    gap: 2px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+  }
+  .seg button {
+    font-family: var(--font-ui);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    border: 0;
+    background: transparent;
+    color: var(--ink-3);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    transition: color var(--transition-fast), background var(--transition-fast);
+  }
+  .seg button:hover {
+    color: var(--ink);
+  }
+  .seg button.on {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  .btn :global(svg) {
+    width: 13px;
+    height: 13px;
   }
 </style>

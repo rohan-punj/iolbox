@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>iolab</title>
+    <script>
+      // Set the persisted theme before first paint to avoid a flash of the
+      // wrong surface. themeStore reconciles this on boot.
+      (function () {
+        try {
+          var t = localStorage.getItem("iolab.theme");
+          document.documentElement.setAttribute(
+            "data-theme",
+            t === "glass" ? "glass" : "bench"
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "bench");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

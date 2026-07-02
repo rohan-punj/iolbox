@@ -164,7 +164,7 @@
     flex: 1;
     min-height: 0;
     position: relative;
-    background: #08090c;
+    background: var(--term-bg);
   }
   .term-slot {
     position: absolute;

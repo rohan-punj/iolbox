@@ -237,6 +237,11 @@ class LabStore {
     }
   }
 
+  setNodeIcon(nodeId: number, iconKey: string) {
+    const node = this.lab.nodes.find((n) => n.id === nodeId);
+    if (node) node.icon = iconKey;
+  }
+
   get selectedNode(): LabNode | null {
     return this.lab.nodes.find((n) => n.id === this.selectedNodeId) ?? null;
   }

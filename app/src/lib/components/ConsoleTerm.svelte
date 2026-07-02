@@ -4,6 +4,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
   import { labStore } from "../labStore.svelte";
+  import { themeStore } from "../themeStore.svelte";
 
   let { nodeId, active }: { nodeId: number; active: boolean } = $props();
 
@@ -15,18 +16,30 @@
 
   const PROMPT = "Router>";
 
+  // Resolve theme tokens to concrete colours xterm can consume (it needs hex/
+  // rgb, not CSS vars). Re-read when the theme flips.
+  function readVar(name: string, fallback: string): string {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+  function termTheme() {
+    return {
+      background: readVar("--term-bg", "#08090c"),
+      foreground: readVar("--term-ink", "#d6dae3"),
+      cursor: readVar("--accent", "#4bc6d1"),
+      selectionBackground: readVar("--accent-muted", "rgba(75,198,209,0.3)"),
+    };
+  }
+
   onMount(() => {
     term = new Terminal({
       convertEol: true,
-      fontFamily: "var(--font-mono)",
+      fontFamily:
+        '"Cascadia Code","JetBrains Mono",ui-monospace,"SF Mono",Consolas,monospace',
       fontSize: 13,
+      lineHeight: 1.25,
       cursorBlink: true,
-      theme: {
-        background: "#08090c",
-        foreground: "#d6dae3",
-        cursor: "#4f8cff",
-        selectionBackground: "rgba(79,140,255,0.35)",
-      },
+      theme: termTheme(),
     });
     fit = new FitAddon();
     term.loadAddon(fit);
@@ -58,6 +71,12 @@
       queueMicrotask(() => fit?.fit());
       term?.focus();
     }
+  });
+
+  // Repaint the terminal palette when the app theme flips.
+  $effect(() => {
+    void themeStore.current;
+    if (term) term.options.theme = termTheme();
   });
 
   function handleInput(data: string) {
@@ -109,6 +128,7 @@
     width: 100%;
     height: 100%;
     padding: 4px 6px;
+    background: var(--term-bg);
   }
   :global(.xterm) {
     height: 100%;

@@ -1,12 +1,27 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
   import { stateColor, stateLabel } from "../nodeVisuals";
+  import { iconSvg, defaultIconFor, iconRegistryVersion } from "../icons.svelte";
+  import IconPicker from "./IconPicker.svelte";
 
   const node = $derived(labStore.selectedNode);
   const nodeState = $derived(node ? labStore.nodeStates[node.id] ?? "stopped" : "stopped");
   const image = $derived(labStore.images.find((i) => i.id === node?.image?.id));
 
   let showImagePicker = $state(false);
+  let iconPicker = $state<{ x: number; y: number } | null>(null);
+
+  const iconKey = $derived(
+    node
+      ? node.icon ?? defaultIconFor(node.kind, image?.class ?? node.image?.class)
+      : undefined
+  );
+  const iconMarkup = $derived((iconRegistryVersion(), iconSvg(iconKey, 20)));
+
+  function openIconPicker(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    iconPicker = { x: r.left - 210, y: r.top };
+  }
 
   async function changeImage(imageId: string) {
     if (!node) return;
@@ -55,6 +70,14 @@
       <span class="label">Name</span>
       <input type="text" value={node.name} oninput={updateName} />
     </label>
+
+    <div class="field">
+      <span class="label">Icon</span>
+      <button class="icon-btn" onclick={openIconPicker}>
+        <span class="icon-glyph">{@html iconMarkup}</span>
+        <span class="icon-lab">Change icon…</span>
+      </button>
+    </div>
 
     {#if node.kind === "iol"}
       <label class="field">
@@ -112,6 +135,16 @@
     {/if}
   {/if}
 </div>
+
+{#if iconPicker && node}
+  <IconPicker
+    x={iconPicker.x}
+    y={iconPicker.y}
+    current={iconKey}
+    onPick={(key) => labStore.setNodeIcon(node!.id, key)}
+    onClose={() => (iconPicker = null)}
+  />
+{/if}
 
 <style>
   .inspector {
@@ -231,12 +264,12 @@
     background: var(--bg-hover);
   }
   .badge {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     padding: 2px 5px;
     border-radius: var(--radius-sm);
     background: var(--node-iol-l3);
-    color: #0d1117;
+    color: var(--ground);
     flex-shrink: 0;
   }
   .badge.l2 {
@@ -253,5 +286,34 @@
     font-size: var(--fs-xs);
     color: var(--text-tertiary);
     line-height: 1.5;
+  }
+  .icon-btn {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    cursor: pointer;
+    background: var(--panel-solid);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 7px 9px;
+    color: var(--ink);
+  }
+  .icon-btn:hover {
+    border-color: var(--accent);
+  }
+  .icon-glyph {
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+  }
+  .icon-glyph :global(svg),
+  .icon-glyph :global(img) {
+    width: 18px;
+    height: 18px;
+  }
+  .icon-lab {
+    font-size: var(--fs-sm);
   }
 </style>
