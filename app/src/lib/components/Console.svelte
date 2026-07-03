@@ -55,6 +55,19 @@
     nativeCapture = { ...nativeCapture, [linkId]: !nativeCapture[linkId] };
   }
 
+  // Link-menu "Capture in Wireshark…" fired labStore.openCapture() then set
+  // this one-shot signal — jump straight to that capture tab's native overlay
+  // instead of leaving the user on the plain live-summary view. Reset the
+  // signal immediately so it doesn't re-fire (e.g. if the tab is later closed
+  // and reopened by hand).
+  $effect(() => {
+    const linkId = labStore.wiresharkOverlayFor;
+    if (linkId === null) return;
+    selectCapture(linkId);
+    nativeCapture = { ...nativeCapture, [linkId]: true };
+    labStore.wiresharkOverlayFor = null;
+  });
+
   /** host:port of a link's live pcapng tee, or null until the capture port is
    *  known (no capture.started seen yet). */
   function captureAddr(linkId: number): { host: string; port: number } | null {

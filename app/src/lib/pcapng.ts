@@ -237,6 +237,7 @@ const ETH_ETHERTYPES: Record<number, string> = {
   0x8100: "802.1Q",
   0x88cc: "LLDP",
   0x8847: "MPLS",
+  0x9000: "LOOP", // Ethernet Configuration Testing Protocol (keepalive/loopback)
 };
 
 const ICMP_TYPES: Record<number, string> = {
@@ -290,6 +291,27 @@ export function summarize(frame: Uint8Array, origLen: number): PacketSummary {
     l3 = 18;
   }
 
+  // 802.3 framing: a value below 0x0600 (1536) is a LENGTH field, not an
+  // EtherType. The old code fell straight through to the hex fallback, so real
+  // STP BPDUs (dst 01:80:c2:00:00:00) showed up as "0x0027" and CDP/DTP/VTP over
+  // SNAP (dst 01:00:0c:cc:cc:cc) as "0x0183"/"0x004c" etc. Decode LLC instead.
+  if (etherType < 0x0600) {
+    return summarizeLlc(frame, l3, srcMac, dstMac, len);
+  }
+
+  return dispatchEtherType(frame, etherType, l3, srcMac, dstMac, len);
+}
+
+/** Dispatch by EtherType. Shared by Ethernet II framing and by SNAP frames
+ *  whose OUI is 00:00:00 (which carry a real EtherType in the SNAP PID). */
+function dispatchEtherType(
+  frame: Uint8Array,
+  etherType: number,
+  l3: number,
+  srcMac: string,
+  dstMac: string,
+  len: number
+): PacketSummary {
   if (etherType === 0x0806) {
     // ARP
     if (frame.length >= l3 + 28) {
@@ -313,6 +335,116 @@ export function summarize(frame: Uint8Array, origLen: number): PacketSummary {
   // No L3 we dissect: MACs + ethertype hex fallback.
   const label = ETH_ETHERTYPES[etherType] ?? `0x${etherType.toString(16).padStart(4, "0")}`;
   return { proto: label, addr: `${srcMac} > ${dstMac}`, info: "", len };
+}
+
+const ascii = new TextDecoder("ascii", { fatal: false });
+
+/** Read a run of printable ASCII (used for the CDP Device ID string). */
+function asciiStr(d: Uint8Array, o: number, n: number): string {
+  return ascii.decode(d.subarray(o, o + n)).replace(/[^\x20-\x7e]/g, "");
+}
+
+/**
+ * 802.3 LLC frame (the L2 "type" field was actually a length < 0x0600). `o` is
+ * the offset just past the length field, where the 802.2 LLC header begins:
+ * DSAP(1) SSAP(1) control(1|2). Decodes the protocols IOS labs emit onto the
+ * capture: STP (DSAP 0x42), and SNAP (AA AA 03) for CDP/DTP/VTP.
+ */
+function summarizeLlc(
+  frame: Uint8Array,
+  o: number,
+  srcMac: string,
+  dstMac: string,
+  len: number
+): PacketSummary {
+  if (frame.length < o + 3) {
+    return { proto: "LLC", addr: `${srcMac} > ${dstMac}`, info: "runt", len };
+  }
+  const dsap = frame[o];
+  const ssap = frame[o + 1];
+
+  // Spanning Tree (802.1D/w/s): DSAP=SSAP=0x42, control 0x03 (UI). BPDU follows.
+  if (dsap === 0x42 && ssap === 0x42) {
+    return summarizeStp(frame, o + 3, srcMac, dstMac, len);
+  }
+
+  // SNAP: DSAP=SSAP=0xAA, control 0x03, then OUI(3) + PID(2).
+  if (dsap === 0xaa && ssap === 0xaa && frame.length >= o + 8) {
+    const oui = (frame[o + 3] << 16) | (frame[o + 4] << 8) | frame[o + 5];
+    const pid = u16(frame, o + 6);
+    const snapBody = o + 8;
+    if (oui === 0x00000c) {
+      // Cisco SNAP protocols.
+      if (pid === 0x2000) return summarizeCdp(frame, snapBody, srcMac, dstMac, len);
+      if (pid === 0x2004) return { proto: "DTP", addr: `${srcMac} > ${dstMac}`, info: "", len };
+      if (pid === 0x2003) return { proto: "VTP", addr: `${srcMac} > ${dstMac}`, info: "", len };
+      return { proto: "SNAP", addr: `${srcMac} > ${dstMac}`, info: `Cisco pid 0x${hex2(frame[o + 6])}${hex2(frame[o + 7])}`, len };
+    }
+    if (oui === 0x000000) {
+      // OUI 00:00:00 → the SNAP PID is a real EtherType; reuse the L2 path.
+      return dispatchEtherType(frame, pid, snapBody, srcMac, dstMac, len);
+    }
+    return { proto: "SNAP", addr: `${srcMac} > ${dstMac}`, info: `oui ${hex2(frame[o + 3])}:${hex2(frame[o + 4])}:${hex2(frame[o + 5])}`, len };
+  }
+
+  // Any other LLC frame: report the SAPs.
+  return { proto: "LLC", addr: `${srcMac} > ${dstMac}`, info: `dsap 0x${hex2(dsap)} ssap 0x${hex2(ssap)}`, len };
+}
+
+/**
+ * STP/RSTP/MST BPDU. `o` points at the BPDU: protocol-id(u16, 0x0000)
+ * version(u8) type(u8) ... For a config BPDU the root bridge id and path cost
+ * follow. A TCN BPDU (type 0x80) has no further fields.
+ */
+function summarizeStp(
+  frame: Uint8Array,
+  o: number,
+  srcMac: string,
+  dstMac: string,
+  len: number
+): PacketSummary {
+  const addr = `${srcMac} > ${dstMac}`;
+  if (frame.length < o + 4) return { proto: "STP", addr, info: "runt", len };
+  const bpduType = frame[o + 3];
+  if (bpduType === 0x80) {
+    return { proto: "STP", addr, info: "Topology change", len };
+  }
+  const version = frame[o + 2];
+  const kind = version === 3 ? "MST" : version === 2 ? "RSTP" : "STP";
+  // Config/RSTP/MST BPDU: flags(1) at o+4, root-id(8) at o+5, root-path-cost(4) at o+13.
+  if (frame.length < o + 17) return { proto: "STP", addr, info: kind, len };
+  const rootPrio = u16(frame, o + 5); // priority + sys-id-ext (kept as one u16)
+  const rootMac = mac(frame, o + 7);
+  const cost = (frame[o + 13] << 24) | (frame[o + 14] << 16) | (frame[o + 15] << 8) | frame[o + 16];
+  return { proto: "STP", addr, info: `${kind} · root ${rootPrio}/${rootMac} cost ${cost >>> 0}`, len };
+}
+
+/**
+ * CDP. `o` points past the SNAP header at the CDP header: version(1) ttl(1)
+ * checksum(u16), then TLVs: type(u16) length(u16) value. We pull the Device ID
+ * TLV (type 0x0001) if present; length includes the 4-byte TLV header.
+ */
+function summarizeCdp(
+  frame: Uint8Array,
+  o: number,
+  srcMac: string,
+  dstMac: string,
+  len: number
+): PacketSummary {
+  const addr = `${srcMac} > ${dstMac}`;
+  let p = o + 4; // skip CDP header (version, ttl, checksum)
+  while (p + 4 <= frame.length) {
+    const type = u16(frame, p);
+    const tlvLen = u16(frame, p + 2);
+    if (tlvLen < 4) break; // malformed; avoid a zero/negative-length loop
+    if (type === 0x0001) {
+      const valLen = Math.min(tlvLen - 4, frame.length - (p + 4));
+      const devId = asciiStr(frame, p + 4, Math.max(0, valLen));
+      return { proto: "CDP", addr, info: devId ? `Device ID ${devId}` : "", len };
+    }
+    p += tlvLen;
+  }
+  return { proto: "CDP", addr, info: "", len };
 }
 
 function summarizeIPv4(frame: Uint8Array, o: number, len: number): PacketSummary {

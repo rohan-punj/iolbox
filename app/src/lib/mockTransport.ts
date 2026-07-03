@@ -412,6 +412,10 @@ export class MockTransport implements Transport {
       );
       return kinds.some((k) => k === "vpcs" || k === "nat" || k === "mgmt");
     };
+    // Network Watcher demo (feature 3) — fixed small control-plane background
+    // (STP/CDP/ICMP) so the watcher chip has something stable to show,
+    // regardless of the random-walk headline fps below.
+    const DEMO_PROTOS: Record<string, number> = { STP: 0.5, CDP: 0.1, ICMP: 1.0 };
     this.statsTimer = setInterval(() => {
       for (const l of this.lab?.links ?? []) {
         if (!isBridged(l)) continue;
@@ -419,7 +423,12 @@ export class MockTransport implements Transport {
         const fps = Math.round((5 + Math.random() * 400) * 10) / 10;
         this.emit({
           event: "link.stats",
-          data: { link: l.id, fps, bps: Math.round(fps * (64 + Math.random() * 1400)) },
+          data: {
+            link: l.id,
+            fps,
+            bps: Math.round(fps * (64 + Math.random() * 1400)),
+            protos: DEMO_PROTOS,
+          },
         } as SupervisorEvent);
       }
     }, 2000);

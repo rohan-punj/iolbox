@@ -25,6 +25,15 @@ type udpRelay struct {
 	fwdFrames atomic.Uint64
 	fwdBytes  atomic.Uint64
 
+	// protoMu guards protoFrames, the cumulative per-protocol forwarded-frame
+	// counters that drive the per-proto fps breakdown in link.stats. It's a
+	// plain map under a mutex rather than atomics because the key set is
+	// discovered at runtime (one label per protocol seen). Kept in lockstep
+	// with fwdFrames: a datagram forwarded to N members counts N here too, so
+	// the per-proto counts sum to the total frame count.
+	protoMu     sync.Mutex
+	protoFrames map[string]uint64
+
 	closeOnce sync.Once
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -32,7 +41,7 @@ type udpRelay struct {
 
 // newRelay is the platform hook called by Manager.Start on Linux.
 func newRelay(cfg Config) (Relay, error) {
-	r := &udpRelay{cfg: cfg, done: make(chan struct{})}
+	r := &udpRelay{cfg: cfg, done: make(chan struct{}), protoFrames: make(map[string]uint64)}
 
 	for _, ep := range cfg.Endpoints {
 		host := ep.Host
@@ -93,6 +102,14 @@ func (r *udpRelay) pump(src int) {
 			r.tee.Broadcast(datagram)
 		}
 
+		// Classify once per received datagram (cheap fixed-offset byte peeks) so
+		// the per-proto breakdown can be attributed on the forward path. Doing
+		// it here (not per destination) keeps the work off the fan-out inner
+		// loop; the count is then added once per successful forward so per-proto
+		// totals track fwdFrames exactly.
+		proto := Classify(datagram)
+		fwd := 0
+
 		// Forward per relay kind. Count each datagram actually forwarded (once
 		// for P2P, once per destination member for a hub flood) so the stats
 		// reflect real per-link throughput in both directions.
@@ -104,6 +121,7 @@ func (r *udpRelay) pump(src int) {
 				if _, err := r.conns[src].WriteToUDP(datagram, r.remotes[dst]); err == nil {
 					r.fwdFrames.Add(1)
 					r.fwdBytes.Add(uint64(n))
+					fwd++
 				}
 			}
 		case KindHub:
@@ -115,8 +133,18 @@ func (r *udpRelay) pump(src int) {
 				if _, err := r.conns[src].WriteToUDP(datagram, r.remotes[dst]); err == nil {
 					r.fwdFrames.Add(1)
 					r.fwdBytes.Add(uint64(n))
+					fwd++
 				}
 			}
+		}
+
+		// Attribute the datagram to its protocol label once per forward that
+		// actually happened (fwd==0 when nothing was sent, e.g. a lone P2P
+		// endpoint), so the per-proto counts sum to fwdFrames.
+		if fwd > 0 {
+			r.protoMu.Lock()
+			r.protoFrames[proto] += uint64(fwd)
+			r.protoMu.Unlock()
 		}
 	}
 }
@@ -132,6 +160,20 @@ func (r *udpRelay) CapturePort() int {
 
 func (r *udpRelay) Stats() (frames, bytes uint64) {
 	return r.fwdFrames.Load(), r.fwdBytes.Load()
+}
+
+// ProtoStats returns a fresh copy of the cumulative per-protocol forwarded-frame
+// counters, keyed by the label Classify assigns. The copy lets the server diff
+// two snapshots without holding the relay's lock; nil is fine to return (and is
+// returned implicitly as an empty map here) when no traffic has been seen.
+func (r *udpRelay) ProtoStats() map[string]uint64 {
+	r.protoMu.Lock()
+	defer r.protoMu.Unlock()
+	out := make(map[string]uint64, len(r.protoFrames))
+	for k, v := range r.protoFrames {
+		out[k] = v
+	}
+	return out
 }
 
 func (r *udpRelay) Close() error {

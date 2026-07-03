@@ -272,6 +272,11 @@ type LinkStatsData struct {
 	Link int     `json:"link"`
 	FPS  float64 `json:"fps"`
 	BPS  uint64  `json:"bps"`
+	// Protos is the per-protocol frames/sec breakdown over the same interval,
+	// keyed by protocol label (ARP, TCP, OSPF, STP, CDP, ...). Only non-zero
+	// entries, capped to the top 6 by fps; omitted entirely (nil) when there is
+	// nothing to report. Each value is rounded to one decimal like FPS.
+	Protos map[string]float64 `json:"protos,omitempty"`
 }
 
 // HostStatsData is the host.stats event payload: the runtime VM's resource

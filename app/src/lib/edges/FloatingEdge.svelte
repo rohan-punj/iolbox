@@ -17,6 +17,7 @@
   } from "@xyflow/svelte";
   import { getEdgeParams } from "./floating";
   import { labStore } from "../labStore.svelte";
+  import { consoleUiStore } from "../consoleUiStore.svelte";
 
   let { id, source, target, selected, data }: EdgeProps = $props();
 
@@ -56,6 +57,36 @@
     return s;
   });
   const glowing = $derived(traffic !== null);
+
+  // Network Watcher (feature 3) — PNetLab-style per-link protocol chip. Reuses
+  // the same traffic sample + staleness window as the glow (a link with no
+  // recent link.stats has nothing to show), gated by the persisted view pref.
+  const watcherOn = $derived(consoleUiStore.watcher);
+  const WATCHER_COLORS: Record<string, string> = {
+    STP: "#d9a441",
+    CDP: "#4fb8a8",
+    LLDP: "#4fb8a8",
+    DTP: "#4fb8a8",
+    VTP: "#4fb8a8",
+    ARP: "#d9a441",
+    ICMP: "#c678dd",
+    ICMPv6: "#c678dd",
+    OSPF: "#56b6c2",
+    EIGRP: "#56b6c2",
+    TCP: "#61afef",
+    UDP: "#98c379",
+  };
+  function protoColor(name: string): string {
+    return WATCHER_COLORS[name] ?? "#9aa0aa";
+  }
+  // Top 3 protocols by fps, for the chip's dot+label list.
+  const topProtos = $derived.by(() => {
+    if (!traffic?.protos) return [];
+    return Object.entries(traffic.protos)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([name]) => name);
+  });
   // Intensity 0..1 scaled by log(fps), clamped. ~1 fps → dim, ~1000 fps → full.
   const glowIntensity = $derived.by(() => {
     if (!traffic) return 0;
@@ -159,11 +190,16 @@
     const tu = 0.78 + tShift;
     const sPt = at(su);
     const tPt = at(tu);
+    // Watcher chip rides the curve midpoint (t=0.5), same on-curve idiom as the
+    // port chips — its own curve already separates it from parallel siblings,
+    // so no extra perpendicular nudge is needed here either.
+    const wPt = at(0.5);
     return {
       path,
       // Perpendicular offset 0 → chip centered over the path.
       sChip: { x: sPt.x, y: sPt.y },
       tChip: { x: tPt.x, y: tPt.y },
+      watcherChip: { x: wPt.x, y: wPt.y },
       // origin inside each chip pointing back at its own node
       sOrigin: dx >= 0 ? "left" : "right",
       tOrigin: dx >= 0 ? "right" : "left",
@@ -229,6 +265,19 @@
         role="presentation"
       >
         <span class="chip-detail">{info.target.name}</span><span class="chip-sep">&nbsp;</span>{info.target.iface}
+      </span>
+    </EdgeLabel>
+  {/if}
+
+  {#if watcherOn && traffic}
+    <EdgeLabel x={geom.watcherChip.x} y={geom.watcherChip.y} class="watcher-chip-slot">
+      <span class="watcher-chip">
+        <span class="watcher-fps">{Math.round(traffic.fps)} pps</span>
+        {#each topProtos as name (name)}
+          <span class="watcher-proto">
+            <span class="watcher-dot" style:background={protoColor(name)}></span>{name}
+          </span>
+        {/each}
       </span>
     </EdgeLabel>
   {/if}
@@ -317,6 +366,44 @@
     background: transparent;
     padding: 0;
     overflow: visible;
+  }
+  /* Network Watcher chip (feature 3) — small, non-interactive, sits at the
+     curve midpoint below the port chips visually (lower z, no hover pop). */
+  :global(.svelte-flow__edge-label.watcher-chip-slot) {
+    background: transparent;
+    padding: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .watcher-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--ink-2);
+    background: var(--panel-2, var(--ground));
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 2px 5px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .watcher-fps {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .watcher-proto {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .watcher-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
   }
   /* R2 — when this edge is hovered, raise BOTH its chips above every sibling
      edge's chips so an overlapping background link can't cover the hovered

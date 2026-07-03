@@ -148,12 +148,19 @@ Full snapshot.
 - `node.console` `{node,consolePort}` — console became reachable
 - `link.up` / `link.down` `{link}`
 - `capture.started` / `capture.stopped` `{link,capturePort}`
-- `link.stats` `{link,fps,bps}` — per-link forwarded throughput over the last 2s
-  sampling interval: `fps` is frames/sec forwarded (float, one decimal), `bps`
-  is bytes/sec forwarded, both summed across directions (and hub fan-out).
-  Emitted at most every 2s and ONLY for a link that forwarded traffic during the
-  interval (idle links stay silent), so the GUI can drive traffic-based link
-  glow directly off these events. Only **bridged** links (VPCS, segment,
+- `link.stats` `{link,fps,bps,protos?}` — per-link forwarded throughput over the
+  last 2s sampling interval: `fps` is frames/sec forwarded (float, one decimal),
+  `bps` is bytes/sec forwarded, both summed across directions (and hub fan-out).
+  `protos` is an optional `{label: fps}` map giving the per-protocol frames/sec
+  breakdown over the same interval — only non-zero entries, capped to the **top 6**
+  by fps, each rounded to one decimal like `fps`; the field is omitted entirely
+  when there is nothing to report. Labels come from a cheap byte-peek classifier
+  on the relay forward path: `ARP`, `IPv4`, `IPv6`, `TCP`, `UDP`, `ICMP`,
+  `ICMPv6`, `IGMP`, `GRE`, `OSPF`, `EIGRP`, `PIM`, `VRRP`, `MPLS`, `LLDP`, `LOOP`,
+  `STP`, `CDP`, `DTP`, `VTP`, `LLC`, `OTHER`, or `0xNNNN` for an unrecognised
+  ethertype. Emitted at most every 2s and ONLY for a link that forwarded traffic
+  during the interval (idle links stay silent), so the GUI can drive traffic-based
+  link glow directly off these events. Only **bridged** links (VPCS, segment,
   captured, cross-host) have a relay and therefore stats; native same-host
   IOL↔IOL links carry traffic via the whole-lab NETMAP with no relay and produce
   no `link.stats` events.

@@ -63,10 +63,13 @@ export interface LogEvent {
   data: { level: "debug" | "info" | "warn" | "error"; message: string; node?: number };
 }
 /** Per-link forwarded throughput over the last ~2s. Bridged (relay-backed)
- *  links only — native IOL↔IOL links never emit this (see docs/protocol.md). */
+ *  links only — native IOL↔IOL links never emit this (see docs/protocol.md).
+ *  `protos` (Network Watcher) is a frames-per-second breakdown by protocol
+ *  label (e.g. "STP", "CDP", "ICMP", "OSPF", "TCP"); non-zero entries only,
+ *  capped at 6 by the sender — optional so older supervisors keep working. */
 export interface LinkStatsEvent {
   event: "link.stats";
-  data: { link: number; fps: number; bps: number };
+  data: { link: number; fps: number; bps: number; protos?: Record<string, number> };
 }
 /** Runtime VM resource utilisation, pushed every ~2s for the host monitor. */
 export interface HostStatsEvent {

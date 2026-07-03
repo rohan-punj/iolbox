@@ -29,6 +29,10 @@
       (n) => n.kind === "iol" && labStore.nodeStates[n.id] === "running"
     )
   );
+  // "Console all" — any node (not just IOL) can have a console.
+  const hasRunningNode = $derived(
+    labStore.lab.nodes.some((n) => labStore.nodeStates[n.id] === "running")
+  );
 
   async function startAll() {
     await labStore.startLab();
@@ -42,6 +46,9 @@
   }
   async function forceClean() {
     await labStore.forceClean();
+  }
+  function consoleAll() {
+    labStore.openAllConsoles();
   }
   async function saveConfigs() {
     await labStore.saveAllConfigs();
@@ -89,6 +96,14 @@
       onclick={forceClean}
       title="Force-stop every node, relay and capture on the runtime — clears orphaned processes when nodes still show running or host CPU stays high after a normal stop."
     >Force clean</button>
+    <button
+      class="btn lab-btn"
+      onclick={consoleAll}
+      disabled={!hasRunningNode}
+      title={hasRunningNode
+        ? "Open a console for every running node, honouring the Web/Native mode below"
+        : "No running nodes — start the lab first"}
+    >Console all</button>
   </div>
 
   <label
@@ -127,6 +142,19 @@
       onclick={() => consoleUiStore.setConsoleMode("native")}
     >Native</button>
   </div>
+
+  <div class="section-title">View</div>
+  <label
+    class="lab-opt"
+    title="Network Watcher — show a small per-link chip with live packets/sec and top protocols (PNetLab-style), read off link.stats"
+  >
+    <input
+      type="checkbox"
+      checked={consoleUiStore.watcher}
+      onchange={(e) => consoleUiStore.setWatcher((e.currentTarget as HTMLInputElement).checked)}
+    />
+    <span>Network watcher</span>
+  </label>
 
   <div class="section-title">Nodes</div>
 

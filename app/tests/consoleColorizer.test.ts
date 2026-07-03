@@ -44,6 +44,43 @@ test("colorizeLine: ESC-bearing lines untouched", () => {
   assert.equal(colorizeLine(line), line);
 });
 
+test("colorizeLine: prompt PREFIX only is cyan, command/body stays plain (bug1)", () => {
+  // Root cause of the "show run body renders cyan" bug: PROMPT_RE was unanchored,
+  // so a whole line beginning with a prompt token went cyan — including command
+  // echo AND config-body text that merged onto a held prompt tail. Fix colors
+  // only the prompt prefix.
+  assert.equal(colorizeLine("R1#do sh run"), `${CYAN_BOLD}R1#${RESET}do sh run`);
+  // A synthetic merged line as produced when a held prompt tail ("…\r\nR1#")
+  // meets the first config-body fragment in the next chunk (real IOL framing):
+  assert.equal(colorizeLine("R1#version 17.18"), `${CYAN_BOLD}R1#${RESET}version 17.18`);
+  // Bare prompt still fully cyan.
+  assert.equal(colorizeLine("R1(config)#"), `${CYAN_BOLD}R1(config)#${RESET}`);
+  // Rest-of-line still gets its own rules (IP tinted) — no double-cyan.
+  const got = colorizeLine("R1#show ip route 10.0.0.1");
+  assert.ok(got.startsWith(`${CYAN_BOLD}R1#${RESET}`), "prompt prefix cyan");
+  assert.ok(got.includes(`${ESC}38;5;75m10.0.0.1${RESET}`), "IP in command still blue");
+  assert.ok(!got.slice(`${CYAN_BOLD}R1#${RESET}`.length).includes(CYAN_BOLD), "no cyan after prompt");
+});
+
+test("bug1 regression: held prompt tail merging with bulk config body — body NOT cyan", async () => {
+  // Reproduces the exact wire behavior traced against IOL 17.18.02: the prompt
+  // arrives as an unterminated tail and is HELD; a fast config dump follows in
+  // the next chunk, merging "R1#" onto the first body line. Body lines must NOT
+  // be cyan (only the prompt token may be).
+  const h = harness();
+  h.c.push("\r\nR1#"); // prompt tail — held for the flush window
+  // config dump arrives before the window elapses (bulk output), merging on:
+  h.c.push("version 17.18\r\n!\r\nservice timestamps debug\r\nhostname R1\r\nboot-start-marker\r\n");
+  const got = h.text();
+  // The merged first line: prompt cyan, "version 17.18" plain.
+  assert.ok(got.includes(`${CYAN_BOLD}R1#${RESET}version 17.18`), "prompt-only cyan on merged line");
+  // No config-body line is wholesale cyan.
+  for (const body of ["version 17.18", "service timestamps debug", "hostname R1", "boot-start-marker"]) {
+    assert.ok(!got.includes(`${CYAN_BOLD}${body}`), `"${body}" must not be cyan-wrapped`);
+  }
+  await h.settle();
+});
+
 // ---- streaming transformer ----
 
 test("bulk multi-line chunk: every complete line colorized", () => {

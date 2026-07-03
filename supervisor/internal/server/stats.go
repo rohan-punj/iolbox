@@ -4,10 +4,16 @@ import (
 	"context"
 	"math"
 	"runtime"
+	"sort"
 	"time"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
 )
+
+// maxProtos caps how many per-protocol entries a link.stats event carries: the
+// top few by fps are enough to drive the GUI's traffic breakdown without the
+// event ballooning when a link briefly touches many protocols.
+const maxProtos = 6
 
 // statsInterval is how often the server samples per-link relay counters and
 // emits link.stats events. 2s balances responsive traffic-driven link glow in
@@ -33,8 +39,13 @@ func (s *Server) statsLoop(ctx context.Context) {
 	ticker := time.NewTicker(statsInterval)
 	defer ticker.Stop()
 
-	// last holds the previous tick's cumulative frame/byte counts per link.
-	type sample struct{ frames, bytes uint64 }
+	// last holds the previous tick's cumulative frame/byte counts per link,
+	// plus the per-proto cumulative counts so the next tick can diff them into
+	// per-proto fps. protos is nil until a link reports any protocol traffic.
+	type sample struct {
+		frames, bytes uint64
+		protos        map[string]uint64
+	}
 	last := make(map[int]sample)
 
 	// Host resource monitor: sample the runtime VM's CPU/RAM/disk each tick and
@@ -70,12 +81,15 @@ func (s *Server) statsLoop(ctx context.Context) {
 			}
 			for id, st := range cur {
 				prev := last[id]
-				last[id] = sample{frames: st.Frames, bytes: st.Bytes}
+				last[id] = sample{frames: st.Frames, bytes: st.Bytes, protos: st.Protos}
 				fps, bps, emit := linkRate(prev.frames, prev.bytes, st.Frames, st.Bytes, statsInterval)
 				if !emit {
 					continue
 				}
-				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps})
+				// Derive the per-proto breakdown over the same interval and
+				// baseline (a link-wide counter reset re-baselines protos too).
+				protos := protoRates(prev.protos, st.Protos, statsInterval)
+				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos})
 			}
 		}
 	}
@@ -101,4 +115,53 @@ func linkRate(prevFrames, prevBytes, curFrames, curBytes uint64, interval time.D
 	fps = math.Round(float64(dFrames)/secs*10) / 10
 	bps = uint64(float64(dBytes) / secs)
 	return fps, bps, true
+}
+
+// protoRates diffs two cumulative per-protocol snapshots into per-second rates
+// over the interval, returning only the non-zero entries capped to the top
+// maxProtos by fps (ties broken by label for a stable order). Each rate is
+// rounded to one decimal to match linkRate's fps. A protocol whose counter went
+// backwards (relay restarted) is skipped for this tick and re-baselined by the
+// caller storing cur. Returns nil when there's nothing to report so the field
+// is omitted from the event entirely.
+func protoRates(prev, cur map[string]uint64, interval time.Duration) map[string]float64 {
+	if len(cur) == 0 {
+		return nil
+	}
+	secs := interval.Seconds()
+	type entry struct {
+		label string
+		fps   float64
+	}
+	entries := make([]entry, 0, len(cur))
+	for label, c := range cur {
+		p := prev[label] // 0 if unseen last tick
+		if c < p {
+			continue // counter reset; re-baseline silently
+		}
+		d := c - p
+		if d == 0 {
+			continue
+		}
+		entries = append(entries, entry{label, math.Round(float64(d)/secs*10) / 10})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	// Sort by fps desc, then label asc, so the top-N cut and map contents are
+	// deterministic across ticks with identical traffic.
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].fps != entries[j].fps {
+			return entries[i].fps > entries[j].fps
+		}
+		return entries[i].label < entries[j].label
+	})
+	if len(entries) > maxProtos {
+		entries = entries[:maxProtos]
+	}
+	out := make(map[string]float64, len(entries))
+	for _, e := range entries {
+		out[e.label] = e.fps
+	}
+	return out
 }

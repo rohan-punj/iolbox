@@ -707,17 +707,22 @@
         action: () => labStore.openCapture(menu.linkId),
       },
       {
-        label: capturing ? "Stop capture" : "Capture in Wireshark",
+        label: capturing ? "Stop capture" : "Capture in Wireshark…",
         action: () => {
-          const l = labStore.lab.links.find((x) => x.id === menu.linkId);
-          if (!l) return;
           if (capturing) {
+            const l = labStore.lab.links.find((x) => x.id === menu.linkId);
+            if (!l) return;
             l.capture = { enabled: false };
             void labStore.client.captureStop(labStore.lab.id, l.id);
-          } else {
-            l.capture = { enabled: true, mode: "live" };
-            void labStore.client.captureStart(labStore.lab.id, l.id);
+            return;
           }
+          // A browser can't launch wireshark.exe directly — the product answer
+          // is the capture tab's own "Open in Wireshark" overlay (Save .pcapng
+          // + live-attach command). openCapture() starts the tee; the
+          // wiresharkOverlayFor signal asks Console.svelte to jump straight to
+          // that overlay instead of the plain live-summary tab.
+          labStore.openCapture(menu.linkId);
+          labStore.wiresharkOverlayFor = menu.linkId;
         },
       },
       {

@@ -49,7 +49,23 @@ const BLUE = `${ESC}38;5;75m`; // IP addresses (subtle blue, 256-color)
 
 // IOS prompt: hostname, optional (config-if) style submode, then > or #.
 // e.g. "Router>", "R1#", "R1(config)#", "SW1(config-if)#", "R1(config-router-af)#".
-const PROMPT_RE = /^[\w.-]+(\([\w-]+\))?[>#]/;
+//
+// ROOT CAUSE of the "whole config body renders cyan" bug (repro'd against real
+// IOL 17.18.02 at the console; trace evidence in the test below): this regex is
+// UNANCHORED at the tail, so it matches any line that merely STARTS with a
+// prompt token. Two ways that bites in a live stream:
+//   1. A complete echo line "R1#do sh run" — the command text is not part of the
+//      prompt, yet the old code wrapped the ENTIRE line (prompt + command) cyan.
+//   2. Worse: the IOS prompt always arrives as an unterminated tail ("…\r\nR1#")
+//      that we HOLD. When bulk output follows fast (config dump), the next chunk
+//      merges onto that held tail, so colorizeLine sees a synthetic line like
+//      "R1#version 17.18" (prompt token + config body). PROMPT_RE matched, so the
+//      whole body line went cyan-bold — exactly the screenshot symptom. Body
+//      lines starting with "!" or "service " never merged onto a prompt token, so
+//      they stayed plain, which is why the coloring looked so arbitrary.
+// FIX: capture the prompt PREFIX with an anchored group and color ONLY that
+// prefix, leaving any command/body text after the >/# untouched (see colorizeLine).
+const PROMPT_RE = /^[\w.-]+(?:\([\w-]+\))?[>#]/;
 
 // A held TAIL that is exactly a prompt (nothing after the > or #). Anchored
 // both ends, unlike PROMPT_RE: a tail like "R1#sh" is a prompt + typed echo and
@@ -82,10 +98,16 @@ export function colorizeLine(line: string): string {
   if (line.includes("\x1b")) return line;
   if (line.length === 0) return line;
 
-  // Prompt line (highest priority; typically short, e.g. "R1(config-if)#"): make
-  // the whole prompt cyan-bold so the eye finds command boundaries fast.
-  if (PROMPT_RE.test(line)) {
-    return `${CYAN_BOLD}${line}${RESET}`;
+  // Prompt line (highest priority): color ONLY the prompt prefix cyan-bold, not
+  // any command/body text that follows the >/#. Coloring the whole line was the
+  // bug (see PROMPT_RE comment): "R1#do sh run" or a merged "R1#version 17.18"
+  // used to go entirely cyan. Anything after the prompt keeps its own rules
+  // (recursively colorized so e.g. "R1#show ip route  10.0.0.1" still tints IPs).
+  const pm = PROMPT_RE.exec(line);
+  if (pm) {
+    const prompt = pm[0];
+    const rest = line.slice(prompt.length);
+    return `${CYAN_BOLD}${prompt}${RESET}` + (rest ? colorizeLine(rest) : "");
   }
 
   // %-notice/error/warning: tint the whole line yellow-orange.

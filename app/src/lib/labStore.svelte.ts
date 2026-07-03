@@ -55,8 +55,9 @@ class LabStore {
    *  Drives feature-gated palette entries. */
   features = $state<string[]>([]);
   /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
-   *  these to drive the traffic glow; entries older than ~5s are treated stale. */
-  linkStats = $state<Record<number, { fps: number; bps: number; ts: number }>>({});
+   *  these to drive the traffic glow; entries older than ~5s are treated stale.
+   *  `protos` (Network Watcher) is the optional per-protocol fps breakdown. */
+  linkStats = $state<Record<number, { fps: number; bps: number; ts: number; protos?: Record<string, number> }>>({});
   /** Latest runtime-VM resource sample (host.stats), or null until the first
    *  event. Drives the left-pane host monitor. */
   hostStats = $state<{
@@ -78,6 +79,12 @@ class LabStore {
    *  Wireshark flip (wireshark -k -i TCP@<host>:<port>) and capture-tab
    *  reconnects; entries clear on capture.stopped / lab switch. */
   capturePorts = $state<Record<number, number>>({});
+  /** Transient signal (feature: link-menu "Capture in Wireshark…"): set to a
+   *  link id to ask Console.svelte to select that capture tab and flip it
+   *  straight to the native-Wireshark overlay. Console.svelte resets this to
+   *  null once it has acted on it — it is a one-shot request, not state to
+   *  read back. */
+  wiresharkOverlayFor = $state<number | null>(null);
   /** Ids of docs previously saved to the durable store — gates autosave (only
    *  autosave a lab the user has explicitly saved at least once). */
   private savedDocIds = new Set<string>();
@@ -251,7 +258,12 @@ class LabStore {
         // receive timestamp so FloatingEdge can expire stale glow.
         this.linkStats = {
           ...this.linkStats,
-          [evt.data.link]: { fps: evt.data.fps, bps: evt.data.bps, ts: Date.now() },
+          [evt.data.link]: {
+            fps: evt.data.fps,
+            bps: evt.data.bps,
+            ts: Date.now(),
+            protos: evt.data.protos,
+          },
         };
         break;
       case "host.stats":
@@ -660,6 +672,19 @@ class LabStore {
   openConsoleByMode(nodeId: number) {
     if (consoleUiStore.consoleMode === "native") this.openNativeConsole(nodeId);
     else this.openConsole(nodeId);
+  }
+
+  /** "Console all" (left pane): open a console for every currently-running node,
+   *  honouring the global console mode. In native mode this fires one
+   *  telnet:// anchor click per node — browsers throttle a burst of
+   *  programmatic external-protocol launches from a single click handler, so
+   *  the clicks are staggered ~300ms apart instead of firing synchronously. */
+  openAllConsoles() {
+    const ids = this.lab.nodes.filter((n) => this.nodeStates[n.id] === "running").map((n) => n.id);
+    ids.forEach((id, i) => {
+      if (i === 0) this.openConsoleByMode(id);
+      else setTimeout(() => this.openConsoleByMode(id), i * 300);
+    });
   }
 
   closeConsole(nodeId: number) {

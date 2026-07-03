@@ -54,6 +54,12 @@ type Relay interface {
 	// server polls these on a ticker to derive per-link throughput without the
 	// relay package importing server. Monotonic; safe for concurrent reads.
 	Stats() (frames, bytes uint64)
+	// ProtoStats returns cumulative per-protocol forwarded-frame counters keyed
+	// by protocol label (see Classify), a fresh copy safe to keep and diff. The
+	// server diffs two snapshots per interval to derive per-proto fps for the
+	// link.stats breakdown. Counts sum to the frames returned by Stats. May be
+	// nil/empty when no traffic has been forwarded yet.
+	ProtoStats() map[string]uint64
 	Close() error
 }
 
@@ -101,6 +107,10 @@ type LinkStats struct {
 	LinkID int
 	Frames uint64
 	Bytes  uint64
+	// Protos is the cumulative per-protocol forwarded-frame count keyed by
+	// protocol label (see Classify). nil/empty when no traffic yet. The server
+	// diffs consecutive snapshots to derive per-proto fps.
+	Protos map[string]uint64
 }
 
 // Stats snapshots the cumulative forwarded counters of every active relay,
@@ -117,7 +127,7 @@ func (m *Manager) Stats() map[int]LinkStats {
 	out := make(map[int]LinkStats, len(relays))
 	for _, r := range relays {
 		frames, bytes := r.Stats()
-		out[r.LinkID()] = LinkStats{LinkID: r.LinkID(), Frames: frames, Bytes: bytes}
+		out[r.LinkID()] = LinkStats{LinkID: r.LinkID(), Frames: frames, Bytes: bytes, Protos: r.ProtoStats()}
 	}
 	return out
 }

@@ -34,6 +34,14 @@
     ICMP: `${ESC}38;5;213m`, // magenta
     ICMPv6: `${ESC}38;5;213m`,
     ARP: `${ESC}38;5;179m`, // amber
+    STP: `${ESC}38;5;179m`, // amber (like ARP — L2 control)
+    CDP: `${ESC}38;5;73m`, // teal (discovery/negotiation family)
+    LLDP: `${ESC}38;5;73m`,
+    DTP: `${ESC}38;5;73m`,
+    VTP: `${ESC}38;5;73m`,
+    LOOP: `${ESC}38;5;240m`, // dim grey (keepalive noise)
+    LLC: `${ESC}38;5;244m`, // grey
+    SNAP: `${ESC}38;5;244m`,
     IPv4: `${ESC}38;5;250m`,
     IPv6: `${ESC}38;5;250m`,
     OSPF: `${ESC}38;5;80m`,
