@@ -120,10 +120,30 @@ func Start(cfg Config) (*Endpoint, error) {
 	// device is fine.
 	e.runTeardown()
 
+	// setupWithRetry runs the privileged setup, and on failure re-runs the
+	// best-effort preclean and tries ONCE more after a short pause. This makes
+	// endpoint start self-healing against stale kernel state a single preclean
+	// can't clear in one pass — e.g. a leftover device whose fd was still held
+	// when the preclean's `ip ... del` ran (EBUSY), making the subsequent
+	// `ip ... add` fail with "File exists". Observed after hard-killed
+	// supervisors; by the retry the old holder is gone and the delete lands.
+	setupWithRetry := func(setup []cmd) error {
+		err := runCmds(setup)
+		if err == nil {
+			return nil
+		}
+		e.runTeardown()
+		time.Sleep(750 * time.Millisecond)
+		if rerr := runCmds(setup); rerr == nil {
+			return nil
+		}
+		return err // report the FIRST failure — it names the real obstacle
+	}
+
 	switch cfg.Kind {
 	case KindNAT:
 		sub := Subnet{Index: cfg.SubnetIndex}
-		if err := runCmds(natSetupCmds(dev, sub, cfg.DefaultIface, owner)); err != nil {
+		if err := setupWithRetry(natSetupCmds(dev, sub, cfg.DefaultIface, owner)); err != nil {
 			return nil, err
 		}
 		tap, oerr := openTap(dev)
@@ -134,7 +154,7 @@ func Start(cfg Config) (*Endpoint, error) {
 		e.tap = tap
 		e.dhcp = newDHCPServer(net.ParseIP(sub.GatewayIP()), sub)
 	case KindMgmt:
-		if err := runCmds(mgmtSetupCmds(dev, cfg.MgmtIface)); err != nil {
+		if err := setupWithRetry(mgmtSetupCmds(dev, cfg.MgmtIface)); err != nil {
 			return nil, err
 		}
 		tap, oerr := openMacvtap(dev, owner)
