@@ -56,15 +56,23 @@
       // Real supervisor: pipe xterm <-> ws(s)://<host>/console/<nodeId>
       // (binary frames; see consoleTransport.ts / wsbridge.go).
       const decoder = new TextDecoder();
-      const colorizer = new ConsoleColorizer();
+      // v2 colorizer emits through a sink (it may hold an incomplete line tail
+      // for ~one frame — see consoleColorizer.ts); everything lands in term.
+      const colorizer = new ConsoleColorizer((s) => term?.write(s));
       const rc = new ConsoleTransport(nodeId, {
         onData: (bytes) => {
           const text = decoder.decode(bytes, { stream: true });
-          // Colorize completed lines only (chunk-safe); passthrough when the
-          // user has disabled highlighting. See consoleColorizer.ts.
-          term?.write(consoleUiStore.colorize ? colorizer.push(text) : text);
+          if (consoleUiStore.colorize) {
+            colorizer.push(text);
+          } else {
+            // Toggled off mid-stream: release anything still held FIRST so
+            // byte order is preserved, then write raw.
+            colorizer.flushHeld();
+            term?.write(text);
+          }
         },
         onOpen: () => {
+          colorizer.reset(); // fresh stream (reconnects replay recent context)
           if (fit) rc.sendResize(term?.cols ?? 80, term?.rows ?? 24);
         },
         onError: () => labStore.pushLog("error", `console ws error for node ${nodeId}`, nodeId),

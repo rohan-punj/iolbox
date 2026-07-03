@@ -1,43 +1,41 @@
 // IOS console color highlighter — a stream transformer applied to node->browser
 // bytes before xterm.write, mirroring the user's PNetLab webconsole colorizer.
 //
-// CORRECTNESS is the whole game here, and the #1 rule is PASS-THROUGH LATENCY:
-// every byte that arrives is forwarded to xterm IN THE SAME push() call it
-// arrived in. Nothing is ever held back. This is what keeps interactive echo
-// instant — the user types, IOS echoes a char, and that char lands on screen in
-// the same frame, on the current row, with the cursor exactly where it should be.
+// WHY v2: live WS-frame evidence against real IOL (17.18.02 over the
+// pty→telnet→wsbridge chain) showed the v1 assumption — "bulk output delivers
+// whole lines inside one chunk" — is simply false in practice. Lines routinely
+// split mid-word across frames (one frame even carried a single byte of a
+// word), and the IOS prompt ALWAYS arrives as an unterminated tail ("\r\nR1>",
+// no trailing newline). v1 colorized a line only when its terminator arrived in
+// the same chunk as its start, so in real sessions essentially NOTHING was
+// colorized (and prompts never could be). v2 fixes both while keeping
+// interactive echo effectively instant:
 //
-// Colorization is a *best-effort overlay* that only fires when it can be done
-// without adding a single byte of latency:
+//   - Complete lines are colorized whenever NO part of the line was already
+//     emitted raw (`emittedInLine === 0`) — even if the line's bytes arrived
+//     across several chunks, because the incomplete tail is briefly HELD.
+//   - The incomplete tail of the current line is held back for a very short
+//     flush window (flushDelayMs ≈ 16ms — about one display frame). If the rest
+//     of the line arrives in that window, the whole line colorizes; if not, the
+//     tail is flushed. A prompt-shaped tail ("R1#", "SW1(config-if)#") is
+//     colorized ON FLUSH — the only chance a prompt ever gets, since it never
+//     receives a terminator.
+//   - INTERACTIVE ECHO IS NEVER DELAYED: a tiny chunk (≤ 3 bytes, no newline)
+//     arriving while nothing is held — the shape of per-keystroke echo, seen as
+//     1-byte frames on the wire — is forwarded raw synchronously in the same
+//     push() call.
+//   - Once any part of a line has gone out raw, the rest of that line is
+//     forwarded raw immediately (never recolored, never held).
+//   - A tail containing ESC is never held or rewritten (cursor moves, colored
+//     banners — corrupting those is worse than not coloring). Complete lines
+//     containing ESC pass through colorizeLine untouched as before.
 //
-//   - We track how many bytes of the CURRENT (still-unterminated) line have
-//     already been emitted raw this session (`emittedInLine`). When a chunk
-//     contains the line's terminating \n we may colorize ONLY IF
-//     `emittedInLine === 0` — i.e. the whole line arrived complete inside this
-//     one chunk (bulk output like `show run` streaming in full lines). To
-//     "recolor" we emit a carriage return + the colorized line, overwriting the
-//     raw copy we would otherwise have emitted; but since emittedInLine===0 we
-//     haven't emitted any of it yet, so we simply emit the colored form instead
-//     of the raw form. No overwrite, no flicker, no latency.
-//   - If ANY of the line was already passed through raw (emittedInLine > 0), the
-//     line is an interactive/streamed-mid-line case: we emit the remaining bytes
-//     RAW and never recolor. Typed lines therefore never get recolored — correct
-//     and expected.
-//   - Lines that contain an ESC pass through untouched (cursor moves, colored
-//     banners, NAWS chatter — never corrupt them).
+// Byte ordering is inviolable: held bytes are always emitted before any bytes
+// from a later chunk, and terminators ("\n", "\r\n") are preserved exactly.
 //
-// EQUIVALENCE (the property the tests pin down):
-//   - Feed a chunk of whole lines ("foo\nbar\n") in one push and each complete
-//     line is colorized.
-//   - Feed the SAME text one byte at a time and every byte is returned
-//     immediately and RAW (byte-for-byte identical input→output, zero added
-//     latency), with no color — because each line's \n arrives in a push where
-//     emittedInLine > 0.
-//   Both render identically in the terminal apart from the SGR codes.
-//
-// The transformer is a tiny stateful object (one per console tab) rather than a
-// pure fn because it must remember `emittedInLine` across chunks. The per-line
-// decision (`colorizeLine`) is a pure function, exported for testing.
+// The transformer emits through a SINK callback (not a return value) because
+// the flush window makes emission asynchronous. One instance per console tab;
+// the per-line decision (`colorizeLine`) stays a pure exported function.
 
 // SGR helpers — foreground colors + reset. Kept as plain strings so a colorized
 // line is just `code + text + RESET` and the terminal state is always restored.
@@ -52,6 +50,11 @@ const BLUE = `${ESC}38;5;75m`; // IP addresses (subtle blue, 256-color)
 // IOS prompt: hostname, optional (config-if) style submode, then > or #.
 // e.g. "Router>", "R1#", "R1(config)#", "SW1(config-if)#", "R1(config-router-af)#".
 const PROMPT_RE = /^[\w.-]+(\([\w-]+\))?[>#]/;
+
+// A held TAIL that is exactly a prompt (nothing after the > or #). Anchored
+// both ends, unlike PROMPT_RE: a tail like "R1#sh" is a prompt + typed echo and
+// must NOT be wholesale-colored on flush.
+const PROMPT_TAIL_RE = /^[\w.-]+(\([\w-]+\))?[>#] ?$/;
 
 // A %-prefixed IOS notice/error/warning line (leading whitespace tolerated).
 const PERCENT_RE = /^\s*%/;
@@ -101,72 +104,136 @@ export function colorizeLine(line: string): string {
   return out;
 }
 
+/** Bytes emitted by the colorizer, in order. */
+export type ColorizerSink = (text: string) => void;
+
+/** Chunks at or below this size (with no newline, nothing held) are treated as
+ *  interactive echo and forwarded raw synchronously. On the wire, per-keystroke
+ *  echo is a 1-byte frame; 3 covers backspace ("\b \b") too. */
+const ECHO_CHUNK_MAX = 3;
+
+/** How long an incomplete line tail is held before being flushed raw (or
+ *  prompt-colorized) — about one display frame, imperceptible on echo. */
+const DEFAULT_FLUSH_MS = 16;
+
 /**
- * Stateful, pass-through-immediately colorizing transformer. One instance per
- * console tab. Feed it each decoded string chunk; it returns the string to hand
- * to xterm.write. EVERY input byte is forwarded within the same call — nothing
- * is buffered/held back. A completed line is colorized ONLY when the whole line
- * arrived inside a single chunk (no part of it was emitted raw first); otherwise
- * the bytes go through raw so interactive echo is never delayed or recolored.
+ * Stateful colorizing transformer. One instance per console tab. Feed it each
+ * decoded string chunk via push(); it emits transformed output through the sink
+ * — synchronously for everything except an incomplete line tail, which is held
+ * for at most flushDelayMs (see the header comment for the full rules).
  */
 export class ConsoleColorizer {
-  /**
-   * How many raw bytes of the current (still-unterminated) line have already
-   * been forwarded to xterm. 0 means "nothing of this line has been shown yet",
-   * which is the only condition under which we're allowed to colorize the line
-   * when its terminator arrives.
-   */
+  /** Raw bytes of the CURRENT line already emitted (0 = line untouched, so it
+   *  may still be colorized when it completes). */
   private emittedInLine = 0;
+  /** Held (not yet emitted) tail of the current line. Always emitted BEFORE any
+   *  later chunk's bytes — ordering is inviolable. */
+  private held = "";
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private sink: ColorizerSink;
+  private flushDelayMs: number;
 
-  /**
-   * Transform one chunk, forwarding every byte immediately. Preserves every
-   * terminator exactly ("\n" and "\r\n" both survive), so xterm's convertEol /
-   * cursor behavior is unchanged; only fully-in-this-chunk lines are wrapped in
-   * SGR codes.
-   */
-  push(chunk: string): string {
-    if (chunk.length === 0) return "";
-    let out = "";
-    let segStart = 0; // start of the not-yet-emitted run within `chunk`
-    let i = 0;
-    while (i < chunk.length) {
-      if (chunk[i] === "\n") {
-        // The line terminates here. The portion of this line living in THIS
-        // chunk is chunk[segStart..i) (the terminator is at i). Whether we may
-        // colorize depends on emittedInLine: if 0, the entire line is in hand.
-        const seg = chunk.slice(segStart, i); // this-chunk part of the line, no \n
-        const canColorize = this.emittedInLine === 0;
-        if (canColorize) {
-          // Whole line is in `seg`. Strip a trailing \r so colorizeLine sees the
-          // bare body, then re-attach the exact terminator we found.
-          const hasCr = seg.endsWith("\r");
-          const body = hasCr ? seg.slice(0, -1) : seg;
-          out += colorizeLine(body) + (hasCr ? "\r\n" : "\n");
-        } else {
-          // Part of this line already went out raw earlier — emit the remaining
-          // bytes (this-chunk tail + terminator) raw and DO NOT recolor.
-          out += seg + "\n";
-        }
-        this.emittedInLine = 0; // next line starts fresh
-        i++;
-        segStart = i;
-        continue;
-      }
-      i++;
-    }
-    // Trailing bytes after the last \n are an incomplete line: forward them raw
-    // NOW (never buffered) and remember we've shown that many bytes of it, so the
-    // line can't be recolored when its terminator arrives in a later chunk.
-    if (segStart < chunk.length) {
-      const rest = chunk.slice(segStart);
-      out += rest;
-      this.emittedInLine += rest.length;
-    }
-    return out;
+  // NOTE: plain field assignment, not TS parameter properties — the node test
+  // runner type-strips this file and parameter properties aren't erasable.
+  constructor(sink: ColorizerSink, flushDelayMs: number = DEFAULT_FLUSH_MS) {
+    this.sink = sink;
+    this.flushDelayMs = flushDelayMs;
   }
 
-  /** Drop buffered state (e.g. on reconnect). */
+  /** Transform one chunk. Emits through the sink (usually synchronously within
+   *  this call; an incomplete tail may follow up to flushDelayMs later). */
+  push(chunk: string): void {
+    if (chunk.length === 0) return;
+
+    // Interactive echo fast path: tiny newline-less chunk, nothing held —
+    // forward raw in the same call. The line is now "dirty" (partially shown),
+    // so it can never be recolored.
+    if (
+      this.held === "" &&
+      chunk.length <= ECHO_CHUNK_MAX &&
+      !chunk.includes("\n") &&
+      !chunk.includes("\x1b")
+    ) {
+      this.emittedInLine += chunk.length;
+      this.sink(chunk);
+      return;
+    }
+
+    // Merge the held tail back in front so ordering is preserved, then scan.
+    this.cancelTimer();
+    const text = this.held + chunk;
+    this.held = "";
+
+    let out = "";
+    let segStart = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] !== "\n") continue;
+      const seg = text.slice(segStart, i); // line content in hand (no \n)
+      if (this.emittedInLine === 0) {
+        // Whole line is in hand (nothing was emitted raw): colorize. Strip a
+        // trailing \r so colorizeLine sees the bare body, then re-attach the
+        // exact terminator.
+        const hasCr = seg.endsWith("\r");
+        const body = hasCr ? seg.slice(0, -1) : seg;
+        out += colorizeLine(body) + (hasCr ? "\r\n" : "\n");
+      } else {
+        // Part of this line already went out raw — emit the rest raw too.
+        out += seg + "\n";
+      }
+      this.emittedInLine = 0; // next line starts fresh
+      segStart = i + 1;
+    }
+
+    const tail = text.slice(segStart);
+    if (tail === "") {
+      if (out) this.sink(out);
+      return;
+    }
+    // A dirty line's tail, or a tail carrying ESC (cursor moves, banners):
+    // emit raw immediately — holding gains nothing / risks corruption.
+    if (this.emittedInLine > 0 || tail.includes("\x1b")) {
+      this.emittedInLine += tail.length;
+      this.sink(out + tail);
+      return;
+    }
+    // Clean incomplete tail: hold it for the flush window so the rest of the
+    // line (or nothing — then it's likely a prompt) can decide its color.
+    if (out) this.sink(out);
+    this.held = tail;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flushHeld();
+    }, this.flushDelayMs);
+  }
+
+  /**
+   * Emit the held tail now. A tail that is exactly a prompt is colorized —
+   * prompts never receive a terminator, so the flush window is their only
+   * chance. Anything else goes out raw. Safe to call any time (idempotent when
+   * nothing is held); ConsoleTerm calls it when colorizing is toggled off so no
+   * bytes are ever stranded.
+   */
+  flushHeld(): void {
+    this.cancelTimer();
+    if (this.held === "") return;
+    const tail = this.held;
+    this.held = "";
+    const isPrompt = this.emittedInLine === 0 && PROMPT_TAIL_RE.test(tail);
+    this.emittedInLine += tail.length;
+    this.sink(isPrompt ? `${CYAN_BOLD}${tail}${RESET}` : tail);
+  }
+
+  /** Drop all buffered state (e.g. on reconnect — the stream restarts). */
   reset(): void {
+    this.cancelTimer();
+    this.held = "";
     this.emittedInLine = 0;
+  }
+
+  private cancelTimer(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
   }
 }
