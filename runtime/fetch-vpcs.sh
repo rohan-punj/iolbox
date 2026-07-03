@@ -23,7 +23,7 @@ VPCS_OUT_DIR="$BUILD_DIR/vpcs"
 # from). Pinned to a tag, not a moving branch, for reproducibility — bump
 # deliberately, not silently on every rebuild.
 VPCS_REPO="${VPCS_REPO:-https://github.com/GNS3/vpcs.git}"
-VPCS_REF="${VPCS_REF:-v0.8.2}"
+VPCS_REF="${VPCS_REF:-v0.8.3}"   # same release the proven iolab-rt vpcs was built from
 
 echo "== fetch-vpcs: $VPCS_REPO @ $VPCS_REF =="
 
