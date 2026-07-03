@@ -114,6 +114,12 @@ func Start(cfg Config) (*Endpoint, error) {
 
 	e := &Endpoint{cfg: cfg, dev: dev, closed: make(chan struct{})}
 
+	// Clear any leftover device of the same name from a prior run that didn't
+	// tear down cleanly (e.g. the supervisor was SIGKILLed), so setup's
+	// `ip ... add` doesn't fail with "File exists". Best-effort: a missing
+	// device is fine.
+	e.runTeardown()
+
 	switch cfg.Kind {
 	case KindNAT:
 		sub := Subnet{Index: cfg.SubnetIndex}
