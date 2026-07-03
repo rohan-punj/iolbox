@@ -123,7 +123,7 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 		cmd:     cmd,
 		ptmx:    ptmx,
 		ln:      ln,
-		hub:     newConsoleHub(ptmx),
+		hub:     newConsoleHub(ptmx, spec.Name),
 		done:    make(chan struct{}),
 	}
 	go p.serveConsole()

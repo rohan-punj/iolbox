@@ -94,7 +94,7 @@ func collectUntil(t *testing.T, conn net.Conn, want []byte) []byte {
 // output chunk, and both can write keystrokes that reach the pty.
 func TestHubBroadcastsToTwoClients(t *testing.T) {
 	pty, outW, inR := newFakePty()
-	h := newConsoleHub(pty)
+	h := newConsoleHub(pty, "")
 	defer h.shutdown()
 
 	c1 := attachPipe(h)
@@ -135,7 +135,7 @@ func TestHubBroadcastsToTwoClients(t *testing.T) {
 // produced receives the replay ring first, so it sees the current prompt.
 func TestHubReplaysRecentOutputOnAttach(t *testing.T) {
 	pty, outW, _ := newFakePty()
-	h := newConsoleHub(pty)
+	h := newConsoleHub(pty, "")
 	defer h.shutdown()
 
 	if _, err := outW.Write([]byte("booted\r\nR1>")); err != nil {
@@ -159,7 +159,7 @@ func TestHubReplaysRecentOutputOnAttach(t *testing.T) {
 // TestHubReplayRingTrims: the ring keeps only the newest replayRingSize bytes.
 func TestHubReplayRingTrims(t *testing.T) {
 	pty, outW, _ := newFakePty()
-	h := newConsoleHub(pty)
+	h := newConsoleHub(pty, "")
 	defer h.shutdown()
 
 	big := bytes.Repeat([]byte("x"), replayRingSize)
@@ -180,7 +180,7 @@ func TestHubReplayRingTrims(t *testing.T) {
 // closes every attached client and further attaches are refused.
 func TestHubTeardownUnblocksClients(t *testing.T) {
 	pty, outW, _ := newFakePty()
-	h := newConsoleHub(pty)
+	h := newConsoleHub(pty, "")
 
 	c := attachPipe(h)
 	defer c.Close()
@@ -219,7 +219,7 @@ func TestHubTeardownUnblocksClients(t *testing.T) {
 // fill its queue is dropped, while a healthy client keeps receiving.
 func TestHubDropsBackpressuredClient(t *testing.T) {
 	pty, outW, _ := newFakePty()
-	h := newConsoleHub(pty)
+	h := newConsoleHub(pty, "")
 	defer h.shutdown()
 
 	stalled := attachPipe(h) // never read from: net.Pipe blocks its writer
@@ -252,4 +252,84 @@ func TestHubDropsBackpressuredClient(t *testing.T) {
 		defer h.mu.Unlock()
 		return len(h.clients) == 1
 	})
+}
+
+// TestNormalizeNVTLineEndings: telnet Enter sequences collapse to bare CR —
+// including across chunk boundaries — while lone LF and ordinary bytes pass
+// through. This is the double-prompt / "^@ garbage" fix (see the function's
+// comment for the live-console evidence).
+func TestNormalizeNVTLineEndings(t *testing.T) {
+	cases := []struct {
+		name   string
+		chunks []string
+		want   string
+	}{
+		{"CRLF collapses", []string{"show run\r\n"}, "show run\r"},
+		{"CRNUL collapses", []string{"\r\x00"}, "\r"},
+		{"bare CR untouched", []string{"\r"}, "\r"},
+		{"lone LF passes", []string{"\n"}, "\n"},
+		{"CR|LF split across chunks", []string{"conf t\r", "\nend\r\n"}, "conf t\rend\r"},
+		{"CR|NUL split across chunks", []string{"\r", "\x00x"}, "\rx"},
+		{"CR CR LF", []string{"\r\r\n"}, "\r\r"},
+		{"plain text", []string{"abc"}, "abc"},
+	}
+	for _, c := range cases {
+		crPending := false
+		var got []byte
+		for _, ch := range c.chunks {
+			// Copy: normalize filters in place, and string-backed bytes are read-only.
+			in := []byte(ch)
+			got = append(got, normalizeNVTLineEndings(in, &crPending)...)
+		}
+		if string(got) != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestHubClientCRLFReachesPtyAsCR: end-to-end through a real attached client —
+// a PuTTY-style "\r\n" Enter arrives at the pty as a single CR.
+func TestHubClientCRLFReachesPtyAsCR(t *testing.T) {
+	pty, _, inR := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	c := attachPipe(h)
+	defer c.Close()
+
+	if _, err := c.Write([]byte("conf t\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 16)
+	n, err := inR.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "conf t\r" {
+		t.Fatalf("pty received %q, want %q (LF must be swallowed)", buf[:n], "conf t\r")
+	}
+}
+
+// TestHubSendsTitleEscapeOnAttach: a named hub sends the OSC 0 terminal-title
+// sequence right after the telnet preamble, so native clients can label their
+// tab with the node name. An unnamed hub sends none.
+func TestHubSendsTitleEscapeOnAttach(t *testing.T) {
+	pty, outW, _ := newFakePty()
+	h := newConsoleHub(pty, "R1")
+	defer h.shutdown()
+
+	c := attachPipe(h)
+	defer c.Close()
+	if _, err := outW.Write([]byte("R1#")); err != nil {
+		t.Fatal(err)
+	}
+	got := collectUntil(t, c, []byte("R1#"))
+	wantTitle := []byte("\x1b]0;R1\x07")
+	if !bytes.Contains(got, wantTitle) {
+		t.Fatalf("title escape missing from attach stream: %q", got)
+	}
+	// The title must come after the preamble and before any pty data.
+	if bytes.Index(got, wantTitle) < len(telnetPreamble) {
+		t.Fatalf("title escape must follow the telnet preamble: %q", got)
+	}
 }

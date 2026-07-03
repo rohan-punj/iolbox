@@ -13,6 +13,10 @@ type Spec struct {
 	// NodeID is the lab node id (also the IOL instance id passed as the last argv).
 	NodeID int
 	Kind   string // "iol" | "vpcs"
+	// Name is the node's display name from the lab doc. Used by the console hub
+	// to emit a terminal-title escape so native telnet clients label their
+	// tab/window with the node name instead of host:port. Cosmetic; may be "".
+	Name string
 
 	// IOL fields.
 	ImagePath   string // absolute path to the IOL ELF binary

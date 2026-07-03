@@ -38,6 +38,11 @@ import (
 // never closes the pty itself — Process.teardown owns that.
 type consoleHub struct {
 	pty io.ReadWriter
+	// name is the node's display name, sent to every attaching client as an
+	// xterm title escape (OSC 0) so native telnet clients that honour remote
+	// titles (PuTTY & friends) label their tab/window "R1" instead of a bare
+	// host:port. Clients that ignore OSC just discard the sequence.
+	name string
 
 	mu      sync.Mutex
 	clients map[*hubClient]struct{}
@@ -64,12 +69,18 @@ type hubClient struct {
 	out  chan []byte
 	stop chan struct{}
 	once sync.Once
+	// crPending tracks a CR seen at the END of the previous input chunk, so the
+	// telnet NVT line-ending normalization (CR LF / CR NUL -> CR) works across
+	// chunk boundaries. Touched only by this client's reader goroutine.
+	crPending bool
 }
 
 // newConsoleHub starts the hub's pty reader goroutine and returns the hub.
-func newConsoleHub(pty io.ReadWriter) *consoleHub {
+// name is the node's display name for the attach-time title escape (may be "").
+func newConsoleHub(pty io.ReadWriter, name string) *consoleHub {
 	h := &consoleHub{
 		pty:     pty,
+		name:    name,
 		clients: make(map[*hubClient]struct{}),
 		done:    make(chan struct{}),
 	}
@@ -154,11 +165,16 @@ func (h *consoleHub) attach(conn net.Conn) {
 	}
 	// Queue the telnet preamble (server-side echo + suppress-go-ahead, matching
 	// a real Cisco console; a dumb raw client just discards these valid
-	// commands), then the replay ring — both under mu so no broadcast can
-	// interleave before registration. The fresh queue always has room for two.
+	// commands), an xterm title escape naming the node (OSC 0 — PuTTY-style
+	// clients label their tab "R1" instead of host:port; others discard it),
+	// then the replay ring — all under mu so no broadcast can interleave before
+	// registration. The fresh queue always has room for these three.
 	c.out <- []byte{
 		telnet.IAC, telnet.WILL, telnet.OptEcho,
 		telnet.IAC, telnet.WILL, telnet.OptSGA,
+	}
+	if h.name != "" {
+		c.out <- []byte("\x1b]0;" + h.name + "\x07")
 	}
 	if len(h.ring) > 0 {
 		replay := make([]byte, len(h.ring))
@@ -183,10 +199,11 @@ func (h *consoleHub) attach(conn net.Conn) {
 		}
 	}()
 
-	// Reader: strip/answer IAC, forward clean bytes to the pty (serialized).
-	// Negotiation replies are routed through the client's out queue — NOT
-	// written directly — so the writer goroutine stays the connection's single
-	// writer and a reply can never interleave into the middle of a data chunk.
+	// Reader: strip/answer IAC, normalize NVT line endings, forward clean bytes
+	// to the pty (serialized). Negotiation replies are routed through the
+	// client's out queue — NOT written directly — so the writer goroutine stays
+	// the connection's single writer and a reply can never interleave into the
+	// middle of a data chunk.
 	go func() {
 		defer h.detach(c)
 		neg := telnet.NewNegotiator()
@@ -202,6 +219,7 @@ func (h *consoleHub) attach(conn net.Conn) {
 						return // queue jammed — same drop policy as broadcast
 					}
 				}
+				clean = normalizeNVTLineEndings(clean, &c.crPending)
 				if len(clean) > 0 {
 					h.wmu.Lock()
 					_, werr := h.pty.Write(clean)
@@ -216,6 +234,38 @@ func (h *consoleHub) attach(conn net.Conn) {
 			}
 		}
 	}()
+}
+
+// normalizeNVTLineEndings collapses telnet NVT Enter sequences to the bare CR
+// an IOS pty expects: CR LF -> CR and CR NUL -> CR (RFC 854 — a telnet client
+// sends one of those two per Enter depending on binary mode). Forwarding both
+// bytes raw made IOS treat CR and LF as SEPARATE line activations — every
+// Enter in a native telnet client printed TWO prompts, and the NUL of CR NUL
+// echoed as visible garbage ("^@"). Confirmed against a live IOL console:
+// "\r\n" -> 2 prompts, "\r\0" -> 2 prompts + ^@, bare "\r" -> 1 prompt (which
+// is why the web console — xterm sends bare CR — was never affected; for it
+// this pass is a no-op). A LONE LF (no preceding CR) is passed through: it
+// only ever arrives from raw/scripted clients, never from an Enter key.
+// crPending carries a chunk-final CR into the next call so the pair is
+// collapsed even when split across TCP segments.
+func normalizeNVTLineEndings(in []byte, crPending *bool) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	out := in[:0] // filter in place — output is never longer than input
+	for _, b := range in {
+		if *crPending {
+			*crPending = false
+			if b == '\n' || b == 0 {
+				continue // the CR already went through; swallow its pair byte
+			}
+		}
+		if b == '\r' {
+			*crPending = true
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // detach unregisters and closes one client. Idempotent.

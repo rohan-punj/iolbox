@@ -511,6 +511,7 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 	spec := node.Spec{
 		NodeID:      n.ID,
 		Kind:        string(n.Kind),
+		Name:        n.Name,
 		WorkDir:     ll.workDir(n.ID),
 		ConsolePort: nr.consolePort,
 		ConsoleBind: s.cfg.ConsoleBind,

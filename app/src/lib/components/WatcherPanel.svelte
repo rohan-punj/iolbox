@@ -7,7 +7,34 @@
 
   const rows = $derived(watcherStore.rows);
   const running = $derived(watcherStore.running);
+
+  // 16 preset flow colours — vivid hues that read as dashed strokes over the
+  // cable colour on both themes. Shown in a popover grid next to the row's
+  // swatch (the OS-native color dialog felt out of place); a 17th "custom"
+  // cell still opens the native picker for anything beyond the presets.
+  const SWATCHES = [
+    "#b478e0", "#7c4dff", "#4fc3d9", "#2196f3",
+    "#3f51b5", "#5fbf7a", "#2e7d32", "#cddc39",
+    "#e0a63c", "#ff9800", "#ff5722", "#e53935",
+    "#e91e63", "#9e9e9e", "#607d8b", "#8d6e63",
+  ];
+  /** Row id whose colour popover is open, or null. One at a time. */
+  let pickerFor = $state<string | null>(null);
+  function pick(rowId: string, color: string) {
+    watcherStore.setColor(rowId, color);
+    pickerFor = null;
+  }
 </script>
+
+<svelte:window
+  onpointerdown={(e) => {
+    // Close the colour popover on any outside click (the popover and swatch
+    // stop propagation via their own handlers' guard below).
+    if (pickerFor !== null && !(e.target as HTMLElement).closest?.(".wp-picker, .wp-swatch")) {
+      pickerFor = null;
+    }
+  }}
+/>
 
 {#if watcherStore.panelOpen}
   <div class="watcher-panel" role="dialog" aria-label="Network Watcher">
@@ -24,16 +51,42 @@
     <div class="wp-body">
       {#each rows as row (row.id)}
         <div class="wp-row">
-          <!-- Native colour picker disguised as the row swatch: clicking opens
-               the OS picker; the input's own value renders as the dot. -->
-          <input
-            type="color"
-            class="wp-swatch"
-            value={row.color}
-            title="Pick flow colour"
-            aria-label="Row colour"
-            oninput={(e) => watcherStore.setColor(row.id, (e.currentTarget as HTMLInputElement).value)}
-          />
+          <!-- Row swatch opens a 16-colour preset popover (plus a native-input
+               "custom" cell) anchored right next to it. -->
+          <span class="wp-swatch-anchor">
+            <button
+              class="wp-swatch"
+              style:background={row.color}
+              title="Pick flow colour"
+              aria-label="Row colour"
+              aria-expanded={pickerFor === row.id}
+              onclick={() => (pickerFor = pickerFor === row.id ? null : row.id)}
+            ></button>
+            {#if pickerFor === row.id}
+              <div class="wp-picker" role="listbox" aria-label="Flow colour">
+                {#each SWATCHES as c (c)}
+                  <button
+                    class="wp-picker-dot"
+                    class:on={row.color.toLowerCase() === c}
+                    style:background={c}
+                    title={c}
+                    aria-label={`Colour ${c}`}
+                    onclick={() => pick(row.id, c)}
+                  ></button>
+                {/each}
+                <!-- Custom: the native picker for anything beyond the presets. -->
+                <label class="wp-picker-custom" title="Custom colour…">
+                  <input
+                    type="color"
+                    value={row.color}
+                    aria-label="Custom colour"
+                    oninput={(e) => watcherStore.setColor(row.id, (e.currentTarget as HTMLInputElement).value)}
+                  />
+                  <span>+</span>
+                </label>
+              </div>
+            {/if}
+          </span>
           <select
             class="wp-select"
             value={row.proto}
@@ -130,32 +183,85 @@
     align-items: center;
     gap: 6px;
   }
-  /* The swatch IS an <input type=color>: strip the native chrome down to a
-     round dot showing the picked colour; clicking opens the OS colour picker. */
+  /* Row swatch: a round dot showing the current colour; clicking toggles the
+     preset popover anchored to it. */
+  .wp-swatch-anchor {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+  }
   .wp-swatch {
     all: unset;
     box-sizing: border-box;
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    overflow: hidden;
     cursor: pointer;
-    flex-shrink: 0;
     box-shadow: 0 0 0 1px var(--border-strong);
   }
-  .wp-swatch::-webkit-color-swatch-wrapper {
-    padding: 0;
-  }
-  .wp-swatch::-webkit-color-swatch {
-    border: none;
-    border-radius: 50%;
-  }
-  .wp-swatch::-moz-color-swatch {
-    border: none;
-    border-radius: 50%;
-  }
-  .wp-swatch:hover {
+  .wp-swatch:hover,
+  .wp-swatch[aria-expanded="true"] {
     box-shadow: 0 0 0 2px var(--accent);
+  }
+  /* 16-preset colour popover + a native-input "custom" cell. Anchored just
+     left-below the swatch; overflows the panel edge intentionally (position
+     absolute, high z) so all 17 cells stay visible in the 260px panel. */
+  .wp-picker {
+    position: absolute;
+    top: 22px;
+    left: -4px;
+    z-index: 10;
+    display: grid;
+    grid-template-columns: repeat(6, 20px);
+    gap: 5px;
+    padding: 8px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+  }
+  .wp-picker-dot {
+    all: unset;
+    box-sizing: border-box;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 0 1px var(--border-strong);
+  }
+  .wp-picker-dot:hover {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  .wp-picker-dot.on {
+    box-shadow: 0 0 0 2px var(--ink);
+  }
+  /* Custom cell: a native color input hidden under a "+" dot so exotic colours
+     stay reachable without the OS dialog dominating the UX. */
+  .wp-picker-custom {
+    position: relative;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    color: var(--ink-2);
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--border-strong);
+    background: var(--bg-2);
+  }
+  .wp-picker-custom:hover {
+    box-shadow: 0 0 0 2px var(--accent);
+    color: var(--ink);
+  }
+  .wp-picker-custom input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
   }
   .wp-select {
     flex: 1;
