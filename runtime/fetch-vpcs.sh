@@ -69,19 +69,26 @@ fi
 
 git -C "$VPCS_SRC_DIR" checkout "$VPCS_REF"
 
-# The GNS3/vpcs source layout builds from src/unix/ (there's also src/win/
-# and src/dos/ for the other historical targets we don't care about here).
+# The GNS3/vpcs source layout builds from src/ with per-OS makefiles —
+# src/Makefile.linux is the one that matters here (PROVEN: the reference
+# iolab-rt VM's vpcs was built exactly this way). Some tags also carry a
+# plain src/Makefile or src/unix/Makefile.linux; try the proven layout
+# first, then the historical ones.
 pushd "$VPCS_SRC_DIR/src" >/dev/null
 
 echo "fetch-vpcs: building..."
-# The upstream Makefile targets are just `make` (uses src/unix/Makefile.linux
-# via a top-level dispatch on some tags; older tags build directly). Try the
-# common entry points in order rather than hardcoding one, since this has
-# drifted across VPCS releases.
-if [ -f Makefile ]; then
-    make
+# CFLAGS/LDFLAGS note: the binary lands inside a Debian-bookworm rootfs
+# whose glibc may be OLDER than this builder's (e.g. building on Ubuntu
+# 24.04/glibc 2.39 for bookworm/glibc 2.36). A dynamic binary built here
+# can pick up newer versioned symbols and fail to start in the rootfs, so
+# link vpcs statically — it's a small, old-school C program and takes a
+# static glibc link without trouble.
+if [ -f Makefile.linux ]; then
+    make -f Makefile.linux LDFLAGS="-static -lpthread -lutil"
+elif [ -f Makefile ]; then
+    make LDFLAGS="-static -lpthread -lutil"
 elif [ -f unix/Makefile.linux ]; then
-    make -C unix -f Makefile.linux
+    make -C unix -f Makefile.linux LDFLAGS="-static -lpthread -lutil"
 else
     echo "fetch-vpcs: no recognizable Makefile under $VPCS_SRC_DIR/src" >&2
     exit 1
@@ -109,6 +116,10 @@ if command -v file >/dev/null 2>&1; then
     case "$FILE_OUT" in
         *"ELF 64-bit"*"x86-64"*) : ;;
         *) echo "fetch-vpcs: WARNING - binary does not look like linux/amd64 ELF64: $FILE_OUT" >&2 ;;
+    esac
+    case "$FILE_OUT" in
+        *"statically linked"*) : ;;
+        *) echo "fetch-vpcs: WARNING - binary is NOT statically linked; it may fail inside the rootfs if the builder's glibc is newer than bookworm's" >&2 ;;
     esac
 else
     echo "fetch-vpcs: built $VPCS_OUT_DIR/vpcs ('file' not available to verify arch)"

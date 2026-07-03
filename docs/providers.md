@@ -42,12 +42,17 @@ affect VMware" and default to `vmware`.
 ## vmware (primary)
 
 - Ship a small appliance (`iolab-appliance.vmx` + `.vmdk`, Debian-slim + kernel +
-  supervisor autostart). ~768 MB RAM, host-only NIC.
+  supervisor autostart). 2 vCPU / 4 GB RAM (IOL nodes default to 1 GB each),
+  **two NICs**: host-only (control/GUI/console/capture) + NAT (the NAT node's
+  MASQUERADE outbound path). Same shape as the proven iolab-rt reference VM.
 - Lifecycle: `vmrun -T ws start <vmx> nogui` / `stop`. Player: `-T player`.
-- Endpoint discovery: `vmrun getGuestIPAddress <vmx>` then control port on the
-  host-only network; or a fixed host-only IP baked into the appliance.
-- Image sync: `vmrun -gu <user> -gp <pw> CopyFileFromHostToGuest`, or a VMware
-  shared folder mounted at `/opt/iolab/images`.
+- Endpoint discovery: `vmrun getGuestIPAddress <vmx> -wait` (open-vm-tools is
+  in the image), or match the appliance's fixed host-only MAC
+  `00:50:56:3f:ab:01` in `C:\ProgramData\VMware\vmnetdhcp.leases`. The
+  host-only address is a DHCP lease — subnets differ per Workstation install,
+  so no IP is baked in. GUI/WS bridge at `http://<ip>:4001`.
+- Image sync: the GUI's image upload (`POST /api/upload/image` on :4001) —
+  no vmrun guest-auth or shared folders needed.
 - **De-risked**: this is the same `vmrun`-managed-VM pattern already used daily for
   the PNetLab gate VMs.
 
@@ -72,9 +77,17 @@ affect VMware" and default to `vmware`.
 ## Appliance / rootfs build
 
 Both the VMware appliance and the WSL tar come from **one** Debian-slim rootfs:
-- glibc + `libc6:i386` (32-bit IOL), minimal userspace
-- `/opt/iolab/supervisor` (Go binary) started by systemd/tiny init on boot
-- no default route (avoids the `xml.cisco.com` L2-IOL abort), host-only/loopback
+- glibc + `libc6:i386` (32-bit IOL), minimal userspace + what the supervisor
+  shells out to at runtime: `sudo`, `iproute2`, `procps` (sysctl), `iptables`
+  (NAT node)
+- `/opt/iolab/supervisor` (Go binary, GUI embedded — build via
+  `build-release.sh`) started by systemd on boot with the full proven flag set
+  (`-ws-addr 0.0.0.0:4001`, `-console-bind`/`-capture-bind 0.0.0.0`, labs/run
+  dirs)
+- hostname pinned to `iolab` (`/etc/hostname` + `/etc/hosts` + `wsl.conf`) —
+  the iourc is keyed to it and `sudo` stalls without the hosts line
 - iourc generated on first boot from the runtime's own hostid
+- default route on the NAT NIC (the NAT node needs outbound; the old
+  no-default-route posture is retired — see runtime/README.md)
 
 Build scripts live in `runtime/`. Reproducible; nothing Cisco is ever baked in.

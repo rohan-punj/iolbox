@@ -12,7 +12,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"
 BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
-HOSTONLY_IP="192.168.171.2"
 SKIP_VMWARE=0
 SKIP_WSL=0
 EXTRA_ROOTFS_ARGS=()
@@ -22,9 +21,10 @@ usage() {
 Usage: $0 --supervisor-bin PATH [options]
 
   --supervisor-bin PATH   Path to the built Go supervisor binary (required;
-                           see supervisor/ — GOOS=linux GOARCH=amd64 go build)
+                           build it with the repo's build-release.sh so the
+                           GUI bundle is embedded — a plain go build ships
+                           the placeholder GUI)
   --build-dir DIR          Output root (default: $BUILD_DIR)
-  --hostonly-ip IP         Fixed VMware host-only IP (default: $HOSTONLY_IP)
   --skip-wsl               Don't produce iolab-rootfs.tar
   --skip-vmware             Don't produce the vmdk/vmx appliance
   --no-i386                 Forwarded to build-rootfs.sh (smaller, 64-bit-IOL-only build)
@@ -42,7 +42,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --supervisor-bin) SUPERVISOR_BIN="$2"; shift 2 ;;
         --build-dir) BUILD_DIR="$2"; shift 2 ;;
-        --hostonly-ip) HOSTONLY_IP="$2"; shift 2 ;;
         --skip-wsl) SKIP_WSL=1; shift ;;
         --skip-vmware) SKIP_VMWARE=1; shift ;;
         --no-i386) EXTRA_ROOTFS_ARGS+=(--no-i386); shift ;;
@@ -63,7 +62,6 @@ echo "############################################################"
 echo "# iolab runtime build-all"
 echo "#   supervisor: $SUPERVISOR_BIN"
 echo "#   build dir:  $BUILD_DIR"
-echo "#   hostonly ip: $HOSTONLY_IP"
 echo "############################################################"
 
 VPCS_BIN="$BUILD_DIR/vpcs/vpcs"
@@ -90,7 +88,7 @@ fi
 
 if [ "$SKIP_VMWARE" -eq 0 ]; then
     echo "== build-all: pack-vmware.sh =="
-    "$SCRIPT_DIR/pack-vmware.sh" --build-dir "$BUILD_DIR" --hostonly-ip "$HOSTONLY_IP"
+    "$SCRIPT_DIR/pack-vmware.sh" --build-dir "$BUILD_DIR"
 else
     echo "== build-all: --skip-vmware given, skipping =="
 fi

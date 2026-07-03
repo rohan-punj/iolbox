@@ -3,22 +3,23 @@
 ## result to runtime/build/iolab-appliance.vmx. Do not hand-edit the output;
 ## edit this template instead so rebuilds stay reproducible.
 ##
-## Sizing/config choices follow docs/providers.md ("vmware (primary)"
-## section) exactly: ~768 MB RAM, 1 vCPU, host-only NIC, debian12-64 guest
-## OS id, no nested-virt requirement (IOL is userspace, no inner
-## hypervisor needed).
+## Modeled on the PROVEN reference runtime VM (iolab-rt: 2 vCPU / 4 GB,
+## host-only + NAT e1000e NICs) rather than the original scaffold's 768 MB
+## single-NIC guess — IOL nodes default to 1024 MB RAM each and the NAT
+## node needs an outbound path.
 
 .encoding = "UTF-8"
 config.version = "8"
 virtualHW.version = "19"
+firmware = "bios"
 
 displayName = "iolab-appliance"
 guestOS = "debian12-64"
-annotation = "iolab runtime appliance (VMware provider) - autostarts the iolab supervisor on 127.0.0.1:4000 inside the guest, reachable from the Windows host via the host-only NIC at @@HOSTONLY_IP@@. Built by runtime/pack-vmware.sh from runtime/build-rootfs.sh's rootfs. No Cisco software included."
+annotation = "iolab runtime appliance - autostarts the iolab supervisor; GUI at http://<vm-ip>:4001 from the Windows host via the host-only NIC. Built by runtime/pack-vmware.sh. No Cisco software included."
 
-numvcpus = "1"
+numvcpus = "2"
 cpuid.coresPerSocket = "1"
-memsize = "768"
+memsize = "4096"
 
 ## Single disk: the vmdk produced by pack-vmware.sh (rootfs + kernel + grub,
 ## see that script's header comment for the partition layout).
@@ -33,40 +34,30 @@ scsi0:0.deviceType = "disk"
 ide1:0.present = "FALSE"
 floppy0.present = "FALSE"
 
-## Host-only networking ONLY. This is the "no default route" requirement
-## from docs/providers.md made visible at the hypervisor layer too: a
-## host-only vmnet has no path to the internet at all (unlike NAT), so even
-## if the in-guest routing config in files/01-no-default-route.network were
-## ever misconfigured, the appliance still could not reach the general
-## internet — belt and suspenders against the xml.cisco.com L2-IOL abort
-## (see runtime/README.md).
-##
-## VMware's default host-only network is normally vmnet1 on a Workstation
-## install; pack-vmware.sh documents how to confirm/pin this via
-## vmnetcfg / the vmware-vnetlib CLI if vmnet1 isn't host-only on a given
-## install. ethernet0.vnet pins it explicitly rather than trusting
-## whatever "connectionType=hostonly" resolves to on a given host, since
-## vmnet numbering isn't guaranteed identical across installs.
+## NIC0: host-only — Windows <-> runtime control/GUI/console/capture plane.
+## FIXED MAC (VMware's static range is 00:50:56:00:00:00-00:50:56:3F:FF:FF):
+## the in-guest networkd config (10-hostonly.network, written by
+## pack-vmware.sh) matches this MAC, and the Windows side can resolve the
+## DHCP lease deterministically from C:\ProgramData\VMware\vmnetdhcp.leases
+## by this MAC — the same discovery pattern the reference iolab-rt VM uses.
+## DHCP (not a baked static IP) because each Workstation install picks its
+## own random host-only subnet; a hardcoded IP would only be right on the
+## machine that built the appliance.
 ethernet0.present = "TRUE"
 ethernet0.connectionType = "hostonly"
-ethernet0.vnet = "vmnet1"
-ethernet0.virtualDev = "e1000"
-ethernet0.addressType = "generated"
+ethernet0.virtualDev = "e1000e"
+ethernet0.addressType = "static"
+ethernet0.address = "00:50:56:3f:ab:01"
 ethernet0.linkStatePropagation.enable = "TRUE"
 
-## Fixed host-only IP: @@HOSTONLY_IP@@ (documented in docs/providers.md and
-## runtime/pack-vmware.sh). The guest's netplan/networkd config inside the
-## rootfs assigns this statically on the host-only interface rather than
-## relying on VMware's vmnet1 DHCP server (which may or may not be running
-## depending on the install, and adds a "which lease did it get" step the
-## vmware provider code would otherwise have to poll for via
-## `vmrun getGuestIPAddress`). A fixed IP means the Windows-side provider
-## can connect to @@HOSTONLY_IP@@:4000 immediately after `vmrun start`
-## returns, no polling loop required. `vmrun getGuestIPAddress` remains
-## available as a fallback/sanity-check path (requires VMware Tools /
-## open-vm-tools running in the guest, which this minimal rootfs does NOT
-## install — so the fixed IP is the PRIMARY discovery mechanism, not a
-## backup).
+## NIC1: NAT — the NAT node's (extnet) outbound path: lab traffic is
+## MASQUERADEd out through the default route this NIC's DHCP provides.
+## Also fixed-MAC so 20-nat.network matches it deterministically.
+ethernet1.present = "TRUE"
+ethernet1.connectionType = "nat"
+ethernet1.virtualDev = "e1000e"
+ethernet1.addressType = "static"
+ethernet1.address = "00:50:56:3f:ab:02"
 
 ## No sound, no USB, no printer — nothing this appliance needs, and each
 ## omitted device is one less thing that can fail to attach headless.
@@ -77,31 +68,21 @@ serial0.present = "FALSE"
 parallel0.present = "FALSE"
 
 ## Headless-friendly. `vmrun -T ws start iolab-appliance.vmx nogui` is the
-## documented lifecycle command (docs/providers.md); these two lines make
-## that the *only* sane way to run it even if a user double-clicks the vmx
-## in the Workstation UI by mistake.
+## documented lifecycle command (docs/providers.md).
 gui.fullScreenAtPowerOn = "FALSE"
 gui.viewModeAtPowerOn = "windowed"
 
 ## Nested virtualization is explicitly NOT requested — IOL is a userspace
-## process, not an inner hypervisor guest. Leaving these unset (VMware
-## defaults to FALSE) is intentional; do not add
-## vhv.enable="TRUE" here (that's the PNetLab pattern for a different
-## reason — nested KVM for the PNetLab node engine — and does not apply to
-## iolab, which runs no inner VMs).
+## process, not an inner hypervisor guest. Do not add vhv.enable="TRUE"
+## here (that's the PNetLab pattern for nested KVM; iolab runs no inner VMs).
 
-## Power-on niceties: skip the "moved or copied" prompt (this vmx is
-## regenerated by pack-vmware.sh every build, it's never "the same" vmx
-## twice in any way VMware's heuristics would recognize anyway) so
+## Power-on niceties: skip the "moved or copied" prompt so
 ## `vmrun start ... nogui` never blocks on a hidden dialog.
 msg.autoAnswer = "TRUE"
 uuid.action = "create"
 
-## Tools: not installing open-vm-tools in the rootfs (keeps it smaller,
-## and this headless single-purpose appliance doesn't need drag-and-drop,
-## shared folders via Tools autoservice, guest resize, etc). Shared-folder
-## image sync (docs/providers.md "Image sync") therefore uses the
-## non-Tools-dependent path — see pack-vmware.sh and runtime/README.md for
-## the CopyFileFromHostToGuest vs. shared-folder tradeoff notes.
-isolation.tools.hgfs.disable = "TRUE"
+## open-vm-tools IS installed in this image (pack-vmware.sh) so
+## `vmrun -T ws getGuestIPAddress <vmx> -wait` works as the primary
+## host-only IP discovery; the vmnetdhcp.leases MAC lookup above is the
+## no-tools fallback.
 tools.syncTime = "TRUE"

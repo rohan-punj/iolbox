@@ -1,0 +1,29 @@
+# systemd-networkd fallback config, installed to
+# /etc/systemd/network/80-ethernet-dhcp.network inside the rootfs.
+#
+# Plain DHCP (address + gateway + DNS) on any en* interface that no
+# more-specific config claimed first. On the VMware appliance the two NICs
+# are matched by their fixed MACs in 10-hostonly.network / 20-nat.network
+# (written by pack-vmware.sh — lower lexical prefix wins in networkd's
+# first-match-per-interface model), so this file only catches qemu-compat
+# boots and hand-rolled setups.
+#
+# HISTORY: the scaffold originally enforced a hard no-default-route posture
+# here (UseGateway=false everywhere) to dodge the xml.cisco.com L2-IOL
+# abort seen on PNetLab (reachable-but-REJECTING is what triggers it, e.g.
+# a null-route). That posture was retired when the NAT node (extnet)
+# shipped: it MASQUERADEs lab traffic out through the runtime's default
+# route, so the runtime now legitimately needs one — and the proven
+# reference VM (iolab-rt, real default route via its NAT NIC) runs L2 IOL
+# 17.18 with no abort. Genuine internet either connects or times out;
+# neither triggers the abort.
+#
+# WSL2's eth0 is deliberately NOT matched (en* only): WSL's own init
+# configures eth0 before systemd starts and networkd fighting it can strip
+# the address. WSL networking needs no help — localhost forwarding covers
+# the control/GUI ports and eth0's default route covers the NAT node.
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes

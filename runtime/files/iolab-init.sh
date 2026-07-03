@@ -42,12 +42,27 @@ start() {
         return 0
     fi
 
+    # Stale-state sweep, same as the systemd unit's ExecStartPre.
+    "$IOLAB_DIR/prestart-clean.sh" || true
+
     echo "starting iolab-supervisor"
+    # /opt/iolab on PATH: the supervisor spawns `vpcs` by bare name.
+    PATH="$IOLAB_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    export PATH
     # start-stop-daemon isn't guaranteed present on a truly minimal image,
     # so background it directly and capture the pid ourselves. No restart
     # supervision loop here (systemd's Restart=always covers that case);
     # this fallback path favors "boots at all" over "self-heals forever".
-    nohup "$SUPERVISOR" -control-addr 127.0.0.1:4000 -image-dir "$IOLAB_DIR/images" \
+    # Flag set mirrors files/iolab-supervisor.service — keep them in sync.
+    nohup "$SUPERVISOR" \
+        -control-addr 127.0.0.1:4000 \
+        -ws-addr 0.0.0.0:4001 \
+        -console-bind 0.0.0.0 \
+        -capture-bind 0.0.0.0 \
+        -image-dir "$IOLAB_DIR/images" \
+        -run-dir "$IOLAB_DIR/run" \
+        -labs-dir "$IOLAB_DIR/labs" \
+        -iourc "$IOLAB_DIR/iourc" \
         >>"$LOGFILE" 2>&1 &
     echo $! > "$PIDFILE"
 }

@@ -1,44 +1,66 @@
-# iolab supervisor — the Go control-plane process the Windows GUI talks to
-# over 127.0.0.1:4000 (see docs/protocol.md). Installed to
-# /etc/systemd/system/iolab-supervisor.service and enabled at build time
-# (build-rootfs.sh runs `systemctl enable` inside the chroot).
+# iolab supervisor — the Go control-plane + embedded browser GUI the Windows
+# side talks to. Installed to /etc/systemd/system/iolab-supervisor.service and
+# enabled at build time (build-rootfs.sh symlinks it into
+# multi-user.target.wants).
 #
-# Kept deliberately tiny: one static Go binary, no forking, no privilege
-# drop (the runtime is a single-purpose throwaway VM/WSL instance — there's
-# nobody else to protect it from). Restart=always because a crashed
-# supervisor should come back on its own; the GUI's reconnect logic (control
-# protocol) handles the client side of a bounce.
+# The flag set below mirrors the PROVEN reference runtime's start-sup.sh
+# (J:\iolab-runtime-vm, see iolab-p0-runtime-vm memory topic) exactly:
+#   -control-addr 127.0.0.1:4000   raw NDJSON control API, guest-loopback only
+#   -ws-addr 0.0.0.0:4001          WS bridge + embedded GUI, reachable from the
+#                                  Windows host (browser-first product, P1)
+#   -console-bind 0.0.0.0          native `telnet <vm-ip>:<port>` consoles
+#   -capture-bind 0.0.0.0          native `wireshark -k -i TCP@<vm-ip>:<port>`
+#   -labs-dir                      durable lab store (seed labs materialize
+#                                  here on first connect when empty)
+#   -iourc                         generated at first boot by
+#                                  iolab-firstboot-iourc.service
 [Unit]
-Description=iolab supervisor (IOL/VPCS control plane)
-Documentation=https://github.com/  # placeholder — replaced by the real repo URL at release time
+Description=iolab supervisor (IOL/VPCS control plane + GUI)
 After=network.target iolab-firstboot-iourc.service
 Wants=network.target
 Requires=iolab-firstboot-iourc.service
 
 [Service]
 Type=simple
-ExecStart=/opt/iolab/supervisor -control-addr 127.0.0.1:4000 -image-dir /opt/iolab/images
+# /opt/iolab on PATH: the supervisor spawns `vpcs` by bare name (see
+# supervisor/internal/node/argv.go) and expects it resolvable via PATH.
+# sbin dirs for `ip`/`sysctl`/`iptables` (extnet's `sudo -n` path uses
+# sudo's own secure_path, but keep them here too for direct spawns).
+Environment=PATH=/opt/iolab:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Clean up what a crashed/SIGKILLed previous run can leave behind: stale
+# iolnatN tap devices (extnet.Close never ran) and the per-lab run dirs.
+# Mirrors the reference runtime's start-sup.sh cleanup loop.
+ExecStartPre=/opt/iolab/prestart-clean.sh
+ExecStart=/opt/iolab/supervisor \
+    -control-addr 127.0.0.1:4000 \
+    -ws-addr 0.0.0.0:4001 \
+    -console-bind 0.0.0.0 \
+    -capture-bind 0.0.0.0 \
+    -image-dir /opt/iolab/images \
+    -run-dir /opt/iolab/run \
+    -labs-dir /opt/iolab/labs \
+    -iourc /opt/iolab/iourc
 Restart=always
 RestartSec=1
 
-# Runs as root: IOL/iol_wrapper needs raw-ish socket + NVRAM file access and
-# this is a single-tenant disposable runtime, not a multi-user box (same
-# posture PNetLab used to have pre-B7-broker, but here there's no www-data
-# to protect anything from — see pnetlab-b7-sudoers-drop memory topic for
-# why that mattered there and doesn't here).
+# Runs as root: IOL spawn, tap creation, NVRAM files. Single-tenant
+# disposable runtime — there's nobody else on the box to protect.
+# KillMode=control-group (the default, stated explicitly) is load-bearing:
+# stopping/restarting the unit also kills the IOL/VPCS/iouyap children, so
+# no orphaned vpcs busy-spinners survive a supervisor bounce (the orphan
+# problem the dev VM needed pkill loops for).
 User=root
 WorkingDirectory=/opt/iolab
+KillMode=control-group
 
-# Keep supervisor + child IOL/VPCS process output in the journal; the GUI
-# doesn't read this directly (it uses the control protocol's `log` event)
-# but it's invaluable when debugging a runtime interactively.
+# Supervisor + child IOL/VPCS output lands in the journal; invaluable when
+# debugging a runtime interactively (journalctl -u iolab-supervisor).
 StandardOutput=journal
 StandardError=journal
 
-# No sandboxing directives (ProtectSystem=, PrivateNetwork=, etc.) on
-# purpose: the supervisor needs to create UDP sockets, telnet listeners on
-# arbitrary high ports, and read the images directory. This is not a
-# hardened multi-tenant service.
+# No sandboxing directives on purpose: the supervisor creates UDP sockets,
+# taps, telnet/capture listeners on high ports, runs `sudo -n ip/iptables`.
+# This is not a hardened multi-tenant service.
 
 [Install]
 WantedBy=multi-user.target

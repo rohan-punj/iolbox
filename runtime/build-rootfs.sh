@@ -42,8 +42,6 @@ MIRROR="${DEBIAN_MIRROR:-https://deb.debian.org/debian}"
 SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"   # matches PLAN.md repo layout + .gitignore's /supervisor/bin/
 VPCS_BIN="$BUILD_DIR/vpcs/vpcs"               # fetch-vpcs.sh's output path
 INCLUDE_I386=1                                # docs/providers.md requires libc6:i386; opt out with --no-i386
-HOSTONLY_IP="192.168.171.2"                   # must match runtime/pack-vmware.sh and docs/providers.md
-HOSTONLY_PREFIX="24"
 
 usage() {
     cat <<EOF
@@ -163,13 +161,20 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 
 # Package set kept intentionally minimal — every package here is either
 # required to boot (systemd-sysv, udev), required for networking config
-# (iproute2, ifupdown is deliberately OMITTED since systemd-networkd owns
-# networking here — see files/01-no-default-route.network), or required by
-# IOL itself (libssl3 — some IOL images dlopen libcrypto; harmless to
-# include, tiny). ca-certificates is omitted on purpose: this runtime makes
-# no outbound TLS connections (no default route at all — see README.md),
-# so the whole PKI trust store is dead weight.
-BASE_INCLUDE="systemd,systemd-sysv,udev,iproute2,iputils-ping,libssl3,openssh-client"
+# (iproute2 — systemd-networkd owns config, see
+# files/80-ethernet-dhcp.network), required by IOL itself (libssl3 — some
+# IOL images dlopen libcrypto), or required by the supervisor's runtime
+# spawns (audited against exec.Command call sites in supervisor/internal):
+#   sudo      extnet ALWAYS shells `sudo -n ip/iptables/sysctl` (even as
+#             root — root passes sudo auth with no config, but the BINARY
+#             must exist; detect_linux.go probes `sudo -n true`)
+#   procps    /usr/sbin/sysctl (extnet flips net.ipv4.ip_forward for NAT)
+#   iptables  NAT node MASQUERADE + FORWARD rules (commands.go)
+#   coreutils' hostid is used by -gen-iourc (in minbase already)
+# ca-certificates is omitted on purpose: the runtime itself makes no
+# outbound TLS connections (the NAT node MASQUERADEs lab traffic at L3;
+# no TLS termination here).
+BASE_INCLUDE="systemd,systemd-sysv,udev,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
@@ -202,6 +207,11 @@ fi
 # docs/providers.md is explicit about this requirement; do not remove.
 if [ "$INCLUDE_I386" -eq 1 ]; then
     echo "== build-rootfs: adding i386 multiarch (libc6:i386) =="
+    # The chroot's apt needs working DNS; debootstrap/mmdebstrap don't
+    # reliably leave a resolv.conf behind. Copy the builder's (dereference
+    # the systemd-resolved symlink). Stage 6 truncates it again for the
+    # shipped image.
+    cp -L /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
     chroot "$ROOTFS_DIR" dpkg --add-architecture i386
     chroot "$ROOTFS_DIR" env DEBIAN_FRONTEND=noninteractive apt-get update
     chroot "$ROOTFS_DIR" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -241,22 +251,21 @@ rm -rf "$ROOTFS_DIR"/var/cache/apt/*
 echo "== build-rootfs: installing /opt/iolab =="
 
 install -d -m 0755 "$ROOTFS_DIR/opt/iolab"
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab/images"   # image library sync target (docs/providers.md "Image sync")
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab/run"      # supervisor's runtime state (sockets, pidfiles, nvram scratch)
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab/supervisor.d"  # reserved: not used yet, placeholder for future per-node scratch (see supervisor team's protocol.md for node.run layout if this needs renaming)
+install -d -m 0755 "$ROOTFS_DIR/opt/iolab/images"   # image library (uploads land here via the GUI's POST /api/upload/image)
+install -d -m 0755 "$ROOTFS_DIR/opt/iolab/run"      # supervisor's per-lab runtime state (sockets, NETMAPs, nvram scratch) — swept by prestart-clean.sh
+install -d -m 0755 "$ROOTFS_DIR/opt/iolab/labs"     # durable lab-document store (-labs-dir); seed labs materialize here on first connect when empty
 
-# The supervisor binary itself. NOTE the destination is a FILE
-# /opt/iolab/supervisor, while a sibling directory /opt/iolab/supervisor.d
-# exists for scratch state — deliberately different names so nothing ever
-# collides between "the binary" and "its working files".
+# The supervisor binary itself (a FILE at /opt/iolab/supervisor).
 install -m 0755 -o root -g root "$SUPERVISOR_BIN" "$ROOTFS_DIR/opt/iolab/supervisor"
 
-# VPCS binary.
+# VPCS binary. Lives in /opt/iolab, which the supervisor unit puts on PATH
+# (the supervisor spawns `vpcs` by bare name).
 install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolab/vpcs"
 
 # firstboot-iourc.sh (called by both the systemd unit and the non-systemd
-# fallback init script).
+# fallback init script) + the ExecStartPre stale-state sweep.
 install -m 0755 -o root -g root "$SCRIPT_DIR/files/firstboot-iourc.sh" "$ROOTFS_DIR/opt/iolab/firstboot-iourc.sh"
+install -m 0755 -o root -g root "$SCRIPT_DIR/files/prestart-clean.sh" "$ROOTFS_DIR/opt/iolab/prestart-clean.sh"
 
 # ---------------------------------------------------------------------------
 # Stage 5: systemd units + non-systemd fallback
@@ -287,17 +296,18 @@ install -d -m 0755 "$ROOTFS_DIR/etc/init.d"
 install -m 0755 "$SCRIPT_DIR/files/iolab-init.sh" "$ROOTFS_DIR/etc/init.d/iolab"
 
 # ---------------------------------------------------------------------------
-# Stage 6: networking — NO DEFAULT ROUTE (see README.md rationale)
+# Stage 6: networking — generic DHCP fallback; the VMware artifact gets
+# per-NIC (MAC-matched) configs layered on top by pack-vmware.sh. The old
+# no-default-route posture is retired — the NAT node needs an outbound
+# default route (see files/80-ethernet-dhcp.network's HISTORY note).
 # ---------------------------------------------------------------------------
-echo "== build-rootfs: configuring no-default-route networking =="
+echo "== build-rootfs: configuring networkd (DHCP fallback) =="
 
 install -d -m 0755 "$ROOTFS_DIR/etc/systemd/network"
-install -m 0644 "$SCRIPT_DIR/files/01-no-default-route.network" \
-    "$ROOTFS_DIR/etc/systemd/network/01-no-default-route.network"
+install -m 0644 "$SCRIPT_DIR/files/80-ethernet-dhcp.network" \
+    "$ROOTFS_DIR/etc/systemd/network/80-ethernet-dhcp.network"
 
-# Enable systemd-networkd + resolved's minimal stub (no upstream DNS is
-# ever configured — see files/wsl.conf's [network] section for the WSL2
-# side of the same story).
+# Enable systemd-networkd.
 chroot "$ROOTFS_DIR" systemctl enable systemd-networkd.service 2>/dev/null || \
     ln -sf /lib/systemd/system/systemd-networkd.service \
         "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
@@ -305,11 +315,12 @@ chroot "$ROOTFS_DIR" systemctl enable systemd-networkd.service 2>/dev/null || \
 install -d -m 0755 "$ROOTFS_DIR/etc/sysctl.d"
 install -m 0644 "$SCRIPT_DIR/files/99-iolab.conf" "$ROOTFS_DIR/etc/sysctl.d/99-iolab.conf"
 
-# Static hostname — deliberately boring/fixed. IOL's stock keygen derives
-# the iourc from hostid (see files/firstboot-iourc.sh's cross-team
-# assumption note), NOT from hostname, so a static hostname here is fine
-# and actually helpful for support ("what's your runtime's hostname" is a
-# constant, not a debugging variable).
+# Static hostname — deliberately boring/fixed, and LOAD-BEARING twice
+# over: (1) the firstboot iourc is keyed "iolab = <key>" and IOL checks it
+# against the running hostname; (2) the "127.0.1.1 iolab" /etc/hosts line
+# below keeps the hostname resolvable — without it every `sudo` call
+# (extnet runs several per NAT-node start) stalls ~10s on DNS resolution.
+# Hard-won on the reference VM; do not remove either side.
 echo "iolab" > "$ROOTFS_DIR/etc/hostname"
 cat > "$ROOTFS_DIR/etc/hosts" <<'EOF'
 127.0.0.1   localhost
@@ -317,11 +328,13 @@ cat > "$ROOTFS_DIR/etc/hosts" <<'EOF'
 ::1         localhost ip6-localhost ip6-loopback
 EOF
 
-# Empty resolv.conf, not a symlink to systemd-resolved's stub — this
-# runtime does no name resolution (no default route to resolve anything
-# useful over anyway). An empty-but-present file avoids glibc resolver
-# warnings/retries that an entirely missing file can trigger in some
-# versions.
+# Empty resolv.conf, not a symlink to systemd-resolved's stub — the
+# runtime itself does no name resolution (the NAT node hands lab nodes
+# public DNS servers directly in DHCP leases; the supervisor never looks
+# anything up). An empty-but-present file avoids glibc resolver
+# warnings/retries that an entirely missing file can trigger. Maintainers
+# debugging inside the VM can `echo nameserver 1.1.1.1 >/etc/resolv.conf`
+# to make apt work (same idiom as the PNetLab airgapped hosts).
 : > "$ROOTFS_DIR/etc/resolv.conf"
 
 # ---------------------------------------------------------------------------
@@ -330,17 +343,16 @@ EOF
 install -m 0644 "$SCRIPT_DIR/files/wsl.conf" "$ROOTFS_DIR/etc/wsl.conf"
 
 # ---------------------------------------------------------------------------
-# Stage 8: root shell convenience + safety
+# Stage 8: root console login for support/debugging
 # ---------------------------------------------------------------------------
-# No root password is SET (root:!:...  i.e. login disabled via password),
-# matching "no login" posture from PLAN.md at the runtime layer too. The
-# provider reaches the guest via the control protocol (docs/protocol.md)
-# or, for the vmware provider's file-copy fallback, vmrun's -gu/-gp guest
-# auth path — which for a passwordless root would need `-gu root -gp ""`;
-# if that proves awkward in the Rust provider code, this is the file to
-# revisit (chpasswd a fixed, documented, non-secret password since this VM
-# is never exposed off the host-only segment).
-echo 'root:!:19000:0:99999:7:::' | chroot "$ROOTFS_DIR" chpasswd -e || true
+# root password = "iolab": fixed, documented, deliberately non-secret.
+# There is NO sshd in this image, so the only way to use it is the VM
+# console (VMware window / `wsl -d iolab`) — acceptable for a single-
+# tenant lab appliance, and it turns "the appliance won't come up" from a
+# black box into a normal login-and-look debugging session. (The scaffold
+# originally locked root entirely; that made the first real boot failure
+# undiagnosable without rebuilding the image.)
+echo 'root:iolab' | chroot "$ROOTFS_DIR" chpasswd
 
 echo "== build-rootfs: done =="
 du -sh "$ROOTFS_DIR" 2>/dev/null || true
