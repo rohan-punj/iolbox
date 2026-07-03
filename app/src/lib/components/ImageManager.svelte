@@ -43,7 +43,9 @@
           : await uploadImageFile(file);
       await labStore.client.imageRegister(path);
       const { images } = await labStore.client.imageList();
-      labStore.images = images;
+      // Adopt + reconcile + push to the supervisor: on a fresh runtime this
+      // is the moment seed labs become startable.
+      await labStore.onImagesUpdated(images);
     } catch (e) {
       uploadError = (e as Error).message;
       labStore.pushLog("error", `image upload failed: ${uploadError}`);

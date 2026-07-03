@@ -220,10 +220,16 @@ class LabStore {
    * doc can carry ids the backend doesn't know (the seeded demo topology's
    * placeholder ids, a doc from another machine, an image since deleted):
    * remap each unknown id to a registered image of the same class when one
-   * exists, else clear it so the pre-start check flags the node instead of
-   * lab.start failing opaquely with image_not_found.
+   * exists. When none exists the reference is KEPT: lab.load tolerates
+   * unknown image ids (only start resolves them) and the startLab pre-check
+   * names the node, while the ref's class is what a later pass — e.g. after
+   * the first upload on a fresh runtime — needs to remap by. Clearing it
+   * (the old behavior) made lab.load itself fail schema_invalid on a fresh
+   * runtime AND autosave persisted the damage.
+   * Returns the ids of nodes whose image binding changed.
    */
-  private reconcileNodeImages() {
+  private reconcileNodeImages(): number[] {
+    const changed: number[] = [];
     for (const node of this.lab.nodes) {
       if (node.kind !== "iol" || !node.image) continue;
       if (this.images.some((i) => i.id === node.image!.id)) continue;
@@ -234,13 +240,49 @@ class LabStore {
           `node ${node.name}: image ${node.image.filename} not registered here — using ${substitute.filename}`
         );
         node.image = { id: substitute.id, filename: substitute.filename, class: substitute.class };
+        changed.push(node.id);
       } else {
         this.pushLog(
           "warn",
-          `node ${node.name}: image ${node.image.filename} is not registered and no ${node.image.class} image is available`
+          `node ${node.name}: image ${node.image.filename} is not registered and no ${node.image.class} image is available yet — upload one (Images)`
         );
-        node.image = undefined;
       }
+    }
+    return changed;
+  }
+
+  /**
+   * Called after the image registry changed (upload/register): adopt the new
+   * list, heal any node refs that couldn't be mapped before, and push the
+   * result to the supervisor. On a fresh runtime the seed lab's placeholder
+   * ids only become startable at this moment — without this, starting kept
+   * failing until a full browser refresh (or forever, when the cleared refs
+   * had been autosaved).
+   */
+  async onImagesUpdated(images: LibraryImage[]) {
+    this.images = images;
+    const changed = this.reconcileNodeImages();
+    if (changed.length === 0) return;
+    this.scheduleAutosave();
+    const busy = this.lab.nodes.some(
+      (n) => this.nodeStates[n.id] === "running" || this.nodeStates[n.id] === "starting"
+    );
+    try {
+      if (!busy) {
+        // Nothing running: re-send the whole doc so the loaded lab (or a lab
+        // whose load failed earlier) carries the healed image ids.
+        await this.loadLab(this.lab);
+      } else {
+        // Something is running: hot-swap only the healed nodes (they were
+        // imageless, so they are not among the running ones).
+        for (const id of changed) {
+          const node = this.lab.nodes.find((n) => n.id === id);
+          if (node?.image) await this.client.nodeSetImage(this.lab.id, id, node.image.id);
+        }
+      }
+    } catch (e) {
+      this.lastError = `apply uploaded image: ${(e as Error).message}`;
+      this.pushLog("error", this.lastError);
     }
   }
 
