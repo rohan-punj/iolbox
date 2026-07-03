@@ -4,7 +4,7 @@
 // without prop drilling. Also carries a small fixed colour palette + a request
 // to begin inline editing of a freshly-placed annotation.
 
-export type AnnoTool = "text" | "rect" | "ellipse";
+export type AnnoTool = "text" | "note" | "rect" | "ellipse" | "line";
 
 // Five theme-appropriate colours (readable on both Bench + Glass grounds).
 export const ANNO_COLORS = [
@@ -26,6 +26,11 @@ class AnnoToolState {
   /** Set to an annotation id by CanvasInner right after placing a text/shape so
    *  its node component starts in inline-edit mode. Cleared once consumed. */
   editRequestId = $state<string | null>(null);
+  /** Callback wired by CanvasInner: open the floating style popover for an
+   *  annotation near the given client point. focusText focuses the text field
+   *  (used for dblclick on text/note so quick inline editing still works). */
+  requestStyle: ((annoId: string, clientX: number, clientY: number, focusText: boolean) => void) | null =
+    null;
 
   arm(tool: AnnoTool) {
     // Toggle off if the same tool is clicked again.

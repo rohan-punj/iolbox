@@ -74,6 +74,8 @@ export interface LabCanvas {
  *  it survives the round-trip byte-exact. Text opens inline editing on place;
  *  shapes get a default box and are drag-movable with an optional label. */
 export type AnnotationSize = "s" | "m" | "l";
+/** Text/Note font family choice. Missing = "sans" (backward-compatible). */
+export type AnnotationFont = "sans" | "mono" | "script";
 
 export type Annotation =
   | {
@@ -84,6 +86,10 @@ export type Annotation =
       text: string;
       size?: AnnotationSize;
       color?: string;
+      /** Font family choice; missing = UI sans (current look). */
+      font?: AnnotationFont;
+      /** Note = text with a rounded semi-transparent background fill of `color`. */
+      fill?: boolean;
     }
   | {
       id: string;
@@ -94,6 +100,22 @@ export type Annotation =
       h: number;
       color?: string;
       label?: string;
+      /** Stroke thickness in px; missing = 2.5 (current look). */
+      border?: number;
+      /** Fill opacity 0..1; missing = 0.12 (current look). */
+      fillOpacity?: number;
+    }
+  | {
+      id: string;
+      type: "line";
+      /** Endpoints in flow coordinates (absolute, not box-relative). */
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      color?: string;
+      /** Stroke width in px; missing = 2.5. */
+      width?: number;
     };
 
 export interface LabDocument {

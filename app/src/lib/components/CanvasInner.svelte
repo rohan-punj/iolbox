@@ -20,7 +20,9 @@
   import VpcsNode from "../nodes/VpcsNode.svelte";
   import AnnoText from "../nodes/AnnoText.svelte";
   import AnnoShape from "../nodes/AnnoShape.svelte";
+  import AnnoLine, { LINE_PAD } from "../nodes/AnnoLine.svelte";
   import FloatingEdge from "../edges/FloatingEdge.svelte";
+  import AnnoStylePopover from "./AnnoStylePopover.svelte";
   import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
   import ChangeImagePopover from "./ChangeImagePopover.svelte";
   import IconPicker from "./IconPicker.svelte";
@@ -43,6 +45,7 @@
     mgmt: VpcsNode,
     annoText: AnnoText,
     annoShape: AnnoShape,
+    annoLine: AnnoLine,
   };
   const edgeTypes: EdgeTypes = { floating: FloatingEdge };
 
@@ -91,9 +94,14 @@
   // nodes (low zIndex), take no handles, and are selectable but not
   // connectable — they are pure canvas decoration.
   function toAnnoFlowNode(a: Annotation): Node {
+    // Lines carry their own bbox-derived position; text/shapes use a.x/a.y.
+    const pos =
+      a.type === "line"
+        ? { x: Math.min(a.x1, a.x2) - LINE_PAD, y: Math.min(a.y1, a.y2) - LINE_PAD }
+        : { x: a.x, y: a.y };
     const common = {
       id: ANNO_PREFIX + a.id,
-      position: { x: a.x, y: a.y },
+      position: pos,
       selectable: true,
       connectable: false,
       deletable: true,
@@ -105,7 +113,16 @@
       return {
         ...common,
         type: "annoText",
-        data: { annoId: a.id, text: a.text, size: a.size, color: a.color },
+        data: { annoId: a.id, text: a.text, size: a.size, color: a.color, font: a.font, fill: a.fill },
+      };
+    }
+    if (a.type === "line") {
+      return {
+        ...common,
+        type: "annoLine",
+        width: Math.abs(a.x2 - a.x1) + LINE_PAD * 2,
+        height: Math.abs(a.y2 - a.y1) + LINE_PAD * 2,
+        data: { annoId: a.id, x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, color: a.color, width: a.width },
       };
     }
     return {
@@ -113,7 +130,14 @@
       type: "annoShape",
       width: a.w,
       height: a.h,
-      data: { annoId: a.id, shape: a.type, label: a.label, color: a.color },
+      data: {
+        annoId: a.id,
+        shape: a.type,
+        label: a.label,
+        color: a.color,
+        border: a.border,
+        fillOpacity: a.fillOpacity,
+      },
     };
   }
 
@@ -220,7 +244,24 @@
   function onNodeDragStop({ nodes: dragged }: { nodes: Node[] }) {
     for (const fn of dragged) {
       if (isAnnoId(fn.id)) {
-        labStore.updateAnnotation(annoIdFromFlow(fn.id), {
+        const aid = annoIdFromFlow(fn.id);
+        const anno = labStore.lab.annotations?.find((a) => a.id === aid);
+        if (anno?.type === "line") {
+          // The node position is the bbox top-left; translate both endpoints by
+          // the delta from the old bbox origin so the whole line moves as one.
+          const oldX = Math.min(anno.x1, anno.x2) - LINE_PAD;
+          const oldY = Math.min(anno.y1, anno.y2) - LINE_PAD;
+          const dx = fn.position.x - oldX;
+          const dy = fn.position.y - oldY;
+          labStore.updateAnnotation(aid, {
+            x1: anno.x1 + dx,
+            y1: anno.y1 + dy,
+            x2: anno.x2 + dx,
+            y2: anno.y2 + dy,
+          } as Partial<Annotation>);
+          continue;
+        }
+        labStore.updateAnnotation(aid, {
           x: fn.position.x,
           y: fn.position.y,
         } as Partial<Annotation>);
@@ -353,9 +394,17 @@
   onMount(() => {
     linking.start = startLinkDrag;
     linking.requestEdit = openEdit;
+    // Annotation grips need to project screen→flow and know the live zoom.
+    labStore.screenToFlow = (cx, cy) => screenToFlowPosition({ x: cx, y: cy });
+    annoTool.requestStyle = (annoId, clientX, clientY, focusText) => {
+      // Offset a touch so the popover doesn't cover the annotation's anchor.
+      annoStyle = { x: clientX + 8, y: clientY + 8, annoId, focusText };
+    };
     return () => {
       linking.start = null;
       linking.requestEdit = null;
+      labStore.screenToFlow = null;
+      annoTool.requestStyle = null;
       window.removeEventListener("pointermove", onLinkMove);
       window.removeEventListener("pointerup", onLinkUp);
     };
@@ -431,6 +480,7 @@
   let nodeMenu = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let linkMenu = $state<{ x: number; y: number; linkId: number } | null>(null);
   let annoMenu = $state<{ x: number; y: number; annoId: string } | null>(null);
+  let annoStyle = $state<{ x: number; y: number; annoId: string; focusText: boolean } | null>(null);
   let imagePopover = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let iconPicker = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let editDialog = $state<{ nodeId: number } | null>(null);
@@ -480,6 +530,12 @@
   }
 
   function onPaneClick({ event }: { event: MouseEvent } = { event: undefined as any }) {
+    // The Line tool is a two-click placement: first click sets one endpoint,
+    // second sets the other. Handle it before the single-click place path.
+    if (annoTool.active === "line" && event) {
+      handleLineClick(event);
+      return;
+    }
     // An armed DRAW tool places its annotation at the click point, then disarms.
     if (annoTool.active && event) {
       placeAnnotation(annoTool.active, event);
@@ -491,6 +547,32 @@
     labStore.selectedAnnotationId = null;
   }
 
+  // --- Line tool: click first endpoint, then second (Escape cancels). ---
+  let linePending = $state<{ x: number; y: number } | null>(null);
+  function handleLineClick(event: MouseEvent) {
+    const p = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    if (!linePending) {
+      linePending = { x: p.x, y: p.y };
+      return;
+    }
+    const id = labStore.newAnnotationId();
+    const anno: Annotation = {
+      id,
+      type: "line",
+      x1: linePending.x,
+      y1: linePending.y,
+      x2: p.x,
+      y2: p.y,
+      color: annoTool.color,
+    };
+    labStore.addAnnotation(anno);
+    labStore.selectedAnnotationId = id;
+    labStore.selectedNodeId = null;
+    labStore.selectedLinkId = null;
+    linePending = null;
+    annoTool.disarm();
+  }
+
   // Place a new annotation at the pointer's flow position. Text opens inline
   // editing immediately (via annoTool.editRequestId, consumed by AnnoText);
   // shapes drop a default ~200x120 box, drag-movable + double-click-to-label.
@@ -499,9 +581,18 @@
     const p = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const id = labStore.newAnnotationId();
     let anno: Annotation;
-    if (tool === "text") {
-      anno = { id, type: "text", x: p.x, y: p.y, text: "Text", size: "m", color: annoTool.color };
-    } else {
+    if (tool === "text" || tool === "note") {
+      anno = {
+        id,
+        type: "text",
+        x: p.x,
+        y: p.y,
+        text: tool === "note" ? "Note" : "Text",
+        size: "m",
+        color: annoTool.color,
+        fill: tool === "note",
+      };
+    } else if (tool === "rect" || tool === "ellipse") {
       // Centre the default box on the click point.
       const w = 200;
       const h = 120;
@@ -514,17 +605,29 @@
         h,
         color: annoTool.color,
       };
+    } else {
+      return; // line handled separately (two-click)
     }
     labStore.addAnnotation(anno);
     labStore.selectedAnnotationId = id;
     labStore.selectedNodeId = null;
     labStore.selectedLinkId = null;
-    if (tool === "text") annoTool.editRequestId = id;
+    if (tool === "text" || tool === "note") annoTool.editRequestId = id;
   }
 
   // Delete the selected annotation on Delete/Backspace (when not typing in a
   // field). Node/link deletion stays on the context menu — matching prior UX.
   function onWindowKeydown(e: KeyboardEvent) {
+    // Escape cancels an in-progress line placement (or a fully-armed tool).
+    if (e.key === "Escape") {
+      if (linePending) {
+        linePending = null;
+        annoTool.disarm();
+        return;
+      }
+      if (annoTool.active) annoTool.disarm();
+      return;
+    }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -571,6 +674,13 @@
         },
       },
       { separator: true, label: "sep2", action: () => {} },
+      {
+        label: "Duplicate",
+        action: () => {
+          const newId = labStore.duplicateNode(nid);
+          if (newId !== null) labStore.selectedNodeId = newId;
+        },
+      },
       {
         label: "Delete",
         danger: true,
@@ -655,6 +765,7 @@
     onnodeclick={onNodeClick}
     onedgeclick={onEdgeClick}
     onpaneclick={onPaneClick}
+    onmove={() => (labStore.canvasZoom = getViewport().zoom)}
     colorMode={themeStore.current === "glass" ? "light" : "dark"}
   >
     <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} bgColor="transparent" patternColor="var(--dot)" />
@@ -677,6 +788,14 @@
     <button class="vc" title="Fit to content" onclick={fitContent} aria-label="Fit to content">{@html uiSvg("fit", 15)}</button>
     <button class="vc" title="Reset view" onclick={resetView} aria-label="Reset view">{@html uiSvg("reset", 15)}</button>
   </div>
+
+  {#if annoTool.active === "line"}
+    <div class="line-hint">
+      {linePending
+        ? "Click to set the line's second endpoint (Esc cancels)."
+        : "Click to set the line's first endpoint (Esc cancels)."}
+    </div>
+  {/if}
 
   {#if labStore.lab.nodes.length === 0}
     <div class="empty-state">
@@ -707,6 +826,15 @@
       y={annoMenu.y}
       items={buildAnnoMenuItems(annoMenu)}
       onClose={() => (annoMenu = null)}
+    />
+  {/if}
+  {#if annoStyle}
+    <AnnoStylePopover
+      x={annoStyle.x}
+      y={annoStyle.y}
+      annoId={annoStyle.annoId}
+      focusText={annoStyle.focusText}
+      onClose={() => (annoStyle = null)}
     />
   {/if}
   {#if imagePopover}
@@ -824,6 +952,20 @@
     height: 15px;
   }
 
+  .line-hint {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    padding: 6px 12px;
+    font-size: var(--fs-xs);
+    color: var(--accent-ink);
+    background: var(--accent);
+    border-radius: var(--radius-full);
+    box-shadow: var(--shadow-md);
+    pointer-events: none;
+  }
   .empty-state {
     position: absolute;
     inset: 0;

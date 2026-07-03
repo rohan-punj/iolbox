@@ -113,10 +113,34 @@
         y: m * m * sy + 2 * m * u * cy + u * u * ty,
       };
     };
+
+    // R1 — chip separation for parallel links. Near the endpoints the curve has
+    // collapsed back toward the node, so evaluating chips ON the curve there is
+    // NOT enough to keep them apart. Two corrections:
+    //  (a) Nudge the chip t-parameter OUTWARD toward mid-curve when there are
+    //      siblings, so chips leave the crowded endpoint (and the node's own
+    //      name chip) and sit where the fan has actually spread. More siblings →
+    //      push a little further in.
+    //  (b) Add a per-edge perpendicular OFFSET on top of the on-curve point,
+    //      equal to this edge's signed fan offset plus a small extra gap scaled
+    //      by index, so adjacent chips never overlap even where curves converge.
+    const count = info.parallelCount ?? 1;
+    const single = count <= 1;
+    // Base chip t at 0.16 / 0.84; slide toward mid by up to ~0.12 for dense fans.
+    const tPush = single ? 0 : Math.min(0.12, 0.05 + count * 0.012);
+    const su = 0.16 + tPush;
+    const tu = 0.84 - tPush;
+    // Extra perpendicular separation (px,py already unit). The edge's own fan
+    // offset spreads chips like the cable; an extra 4px * index guarantees a
+    // gap between neighbours regardless of curvature at the chip's t.
+    const idx = info.parallelIndex ?? 0;
+    const spread = single ? 0 : off + Math.sign(off || 1) * 0 + (idx - (count - 1) / 2) * 4;
+    const sPt = at(su);
+    const tPt = at(tu);
     return {
       path,
-      sChip: at(0.16),
-      tChip: at(0.84),
+      sChip: { x: sPt.x + px * spread, y: sPt.y + py * spread },
+      tChip: { x: tPt.x + px * spread, y: tPt.y + py * spread },
       // origin inside each chip pointing back at its own node
       sOrigin: dx >= 0 ? "left" : "right",
       tOrigin: dx >= 0 ? "right" : "left",
@@ -143,9 +167,21 @@
       (glowing ? " is-traffic" : "") +
       (hot ? " is-hot" : "")}
   />
+  <!-- R2 — a wide invisible hover-catcher over THIS edge's own curve. Hovering
+       it sets `hot`, which (a) glows this cable and (b) raises this edge's
+       labels above sibling parallel edges (.slot-hot z-index). Because `hot`
+       is per-edge-instance, only the hovered edge's hover-label appears — a
+       background sibling's chip can no longer render on top of it. -->
+  <path
+    class="edge-hover-catch"
+    d={geom.path}
+    onpointerenter={() => (hot = true)}
+    onpointerleave={() => (hot = false)}
+    role="presentation"
+  />
 
   {#if info.source}
-    <EdgeLabel x={geom.sChip.x} y={geom.sChip.y} class="port-chip-slot">
+    <EdgeLabel x={geom.sChip.x} y={geom.sChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
       <span
         class="port-chip"
         class:chip-hot={hot}
@@ -160,7 +196,7 @@
   {/if}
 
   {#if info.target}
-    <EdgeLabel x={geom.tChip.x} y={geom.tChip.y} class="port-chip-slot">
+    <EdgeLabel x={geom.tChip.x} y={geom.tChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
       <span
         class="port-chip"
         class:chip-hot={hot}
@@ -230,6 +266,17 @@
   :global(.svelte-flow__edge .svelte-flow__edge-interaction) {
     stroke-width: 18;
   }
+  /* R2 — per-edge hover-catcher. Transparent, wide, follows this edge's OWN
+     curve so hovering a background parallel link raises exactly that link (not
+     the topmost one). */
+  .edge-hover-catch {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 18;
+    stroke-linecap: round;
+    cursor: pointer;
+    pointer-events: stroke;
+  }
 
   @media (prefers-reduced-motion: reduce) {
     /* glow only, no width animation */
@@ -248,6 +295,13 @@
     padding: 0;
     overflow: visible;
   }
+  /* R2 — when this edge is hovered, raise BOTH its chips above every sibling
+     edge's chips so an overlapping background link can't cover the hovered
+     label. EdgeLabel writes an INLINE `z-index:0`, so !important is required to
+     win over it. Well above the resting slot z-index and the hover-pop (20). */
+  :global(.svelte-flow__edge-label.port-chip-slot.slot-hot) {
+    z-index: 40 !important;
+  }
 
   /* Hover-pop port chips (PNetLab feel). */
   .port-chip {
@@ -263,7 +317,8 @@
     backdrop-filter: var(--blur);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    padding: 3px 6px;
+    /* R1 — more compact so parallel-link chips need less room to separate. */
+    padding: 2px 5px;
     white-space: nowrap;
     cursor: default;
     transform: scale(1);

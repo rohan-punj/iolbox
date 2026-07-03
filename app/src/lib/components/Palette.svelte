@@ -211,6 +211,33 @@
       </svg>
       <span>Ellipse</span>
     </button>
+    <button
+      class="draw-btn"
+      class:on={armed === "note"}
+      aria-pressed={armed === "note"}
+      title="Note — a text box with a coloured background fill"
+      onclick={() => pickTool("note")}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+        <path d="M5 4h14v11l-5 5H5z" />
+        <path d="M14 20v-5h5" />
+      </svg>
+      <span>Note</span>
+    </button>
+    <button
+      class="draw-btn"
+      class:on={armed === "line"}
+      aria-pressed={armed === "line"}
+      title="Line — click two points on the canvas"
+      onclick={() => pickTool("line")}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <line x1="5" y1="19" x2="19" y2="5" />
+        <circle cx="5" cy="19" r="1.6" fill="currentColor" stroke="none" />
+        <circle cx="19" cy="5" r="1.6" fill="currentColor" stroke="none" />
+      </svg>
+      <span>Line</span>
+    </button>
   </div>
   <div class="draw-colors" role="group" aria-label="Annotation colour">
     {#each ANNO_COLORS as c (c)}
@@ -226,7 +253,13 @@
     {/each}
   </div>
   {#if armed}
-    <div class="draw-hint">Click the canvas to place the {armed}.</div>
+    <div class="draw-hint">
+      {#if armed === "line"}
+        Click two points on the canvas to draw a line.
+      {:else}
+        Click the canvas to place the {armed}.
+      {/if}
+    </div>
   {/if}
 
   <div class="host-spacer"></div>

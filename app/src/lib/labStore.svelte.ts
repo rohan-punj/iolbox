@@ -24,6 +24,12 @@ class LabStore {
   /** Selected canvas annotation (Excalidraw layer). Independent of node/link
    *  selection — annotations never open the node Inspector. */
   selectedAnnotationId = $state<string | null>(null);
+  /** Live canvas viewport zoom, mirrored from SvelteFlow by CanvasInner. Used by
+   *  annotation resize/drag grips to convert screen deltas to flow deltas. */
+  canvasZoom = $state(1);
+  /** Client→flow coordinate projector, wired by CanvasInner (useSvelteFlow's
+   *  screenToFlowPosition). Used by the line-endpoint grips. */
+  screenToFlow: ((clientX: number, clientY: number) => { x: number; y: number }) | null = null;
   nodeStates = $state<Record<number, NodeState>>({});
   consolePorts = $state<Record<number, number>>({});
   images = $state<LibraryImage[]>([]);
@@ -438,6 +444,39 @@ class LabStore {
     );
     if (this.selectedNodeId === nodeId) this.selectedNodeId = null;
     this.scheduleAutosave();
+  }
+
+  /** Clone a node: fresh id, same config, offset +40/+40, NO links. Names get a
+   *  numeric suffix — "R1" → "R1-2", "R1-2" → "R1-3" — incremented until unique.
+   *  Returns the new node id (selected by the caller), or null if src missing. */
+  duplicateNode(nodeId: number): number | null {
+    const src = this.lab.nodes.find((n) => n.id === nodeId);
+    if (!src) return null;
+    const id = this.nextNodeId();
+    const clone: LabNode = {
+      ...structuredClone($state.snapshot(src)),
+      id,
+      name: this.uniqueDuplicateName(src.name),
+      x: src.x + 40,
+      y: src.y + 40,
+    };
+    this.addNode(clone);
+    return id;
+  }
+
+  /** Derive a unique duplicate name. Strips a trailing "-<n>" (or appends "-2"
+   *  when absent), then bumps the counter until the name is free in the lab. */
+  private uniqueDuplicateName(name: string): string {
+    const m = name.match(/^(.*?)-(\d+)$/);
+    const base = m ? m[1] : name;
+    let n = m ? parseInt(m[2], 10) + 1 : 2;
+    const taken = new Set(this.lab.nodes.map((x) => x.name));
+    let candidate = `${base}-${n}`;
+    while (taken.has(candidate)) {
+      n += 1;
+      candidate = `${base}-${n}`;
+    }
+    return candidate;
   }
 
   addLink(link: LabLink) {

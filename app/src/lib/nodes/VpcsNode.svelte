@@ -208,16 +208,13 @@
     white-space: nowrap;
   }
 
+  /* Handles stay in the DOM so floating edges can anchor to them, but are never
+     visible or hit-testable — linking uses the dedicated connector button, so
+     the four hover dots around the icon are gone. */
   :global(.face-node .svelte-flow__handle) {
     width: 9px;
     height: 9px;
-    background: var(--border-strong);
-    border: 1.5px solid var(--ground);
     opacity: 0;
-    transition: opacity var(--transition-fast);
-  }
-  :global(.face-node:hover .svelte-flow__handle) {
-    opacity: 1;
-    background: var(--accent);
+    pointer-events: none;
   }
 </style>

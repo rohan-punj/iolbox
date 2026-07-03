@@ -11,12 +11,14 @@
  * Theme-independent tokens (type, spacing, radii, timings, LEDs)
  * ------------------------------------------------------------------ */
 :root {
-  /* Data face (mono) — node names, interfaces, telnet ports, config/console. */
-  --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, "SF Mono",
-    "SFMono-Regular", Consolas, monospace;
-  /* UI face — buttons, labels, prose. */
-  --font-ui: system-ui, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
-    sans-serif;
+  /* Data face (mono) — node names, interfaces, telnet ports, config/console.
+     Prefer Cascadia (ships with Windows Terminal / VS Code) then JetBrains. */
+  --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", ui-monospace,
+    "SF Mono", "SFMono-Regular", Consolas, monospace;
+  /* UI face — buttons, labels, prose. Modern, no external fetch: prefer the
+     Windows 11 variable UI face, then Inter if installed, then classic Segoe. */
+  --font-ui: "Segoe UI Variable Text", "Inter", "Segoe UI", system-ui,
+    -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
   /* Back-compat alias (some components referenced --font-primary). */
   --font-primary: var(--font-ui);
 
@@ -248,6 +250,8 @@ body {
   font-family: var(--font-ui);
   font-size: var(--fs-base);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0.005em;
   overflow: hidden;
 }
 
