@@ -25,8 +25,14 @@ type captureClient struct {
 	pw   *PcapngWriter
 }
 
-func newCaptureServer(port int) (*captureServer, error) {
-	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: port})
+// newCaptureServer binds the pcapng tee listener on bind:port. bind "" defaults
+// to loopback; the supervisor's -capture-bind flag threads 0.0.0.0 through
+// relay.Config.CaptureBind so a native Wireshark on the GUI host can attach.
+func newCaptureServer(bind string, port int) (*captureServer, error) {
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(bind), Port: port})
 	if err != nil {
 		return nil, err
 	}

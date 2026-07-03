@@ -51,7 +51,7 @@ func newRelay(cfg Config) (Relay, error) {
 	}
 
 	if cfg.CapturePort > 0 {
-		tee, err := newCaptureServer(cfg.CapturePort)
+		tee, err := newCaptureServer(cfg.CaptureBind, cfg.CapturePort)
 		if err != nil {
 			r.closeConns()
 			return nil, fmt.Errorf("relay link %d: capture: %w", cfg.LinkID, err)

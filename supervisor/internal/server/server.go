@@ -40,6 +40,11 @@ type Config struct {
 	// set 0.0.0.0 so a native telnet client on the GUI host can dial
 	// <vm-ip>:<consolePort> directly — same trust boundary as -ws-addr.
 	ConsoleBind string
+	// CaptureBind is the host each link's pcapng tee listener binds (see
+	// relay.Config.CaptureBind). Default loopback (the wsbridge dials via
+	// loopback); set 0.0.0.0 so a native Wireshark on the GUI host can attach
+	// with `wireshark -k -i TCP@<vm-ip>:<capturePort>`. Set via -capture-bind.
+	CaptureBind string
 	// Runtime/Arch are advertised in the hello handshake.
 	Runtime string
 	Arch    string

@@ -76,7 +76,7 @@ func TestBridgePlanExtnetUDP(t *testing.T) {
 		Links: []lab.Link{{ID: 5, Type: lab.LinkP2P,
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}}},
 	}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil)
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

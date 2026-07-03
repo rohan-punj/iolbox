@@ -117,6 +117,22 @@ Tee a link to a pcapng TCP stream (and/or file).
 - args: `{ "labId","link":<id>,"mode":"live|file","file":"<path?>" }`
 - result: `{ "link","capturePort","file?" }`
 
+**Doc-driven auto-arm:** every lab (re)start additionally arms a capture for
+each doc link whose `capture.enabled` is true — a port is allocated and the
+link's relay starts with its pcapng tee **before** any node spawns, and a
+`capture.started {link,capturePort}` event is emitted per armed link on every
+start (idempotent — the GUI re-learns ports after reloads/restarts and uses
+them to reconnect live capture tabs). So "enable capture and restart the lab"
+works with no explicit `capture.start` call. A full `lab.stop` stops the tee'd
+relays, emits `capture.stopped` per link, and releases the ports; the next
+start re-arms from the doc. `lab.load` releases the outgoing lab's capture and
+relay/bridge UDP ports silently.
+
+The tee listener binds the host given by the supervisor's `-capture-bind` flag
+(default `127.0.0.1`; the `/capture/{linkId}` WS bridge always dials loopback).
+With `-capture-bind 0.0.0.0` a native Wireshark on the GUI host can attach
+directly: `wireshark -k -i TCP@<vm-ip>:<capturePort>`.
+
 ### `config.save` / `config.extract`
 Extract NVRAM startup-configs back out of running/last-run nodes into the lab doc.
 - args: `{ "labId","nodes":[<id>...]|null }`

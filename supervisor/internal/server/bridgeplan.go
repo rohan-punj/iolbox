@@ -138,11 +138,13 @@ func realInstances(doc *lab.Lab) map[int]bool {
 //
 // captures maps linkID -> capturePort for links that currently have a capture
 // tee attached; the relay config carries the tee port so newRelay opens it.
+// captureBind is the host tee listeners bind (empty = loopback; see
+// relay.Config.CaptureBind / the supervisor's -capture-bind flag).
 //
 // It is pure except for port allocation (udp) — no sockets are bound and no
 // iouyap bridge is created here; that is the Linux data-plane's job (see
 // bridgeplan_linux.go). uid is os.Getuid() on Linux (the netio dir owner).
-func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int) (*bridgePlan, error) {
+func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int, captureBind string) (*bridgePlan, error) {
 	isIOL := isIOLMap(doc)
 	kindByID := kindMap(doc)
 	reals := realInstances(doc)
@@ -185,7 +187,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 		}
 		bl := bridgedLink{
 			linkID:   l.ID,
-			relayCfg: relay.Config{LinkID: l.ID, Kind: kind, CapturePort: captures[l.ID]},
+			relayCfg: relay.Config{LinkID: l.ID, Kind: kind, CapturePort: captures[l.ID], CaptureBind: captureBind},
 		}
 
 		// VPCS PC index is 1-based per PC within a VPCS process; today one PC per
@@ -346,7 +348,7 @@ func (s *Server) rebuildBridgePlan(ll *loadedLab) error {
 		captures[k] = v
 	}
 	ll.mu.Unlock()
-	plan, err := buildBridgePlan(ll.doc, currentUID(), s.udpPorts, captures)
+	plan, err := buildBridgePlan(ll.doc, currentUID(), s.udpPorts, captures, s.cfg.CaptureBind)
 	if err != nil {
 		return err
 	}

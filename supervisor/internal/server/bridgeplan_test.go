@@ -25,7 +25,7 @@ func TestBridgePlanCapturedIOLtoIOL(t *testing.T) {
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"}}}},
 	}
 	captures := map[int]int{7: 5500}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), captures)
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), captures, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBridgePlanVPCStoIOL(t *testing.T) {
 		Links: []lab.Link{{ID: 3, Type: lab.LinkP2P,
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 1, Interface: "eth0"}}}},
 	}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil)
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

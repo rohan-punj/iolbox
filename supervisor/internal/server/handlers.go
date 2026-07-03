@@ -133,7 +133,10 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	// loading a new lab over a running one orphans the old nodes: they keep
 	// running as untracked supervisor children (observed: stranded IOL holding
 	// gigabytes of RAM and spinning VPCS), because nothing else ever holds a
-	// handle to them again. Then release its console ports.
+	// handle to them again. Then release its console ports, stop its link
+	// relays, and release its capture + bridge-plan UDP ports — the old lab is
+	// dropped without a plan rebuild, so nothing else would ever return those
+	// ports to the allocators (leaked across every lab switch before this).
 	if old != nil {
 		for id := range old.nodes {
 			s.stopNode(old, id)
@@ -141,6 +144,16 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 		s.stopBridges(old)
 		for _, nr := range old.nodes {
 			s.consolePorts.Release(nr.consolePort)
+		}
+		s.releaseCaptures(old, false)
+		if old.bridge != nil {
+			for _, bl := range old.bridge.links {
+				_ = s.relays.Stop(bl.linkID)
+			}
+			for _, port := range old.bridge.udpPorts() {
+				s.udpPorts.Release(port)
+			}
+			old.bridge = nil
 		}
 	}
 
@@ -213,9 +226,14 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 		s.stopNode(ll, id)
 	}
 	// A full lab stop tears down the iouyap bridges too (per-node stop leaves them
-	// up; they restart idempotently on the next spawn).
+	// up; they restart idempotently on the next spawn), and releases every armed
+	// capture: the tee'd relays are stopped so the TCP capture ports actually
+	// free, capture.stopped is emitted per link, and the ports return to the
+	// allocator. Links whose doc still says capture.enabled re-arm automatically
+	// on the next lab start (see armDocCaptures), with a fresh capture.started.
 	if all {
 		s.stopBridges(ll)
+		s.releaseCaptures(ll, true)
 	}
 	return protocol.StartResult{Started: []protocol.StartedNode{}}, nil
 }
@@ -301,6 +319,17 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 // startupConfig injected. IOL reads all of these from its cwd at boot, so they
 // must exist first. prepareLabDir is a no-op off Linux.
 func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
+	// Auto-arm capture for every doc link with capture.enabled BEFORE the bridge
+	// plan is built, so the plan's relay configs carry a pcapng tee port and the
+	// relays started below listen from the first packet. Without this, a lab
+	// (re)started with capture enabled in its doc was bridged (wiringFor honours
+	// the doc) but ll.captures was empty, so the relay got NO tee port and
+	// /capture/{id} 404'd forever — "enable capture and restart the lab" never
+	// worked. Ports persist across per-node restarts (armDocCaptures only arms
+	// missing links) and are released by lab.stop / capture.stop / lab.load.
+	if err := s.armDocCaptures(ll); err != nil {
+		return nil, err
+	}
 	// (Re)compute the whole-lab bridge plan (pseudo-instances + relay/iouyap
 	// pairing) first: prepareLabDir's NETMAP and the iouyap bridges both derive
 	// from it, so it must exist before either. This is pure (no sockets) and runs
@@ -310,6 +339,19 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 	}
 	if err := s.prepareLabDir(ll); err != nil {
 		return nil, err
+	}
+	// Announce every armed capture (idempotent): the GUI (re)learns each
+	// capturing link's port on every start — including after a supervisor
+	// restart or page reload where its event-derived state began empty — and
+	// uses it to (re)connect live capture tabs.
+	ll.mu.Lock()
+	armed := make(map[int]int, len(ll.captures))
+	for link, port := range ll.captures {
+		armed[link] = port
+	}
+	ll.mu.Unlock()
+	for link, port := range armed {
+		s.emit(protocol.EventCaptureStarted, protocol.CaptureData{Link: link, CapturePort: port})
 	}
 	out := protocol.StartResult{Started: []protocol.StartedNode{}}
 	for _, id := range ids {
@@ -695,6 +737,64 @@ func (s *Server) handleCaptureStop(raw json.RawMessage) (any, error) {
 	}
 	s.emit(protocol.EventCaptureStopped, protocol.CaptureData{Link: args.Link, CapturePort: port})
 	return protocol.CaptureResult{Link: args.Link, CapturePort: port}, nil
+}
+
+// armDocCaptures allocates a capture port for every doc link with
+// capture.enabled that has no runtime capture yet, recording it in ll.captures
+// so the next bridge-plan rebuild gives that link's relay a pcapng tee. Links
+// already armed (capture.start, or a previous lab start) keep their port.
+// Called by startNodes BEFORE rebuildBridgePlan — the whole point is that the
+// plan sees the ports. On allocator exhaustion the newly armed links are rolled
+// back and the start fails.
+func (s *Server) armDocCaptures(ll *loadedLab) error {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	var added []int
+	for i := range ll.doc.Links {
+		l := &ll.doc.Links[i]
+		if l.Capture == nil || !l.Capture.Enabled {
+			continue
+		}
+		if _, ok := ll.captures[l.ID]; ok {
+			continue
+		}
+		port, err := s.capturePorts.Next()
+		if err != nil {
+			for _, id := range added {
+				s.capturePorts.Release(ll.captures[id])
+				delete(ll.captures, id)
+			}
+			return protocol.Errorf(protocol.CodePortUnavailable, "capture link %d: %v", l.ID, err)
+		}
+		ll.captures[l.ID] = port
+		added = append(added, l.ID)
+	}
+	return nil
+}
+
+// releaseCaptures returns every armed capture port to the allocator and clears
+// the lab's capture bookkeeping. When emitStops is true it also stops each
+// tee'd relay (so the TCP capture port actually frees before the port is
+// reused) and emits capture.stopped per link — the full-lab-stop behaviour.
+// With emitStops false it is the silent cleanup path for a lab being replaced
+// by lab.load (its relays are stopped wholesale by the caller).
+func (s *Server) releaseCaptures(ll *loadedLab, emitStops bool) {
+	ll.mu.Lock()
+	captures := make(map[int]int, len(ll.captures))
+	for link, port := range ll.captures {
+		captures[link] = port
+	}
+	ll.captures = make(map[int]int)
+	ll.mu.Unlock()
+	for link, port := range captures {
+		if emitStops {
+			_ = s.relays.Stop(link)
+		}
+		s.capturePorts.Release(port)
+		if emitStops {
+			s.emit(protocol.EventCaptureStopped, protocol.CaptureData{Link: link, CapturePort: port})
+		}
+	}
 }
 
 func (s *Server) handleConfigExtract(raw json.RawMessage) (any, error) {

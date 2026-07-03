@@ -34,6 +34,12 @@ type Config struct {
 	Endpoints []UDPEndpoint
 	// CapturePort, when > 0, requests the tee to listen for a Wireshark client.
 	CapturePort int
+	// CaptureBind is the host the pcapng tee listener binds. Empty defaults to
+	// loopback (the wsbridge always dials via loopback). Set 0.0.0.0 (supervisor
+	// -capture-bind) so a native Wireshark on the GUI host can attach directly
+	// with `wireshark -k -i TCP@<vm-ip>:<capturePort>` — same trust boundary as
+	// -console-bind / -ws-addr.
+	CaptureBind string
 }
 
 // Relay is the interface a running link relay satisfies. The concrete
