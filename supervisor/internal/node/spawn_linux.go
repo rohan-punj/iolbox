@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-
-	"github.com/rohanpunj/iolab/supervisor/internal/telnet"
 )
 
 // Process is a spawned node process with its lifecycle state.
@@ -25,14 +23,15 @@ import (
 // Two console models coexist (see Spawn):
 //
 //   - IOL: runs under a controlling pty (ptmx), and the supervisor binds a
-//     per-node telnet server on Spec.ConsolePort (ln) that bridges clients to
-//     the pty master.
+//     per-node telnet server on Spec.ConsolePort (ln). A consoleHub owns the
+//     pty master and multiplexes it across ALL connected telnet clients
+//     concurrently (webconsole + native telnet at once); see console_hub.go.
 //
 //   - VPCS: is its OWN telnet server (it opens Spec.ConsolePort itself) and
 //     DAEMONIZES (forks; the launched process exits immediately). There is no
 //     pty and the supervisor does NOT bind ConsolePort. The launched process is
 //     put in its own process group so Stop can kill the whole group (the
-//     daemonized child included). ptmx and ln stay nil for VPCS.
+//     daemonized child included). ptmx, ln and hub stay nil for VPCS.
 type Process struct {
 	Spec    Spec
 	Machine *Machine
@@ -41,6 +40,7 @@ type Process struct {
 	cmd  *exec.Cmd
 	ptmx *os.File     // pty master (IOL only); the node's console I/O flows through this
 	ln   net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
+	hub  *consoleHub  // multi-client console fan-out over ptmx (IOL only)
 	pgid int          // process group id to kill on Stop (VPCS: the daemonized group)
 	done chan struct{}
 }
@@ -123,6 +123,7 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 		cmd:     cmd,
 		ptmx:    ptmx,
 		ln:      ln,
+		hub:     newConsoleHub(ptmx),
 		done:    make(chan struct{}),
 	}
 	go p.serveConsole()
@@ -358,10 +359,13 @@ func pidsWithVPCSConsolePort(port int) []int {
 	return out
 }
 
-// serveConsole accepts telnet clients on the console port and bridges each to
-// the pty master. One active client at a time (a Cisco console is single-user);
-// a new client preempts nothing on the pty — the master persists — and simply
-// gets the live stream. The loop runs until the listener is closed (Stop).
+// serveConsole accepts telnet clients on the console port and attaches each to
+// the node's consoleHub, which multiplexes the pty across ALL of them
+// concurrently (webconsole + native telnet at once — see console_hub.go).
+// attach is non-blocking (per-client goroutines carry the session), so the
+// accept loop services every client immediately; the previous synchronous
+// one-client bridge left later clients connected-but-unserviced in the kernel
+// backlog. The loop runs until the listener is closed (Stop).
 //
 // The listener is snapshotted ONCE under p.mu into a local before the loop:
 // teardown() nils p.ln under the same lock, so re-reading p.ln each iteration
@@ -371,9 +375,9 @@ func pidsWithVPCSConsolePort(port int) []int {
 // closes the captured listener, Accept returns an error and the loop exits.
 func (p *Process) serveConsole() {
 	p.mu.Lock()
-	ln := p.ln
+	ln, hub := p.ln, p.hub
 	p.mu.Unlock()
-	if ln == nil {
+	if ln == nil || hub == nil {
 		return // already torn down
 	}
 	for {
@@ -381,94 +385,7 @@ func (p *Process) serveConsole() {
 		if err != nil {
 			return // listener closed on Stop/teardown
 		}
-		p.bridgeConsole(conn)
-	}
-}
-
-// bridgeConsole pumps bytes between one telnet client and the pty master until
-// the client disconnects (or the node exits). The pty master is NOT closed when
-// the client leaves, so the next client reconnects to the same live console.
-//
-// Telnet: we present a minimal server. On connect we volunteer WILL ECHO + WILL
-// SGA so a line-mode telnet/xterm client switches to character-at-a-time and
-// lets the remote (IOL) own echo — matching a real Cisco console. Inbound IAC
-// negotiation from the client is consumed (and answered) by telnet.Negotiator
-// so it never leaks into the pty; the cleaned bytes are written to the pty.
-// pty->client is raw (IOL emits no IAC of its own over a pty).
-func (p *Process) bridgeConsole(conn net.Conn) {
-	defer conn.Close()
-
-	// Snapshot the master under lock; teardown nils p.ptmx, and closing the
-	// captured *os.File unblocks these reads/writes with an error either way.
-	p.mu.Lock()
-	ptmx := p.ptmx
-	p.mu.Unlock()
-	if ptmx == nil {
-		return // node already torn down
-	}
-
-	// Volunteer server-side echo + suppress-go-ahead so the client goes into
-	// char mode. (A dumb raw client that ignores IAC still works: these bytes
-	// are valid telnet commands it will simply discard.)
-	_, _ = conn.Write([]byte{
-		telnet.IAC, telnet.WILL, telnet.OptEcho,
-		telnet.IAC, telnet.WILL, telnet.OptSGA,
-	})
-
-	var once sync.Once
-	stop := make(chan struct{})
-	closeOnce := func() { once.Do(func() { close(stop) }) }
-
-	// pty -> client (raw). NOTE: if the client disconnects, this read stays
-	// blocked until the pty next produces a byte (then conn.Write fails and it
-	// exits) or the node stops (teardown closes the master). With one client at
-	// a time this is benign; P0 may add a select/deadline if console churn under
-	// load proves it worth the complexity.
-	go func() {
-		defer closeOnce()
-		buf := make([]byte, 4096)
-		for {
-			n, err := ptmx.Read(buf)
-			if n > 0 {
-				if _, werr := conn.Write(buf[:n]); werr != nil {
-					return
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	// client -> pty: strip/answer any IAC the client sends, forward clean bytes.
-	go func() {
-		defer closeOnce()
-		neg := telnet.NewNegotiator()
-		buf := make([]byte, 4096)
-		for {
-			n, err := conn.Read(buf)
-			if n > 0 {
-				clean := neg.Feed(buf[:n])
-				if reply := neg.Reply(); reply != nil {
-					if _, werr := conn.Write(reply); werr != nil {
-						return
-					}
-				}
-				if len(clean) > 0 {
-					if _, werr := ptmx.Write(clean); werr != nil {
-						return
-					}
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-stop:
-	case <-p.done:
+		hub.attach(conn)
 	}
 }
 
@@ -490,12 +407,15 @@ func (p *Process) wait() {
 	p.teardown()
 }
 
-// teardown closes the pty master, the console listener, and signals bridges to
-// unblock. Idempotent.
+// teardown closes the pty master, the console listener, and shuts down the
+// console hub (disconnecting every attached client and unblocking their
+// goroutines). Closing ptmx also unblocks the hub's readLoop, which triggers
+// the same shutdown — the explicit call just makes teardown deterministic
+// rather than waiting on the read to notice. Idempotent.
 func (p *Process) teardown() {
 	p.mu.Lock()
-	ptmx, ln, done := p.ptmx, p.ln, p.done
-	p.ptmx, p.ln = nil, nil
+	ptmx, ln, hub, done := p.ptmx, p.ln, p.hub, p.done
+	p.ptmx, p.ln, p.hub = nil, nil, nil
 	p.mu.Unlock()
 	if done != nil {
 		select {
@@ -509,6 +429,9 @@ func (p *Process) teardown() {
 	}
 	if ln != nil {
 		_ = ln.Close()
+	}
+	if hub != nil {
+		hub.shutdown()
 	}
 }
 

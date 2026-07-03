@@ -71,6 +71,14 @@ Pass `-ws-addr ""` to disable the WebSocket bridge; it is **enabled by
 default** on `127.0.0.1:4001`, started under the same context and graceful
 shutdown as the TCP control listener.
 
+`-console-bind` (default `127.0.0.1`) is the host the per-node IOL console
+telnet listeners bind; `0.0.0.0` lets a native telnet client on the GUI host
+dial `<vm-ip>:<consolePort>` directly (the console hub serves it alongside the
+webconsole). `-capture-bind` (default `127.0.0.1`) is the same knob for each
+link's pcapng capture tee: with `0.0.0.0`, a native Wireshark on the GUI host
+attaches with `wireshark -k -i TCP@<vm-ip>:<capturePort>`. Both share the
+`-ws-addr` trust boundary — the VM's own network exposure.
+
 `-iourc` (default `/opt/iolab/iourc`) points at the runtime's IOU license; the
 supervisor copies it into each lab's shared dir at start (see below).
 
@@ -89,17 +97,40 @@ Real IOL uses **stdin/stdout on a controlling pty** for its console and opens
    `SysProcAttr{Setsid:true, Setctty:true}`, i.e. exactly the
    `setsid`+`ctty` combination the manual P0 `socat …,pty,setsid,ctty` test
    proved works.
-3. Keeps the pty **master** for the node's whole lifetime. A per-node console
-   server accepts TCP clients and pumps bytes between the client and the
-   master. Because the master persists independently of any console
-   connection, **sequential clients can disconnect and reconnect without
-   disturbing IOL** — no console client is required for the node to run.
+3. Keeps the pty **master** for the node's whole lifetime, owned by a
+   per-node **console hub** (`internal/node/console_hub.go`) that multiplexes
+   it across **all connected telnet clients concurrently** — the webconsole
+   and any number of native telnet sessions at once. One hub goroutine owns
+   `ptmx.Read` and broadcasts each chunk to every client (clients never read
+   the pty themselves, so they can't steal bytes from each other);
+   client→pty writes are serialized. Because the master persists
+   independently of any console connection, **clients can attach, detach and
+   reconnect freely without disturbing IOL** — no console client is required
+   for the node to run.
 
-Telnet handling is minimal and pass-through: on connect the bridge volunteers
+Hub specifics:
+
+- **Replay ring**: the hub keeps the most recent 8 KiB of pty output and
+  replays it to every newly attached client, so a fresh session shows the
+  current prompt/context instead of a blank screen.
+- **Backpressure policy — drop the client**: each client has a bounded output
+  queue (64 chunks of ≤4 KiB) pumped by its own writer goroutine; a client
+  whose queue is full when a broadcast arrives is disconnected. A console
+  stream is low-bandwidth — a client that far behind is dead or unrecoverably
+  slow, and dropping it beats stalling the pty reader or buffering unboundedly.
+- **Strictly non-blocking attach**: the telnet preamble and replay are queued
+  through the client's writer, so a slow client can never stall the accept
+  loop (the previous one-client-at-a-time bridge serviced clients
+  sequentially — a webconsole holding the port left a native telnet connect
+  stuck in the kernel backlog, "opens but does not work").
+
+Telnet handling is minimal and pass-through: on attach the hub volunteers
 `IAC WILL ECHO` + `IAC WILL SGA` (so a line-mode client goes char-at-a-time and
-lets IOL own echo), and inbound IAC from the client is consumed/answered by
-`internal/telnet.Negotiator` so it never leaks into the pty. pty→client is raw
-(IOL emits no IAC over a pty). There is **no** `IOL_CONSOLE_PORT` env var and no
+lets IOL own echo), and inbound IAC from each client is consumed/answered by a
+per-client `internal/telnet.Negotiator` so it never leaks into the pty
+(negotiation replies are routed through the client's write queue so the writer
+goroutine remains the connection's single writer). pty→client is raw (IOL
+emits no IAC over a pty). There is **no** `IOL_CONSOLE_PORT` env var and no
 console argv flag — both were scaffold guesses P0 removed. `Environ()` still sets
 `IOURC`.
 
