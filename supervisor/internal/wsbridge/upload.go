@@ -55,7 +55,10 @@ func (b *Bridge) handleUploadImage(w http.ResponseWriter, r *http.Request) {
 	finalPath := filepath.Join(b.cfg.ImageDir, name)
 	partialPath := finalPath + ".partial"
 
-	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	// 0755: IOL images are ELF executables the supervisor fork/execs directly —
+	// an image saved without the execute bit fails node start with
+	// "fork/exec ...: permission denied".
+	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
 		writeUploadError(w, http.StatusInternalServerError, "create upload file: "+err.Error())
 		return

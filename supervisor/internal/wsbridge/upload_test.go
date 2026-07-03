@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,19 @@ func TestUploadImageHappyPath(t *testing.T) {
 	// No .partial left behind on success.
 	if _, err := os.Stat(want + ".partial"); !os.IsNotExist(err) {
 		t.Fatalf(".partial must not remain, stat err = %v", err)
+	}
+	// The saved image must be executable: IOL images are ELF binaries the
+	// supervisor fork/execs, and a 0644 upload fails node start with
+	// "fork/exec: permission denied". (Windows reports a synthetic mode, so
+	// only assert on OSes with real unix permission bits.)
+	if runtime.GOOS != "windows" {
+		fi, err := os.Stat(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode()&0o100 == 0 {
+			t.Fatalf("uploaded image mode %v lacks owner-execute", fi.Mode())
+		}
 	}
 }
 
