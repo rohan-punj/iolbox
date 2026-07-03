@@ -87,7 +87,7 @@
     tabindex="0"
     ondragstart={(e) => onDragStart(e, "vpcs")}
   >
-    <span class="swatch vpcs" aria-hidden="true">{@html iconSvg("pc", 18)}</span>
+    <span class="swatch vpcs" aria-hidden="true">{@html iconSvg("pc", 28)}</span>
     <div class="item-text">
       <div class="item-name">VPCS</div>
       <div class="item-sub">Virtual PC</div>
@@ -103,7 +103,7 @@
       ondragstart={(e) => onDragStart(e, "nat")}
       title="NAT gateway to the outside network (single eth0)"
     >
-      <span class="swatch nat" aria-hidden="true">{@html iconSvg("nat", 16)}</span>
+      <span class="swatch nat" aria-hidden="true">{@html iconSvg("nat", 28)}</span>
       <div class="item-text">
         <div class="item-name">NAT Gateway</div>
         <div class="item-sub">Internet egress</div>
@@ -120,7 +120,7 @@
       ondragstart={(e) => onDragStart(e, "mgmt")}
       title="Out-of-band management bridge (single eth0)"
     >
-      <span class="swatch mgmt" aria-hidden="true">{@html iconSvg("mgmt", 16)}</span>
+      <span class="swatch mgmt" aria-hidden="true">{@html iconSvg("mgmt", 28)}</span>
       <div class="item-text">
         <div class="item-name">MGMT Bridge</div>
         <div class="item-sub">Management net</div>
@@ -144,7 +144,7 @@
       <!-- Item 5 — real EVE device artwork per image class (l2→switch,
            l3/unknown→router), matching the icon a dropped node will show. -->
       <span class="swatch" class:l2={img.class === "l2"} aria-hidden="true">
-        {@html iconSvg(img.class === "l2" ? "switch" : "router", 18)}
+        {@html iconSvg(img.class === "l2" ? "switch" : "router", 28)}
       </span>
       <div class="item-text">
         <div class="item-name">{img.filename}</div>
@@ -383,6 +383,10 @@
   .swatch {
     display: flex;
     flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
     color: var(--node-iol-l3);
   }
   .swatch.vpcs {
@@ -393,12 +397,12 @@
     color: var(--accent);
   }
   .swatch :global(svg) {
-    width: 18px;
-    height: 18px;
+    width: 28px;
+    height: 28px;
   }
   .swatch :global(img) {
-    width: 18px;
-    height: 18px;
+    width: 28px;
+    height: 28px;
   }
   .swatch.l2 {
     color: var(--node-iol-l2);

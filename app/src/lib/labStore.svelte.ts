@@ -179,8 +179,14 @@ class LabStore {
       if (this.transportKind === "mock") this.activeProvider = "vmware";
       const { images } = await this.client.imageList();
       this.images = images;
-      this.reconcileNodeImages();
-      await this.loadLab(this.lab);
+      // Reload the last lab the user was working on (so a browser refresh keeps
+      // their additions) instead of the throwaway seed. Falls back to the seed
+      // when there's no remembered lab or it's gone from the store.
+      const restored = await this.restoreLastActiveLab();
+      if (!restored) {
+        this.reconcileNodeImages();
+        await this.loadLab(this.lab);
+      }
     } catch (e) {
       this.providerStatus = "error";
       this.lastError = `connect failed: ${(e as Error).message}`;
@@ -277,13 +283,50 @@ class LabStore {
     return this.savedDocIds.has(this.lab.id);
   }
 
+  /** localStorage key holding the id of the lab the user last had open, so a
+   *  refresh reopens it rather than the throwaway seed. */
+  private static LAST_LAB_KEY = "iolab.lastActiveLab";
+
+  private rememberActiveLab(id: string) {
+    try {
+      localStorage.setItem(LabStore.LAST_LAB_KEY, id);
+    } catch {
+      /* private-mode / storage disabled — non-fatal */
+    }
+  }
+
+  /** On (re)connect, reopen the lab the user last worked on from the durable
+   *  store. Returns true if a stored lab was loaded; false to fall back to the
+   *  seed. Any failure (no id, deleted, unreadable) falls back silently. */
+  private async restoreLastActiveLab(): Promise<boolean> {
+    let id: string | null = null;
+    try {
+      id = localStorage.getItem(LabStore.LAST_LAB_KEY);
+    } catch {
+      id = null;
+    }
+    if (!id) return false;
+    try {
+      const { lab } = await this.client.labGetDoc(id);
+      if (!lab || !Array.isArray(lab.nodes)) return false;
+      this.savedDocIds.add(lab.id);
+      await this.loadLab(lab);
+      this.reconcileNodeImages();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Persist the current doc, stamping `modified`. Returns true on success. */
   async saveLab(): Promise<boolean> {
     this.lab.modified = new Date().toISOString();
     let ok = false;
     await this.guarded("save lab", async () => {
       const res = await this.client.labSaveDoc($state.snapshot(this.lab) as LabDocument);
-      this.savedDocIds.add(res.id ?? this.lab.id);
+      const id = res.id ?? this.lab.id;
+      this.savedDocIds.add(id);
+      this.rememberActiveLab(id);
       this.lastSavedAt = Date.now();
       ok = true;
     });
@@ -313,19 +356,25 @@ class LabStore {
       if (fromStore) this.savedDocIds.add(lab.id);
       else this.savedDocIds.delete(lab.id);
       await this.loadLab(lab);
+      // This lab is now the workspace — a refresh should reopen it. (A brand-new
+      // unsaved lab isn't in the store yet; its first edit autosaves + records
+      // it, and New-lab intentionally isn't remembered until the user edits it.)
+      if (fromStore) this.rememberActiveLab(lab.id);
     });
   }
 
-  /** Debounced autosave after topology edits — only for already-saved labs on a
-   *  real supervisor (mock has no durable store worth pinging). */
+  /** Debounced autosave after any topology/annotation edit (real supervisor
+   *  only — mock has no durable store). Unconditional: the FIRST edit to a
+   *  fresh working lab persists it too (and records it as the last-active lab),
+   *  so a browser refresh keeps the user's additions instead of reloading the
+   *  seed. Debounced so a burst of edits/drags coalesces into one save. */
   scheduleAutosave() {
     if (this.transportKind !== "ws") return;
-    if (!this.currentLabSaved) return;
     if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
     this.autosaveTimer = setTimeout(() => {
       this.autosaveTimer = null;
       void this.saveLab();
-    }, 2000);
+    }, 1200);
   }
 
   // ---- live-capture console tabs (feature 1) ----
