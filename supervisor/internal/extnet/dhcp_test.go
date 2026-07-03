@@ -108,14 +108,13 @@ func TestDHCPDiscoverToOffer(t *testing.T) {
 	if v := findOpt(enc, optMessageType); len(v) != 1 || v[0] != msgOffer {
 		t.Fatalf("option 53 = %v, want [OFFER]", v)
 	}
-	// router (3), dns (6), server-id (54) all the gateway; mask (1) the mask.
+	// router (3) + server-id (54) = the gateway; mask (1) = the mask.
 	for _, tc := range []struct {
 		code byte
 		want net.IP
 		name string
 	}{
 		{optRouter, gw, "router"},
-		{optDNS, gw, "dns"},
 		{optServerID, gw, "server-id"},
 		{optSubnetMask, mask, "mask"},
 	} {
@@ -123,6 +122,13 @@ func TestDHCPDiscoverToOffer(t *testing.T) {
 		if len(v) != 4 || !net.IP(v).Equal(tc.want) {
 			t.Fatalf("option %s = %v, want %s", tc.name, v, tc.want)
 		}
+	}
+	// DNS (6) = the public resolvers, NOT the gateway (which runs no resolver):
+	// one option carrying 1.1.1.1 then 8.8.8.8.
+	if v := findOpt(enc, optDNS); len(v) != 8 ||
+		!net.IP(v[:4]).Equal(net.IPv4(1, 1, 1, 1)) ||
+		!net.IP(v[4:]).Equal(net.IPv4(8, 8, 8, 8)) {
+		t.Fatalf("option dns = %v, want 1.1.1.1 + 8.8.8.8", v)
 	}
 	// lease time (51) = 3600s.
 	if v := findOpt(enc, optLeaseTime); len(v) != 4 || binary.BigEndian.Uint32(v) != leaseSeconds {

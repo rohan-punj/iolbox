@@ -69,6 +69,16 @@ const (
 // conventional 0.5/0.875 fractions.
 const leaseSeconds = 3600
 
+// dnsServers are the resolvers advertised in option 6. The gateway itself runs
+// NO resolver (it only routes + NATs), so advertising it — the old behaviour —
+// gave lab nodes a name server that answered nothing ("% Unrecognized host"
+// on a router that could ping 1.1.1.1 fine). Public anycast resolvers reached
+// THROUGH the NAT work like any other outbound traffic.
+var dnsServers = []net.IP{
+	net.IPv4(1, 1, 1, 1),
+	net.IPv4(8, 8, 8, 8),
+}
+
 // Packet is a decoded BOOTP/DHCP message carrying only the fields this minimal
 // server needs to form a reply.
 type Packet struct {
@@ -164,7 +174,10 @@ func (p *Packet) Encode(msgType byte, serverIP net.IP, mask net.IP) []byte {
 	opts = appendU32Opt(opts, optRebindingT2, leaseSeconds*7/8)
 	opts = appendIPOpt(opts, optSubnetMask, mask)
 	opts = appendIPOpt(opts, optRouter, serverIP)
-	opts = appendIPOpt(opts, optDNS, serverIP)
+	// DNS = public resolvers (reached through the NAT), NOT the gateway — the
+	// gateway runs no resolver. Option 6 carries all servers in one option
+	// (4 bytes each, preference order).
+	opts = appendIPsOpt(opts, optDNS, dnsServers)
 	opts = append(opts, optEnd)
 
 	return append(buf, opts...)
@@ -176,6 +189,20 @@ func appendIPOpt(opts []byte, code byte, ip net.IP) []byte {
 		v = net.IPv4zero.To4()
 	}
 	return append(append(opts, code, 4), v...)
+}
+
+// appendIPsOpt encodes a multi-address option (e.g. DNS): one length-prefixed
+// option carrying every address back-to-back, 4 bytes each, in order.
+func appendIPsOpt(opts []byte, code byte, ips []net.IP) []byte {
+	opts = append(opts, code, byte(4*len(ips)))
+	for _, ip := range ips {
+		v := ip.To4()
+		if v == nil {
+			v = net.IPv4zero.To4()
+		}
+		opts = append(opts, v...)
+	}
+	return opts
 }
 
 func appendU32Opt(opts []byte, code byte, v uint32) []byte {
