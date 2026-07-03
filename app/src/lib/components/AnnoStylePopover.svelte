@@ -176,6 +176,35 @@
           {/each}
         </div>
       </div>
+      <!-- Item 7 — arrowheads: none / single (at end) / double (both ends). -->
+      <div class="row">
+        <span class="lbl">Arrows</span>
+        <div class="seg">
+          {#each [{ v: "none", l: "—" }, { v: "one", l: "→" }, { v: "both", l: "↔" }] as opt (opt.v)}
+            <button
+              class="seg-btn"
+              class:on={((anno as any).arrow ?? "none") === opt.v}
+              onclick={() => patch({ arrow: opt.v } as any)}
+            >{opt.l}</button>
+          {/each}
+        </div>
+      </div>
+      <!-- Item 7 — solid / dashed toggle. -->
+      <div class="row">
+        <span class="lbl">Style</span>
+        <div class="seg">
+          <button
+            class="seg-btn"
+            class:on={!((anno as any).dash === true)}
+            onclick={() => patch({ dash: false } as any)}
+          >Solid</button>
+          <button
+            class="seg-btn"
+            class:on={(anno as any).dash === true}
+            onclick={() => patch({ dash: true } as any)}
+          >Dashed</button>
+        </div>
+      </div>
     {/if}
 
     <div class="foot">

@@ -108,6 +108,8 @@ export const UI_GLYPHS: Record<string, string> = {
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/>',
   fit: '<path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4m11-5v4a1 1 0 0 1-1 1h-4"/>',
   reset: '<path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 10a8 8 0 0 0-14.5-4.3L4 10M4 14a8 8 0 0 0 14.5 4.3L20 14"/>',
+  // Pan tool — an open hand. Toggled on = drag-to-pan with the mouse only.
+  hand: '<path d="M8 11V5.5a1.5 1.5 0 0 1 3 0V10m0-1.5a1.5 1.5 0 0 1 3 0V11m0-1a1.5 1.5 0 0 1 3 0v4a5 5 0 0 1-5 5h-1.5a5 5 0 0 1-3.6-1.5L5 15.5a1.5 1.5 0 0 1 2.2-2L8 14.5"/>',
   upload: '<path d="M12 15V4m0 0-4 4m4-4 4 4M5 19h14"/>',
   download: '<path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',

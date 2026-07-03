@@ -125,14 +125,24 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	}
 
 	s.mu.Lock()
-	// Release console ports of a previously loaded lab.
-	if s.lab != nil {
-		for _, nr := range s.lab.nodes {
+	old := s.lab
+	s.lab = ll
+	s.mu.Unlock()
+
+	// Stop the outgoing lab's nodes BEFORE dropping the reference. Without this,
+	// loading a new lab over a running one orphans the old nodes: they keep
+	// running as untracked supervisor children (observed: stranded IOL holding
+	// gigabytes of RAM and spinning VPCS), because nothing else ever holds a
+	// handle to them again. Then release its console ports.
+	if old != nil {
+		for id := range old.nodes {
+			s.stopNode(old, id)
+		}
+		s.stopBridges(old)
+		for _, nr := range old.nodes {
 			s.consolePorts.Release(nr.consolePort)
 		}
 	}
-	s.lab = ll
-	s.mu.Unlock()
 
 	return protocol.LabLoadResult{LabID: doc.ID, Nodes: nodes, Warnings: warnings}, nil
 }

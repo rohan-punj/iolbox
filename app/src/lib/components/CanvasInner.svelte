@@ -122,7 +122,7 @@
         type: "annoLine",
         width: Math.abs(a.x2 - a.x1) + LINE_PAD * 2,
         height: Math.abs(a.y2 - a.y1) + LINE_PAD * 2,
-        data: { annoId: a.id, x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, color: a.color, width: a.width },
+        data: { annoId: a.id, x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, color: a.color, width: a.width, arrow: a.arrow, dash: a.dash },
       };
     }
     return {
@@ -201,6 +201,13 @@
 
   let nodes = $state.raw<Node[]>([]);
   let edges = $state.raw<Edge[]>([]);
+
+  // Item 6 — canvas pan behaviour. By default a plain left-drag on empty canvas
+  // does NOT pan (panOnDrag=false); panning is Ctrl+left-drag (panActivationKey).
+  // A plain drag then draws a selection box (selectionOnDrag) — desirable. The
+  // "pan" toggle in the controls cluster flips panOnDrag on for mouse-only users;
+  // Escape or clicking it again turns it back off.
+  let panMode = $state(false);
 
   // Reconcile lab nodes into the flow-node array WITHOUT clobbering the fields
   // xyflow attaches during measurement (measured / internals / width / height /
@@ -626,6 +633,8 @@
         return;
       }
       if (annoTool.active) annoTool.disarm();
+      // Item 6 — Escape also cancels an active pan tool.
+      if (panMode) panMode = false;
       return;
     }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -743,6 +752,7 @@
 <div
   class="canvas-wrap"
   class:arming={annoTool.active !== null}
+  class:panning={panMode}
   bind:this={canvasEl}
   ondragover={onDragOver}
   ondrop={onDrop}
@@ -757,6 +767,9 @@
     minZoom={0.15}
     maxZoom={2.5}
     connectionMode={ConnectionMode.Loose}
+    panOnDrag={panMode}
+    panActivationKey="Control"
+    selectionOnDrag={!panMode}
     proOptions={{ hideAttribution: true }}
     onnodedragstop={onNodeDragStop}
     onconnect={onConnect}
@@ -783,6 +796,16 @@
 
   <!-- D5: bench view controls -->
   <div class="view-controls">
+    <!-- Item 6 — pan tool. When on, plain left-drag pans (mouse-only users);
+         when off, plain drag draws a selection box and only Ctrl+drag pans. -->
+    <button
+      class="vc"
+      class:on={panMode}
+      title={panMode ? "Pan tool on — click or Esc to turn off" : "Pan tool — drag to pan (or hold Ctrl)"}
+      aria-label="Toggle pan tool"
+      aria-pressed={panMode}
+      onclick={() => (panMode = !panMode)}
+    >{@html uiSvg("hand", 15)}</button>
     <button class="vc" title="Zoom in" onclick={() => zoomBy(ZOOM_STEP)} aria-label="Zoom in">+</button>
     <button class="vc" title="Zoom out" onclick={() => zoomBy(1 / ZOOM_STEP)} aria-label="Zoom out">−</button>
     <button class="vc" title="Fit to content" onclick={fitContent} aria-label="Fit to content">{@html uiSvg("fit", 15)}</button>
@@ -883,6 +906,14 @@
   .canvas-wrap.arming :global(.svelte-flow__pane) {
     cursor: crosshair;
   }
+  /* Item 6a — empty-canvas cursor is the default arrow, NOT grab. With
+     panOnDrag=false the pane never gets xyflow's `.draggable` grab cursor, but
+     selectionOnDrag adds a `.selection` pointer cursor; force default here so an
+     idle canvas reads as "arrow". Overridden by .arming (crosshair) and by the
+     pan tool (.panning → xyflow's own grab/grabbing on .draggable). */
+  .canvas-wrap:not(.arming):not(.panning) :global(.svelte-flow__pane) {
+    cursor: default;
+  }
   :global(.svelte-flow) {
     background: var(--ground);
   }
@@ -946,6 +977,11 @@
   .vc:hover {
     background: var(--bg-hover);
     color: var(--ink);
+  }
+  /* Item 6 — pressed state for the pan toggle. */
+  .vc.on {
+    background: var(--accent-muted);
+    color: var(--accent);
   }
   .vc :global(svg) {
     width: 15px;

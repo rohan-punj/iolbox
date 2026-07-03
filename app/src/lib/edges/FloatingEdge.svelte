@@ -73,12 +73,19 @@
   // ±spacing/2, three → -spacing/0/+spacing, etc. Sign is anchored to the
   // source→target vector so A↔B and B↔A parallels don't collapse onto each other.
   const PARALLEL_SPACING = 26;
-  const parallelOffset = $derived.by(() => {
+  // Item 1 — endpoint fan spacing. Parallel edges no longer share one anchor
+  // point at the node border (which pinched them to a wedge); each edge's start
+  // AND end anchor slides along the node border, perpendicular to the link axis,
+  // by fanSign * ENDPOINT_SPACING, clamped to the node radius so anchors stay on
+  // the node face. This makes parallel cables arrive visibly separated.
+  const ENDPOINT_SPACING = 10;
+  const parallelSign = $derived.by(() => {
     const idx = info.parallelIndex ?? 0;
     const count = info.parallelCount ?? 1;
     if (count <= 1) return 0;
-    return (idx - (count - 1) / 2) * PARALLEL_SPACING;
+    return idx - (count - 1) / 2;
   });
+  const parallelOffset = $derived(parallelSign * PARALLEL_SPACING);
 
   // Quadratic-bezier path + label anchor points, recomputed whenever either node
   // moves. The control point sits at the segment midpoint pushed perpendicular to
@@ -88,14 +95,35 @@
     const s = sourceNode.current;
     const t = targetNode.current;
     if (!s || !t) return null;
-    const { sx, sy, tx, ty } = getEdgeParams(s, t);
+    const raw = getEdgeParams(s, t);
+
+    const dx0 = raw.tx - raw.sx;
+    const dy0 = raw.ty - raw.sy;
+    const len0 = Math.hypot(dx0, dy0) || 1;
+    // Unit perpendicular to the endpoint line.
+    const px = -dy0 / len0;
+    const py = dx0 / len0;
+
+    // Item 1 — FAN THE ENDPOINTS. Slide each parallel edge's source AND target
+    // anchor along the node border, perpendicular to the link axis, by
+    // sign * ENDPOINT_SPACING. Clamp the slide to the node's half-extent so the
+    // anchor stays on the node face (never past the corner). Single links keep
+    // the exact intersection point (endShift 0) → unchanged.
+    const nodeRadius = (s: typeof sourceNode.current) => {
+      const w = s?.measured?.width ?? s?.width ?? 64;
+      const h = s?.measured?.height ?? s?.height ?? 64;
+      return Math.min(w, h) / 2;
+    };
+    const rad = Math.min(nodeRadius(s), nodeRadius(t));
+    const endShift = Math.max(-rad, Math.min(rad, parallelSign * ENDPOINT_SPACING));
+    const sx = raw.sx + px * endShift;
+    const sy = raw.sy + py * endShift;
+    const tx = raw.tx + px * endShift;
+    const ty = raw.ty + py * endShift;
 
     const dx = tx - sx;
     const dy = ty - sy;
-    const len = Math.hypot(dx, dy) || 1;
-    // Unit perpendicular to the endpoint line.
-    const px = -dy / len;
-    const py = dx / len;
+
     // Control point: midpoint pushed out. Doubling the offset makes the curve
     // *pass* near ±offset at its apex (a quadratic reaches half its control
     // displacement at t=0.5), matching the intended fan spacing.
@@ -114,33 +142,28 @@
       };
     };
 
-    // R1 — chip separation for parallel links. Near the endpoints the curve has
-    // collapsed back toward the node, so evaluating chips ON the curve there is
-    // NOT enough to keep them apart. Two corrections:
-    //  (a) Nudge the chip t-parameter OUTWARD toward mid-curve when there are
-    //      siblings, so chips leave the crowded endpoint (and the node's own
-    //      name chip) and sit where the fan has actually spread. More siblings →
-    //      push a little further in.
-    //  (b) Add a per-edge perpendicular OFFSET on top of the on-curve point,
-    //      equal to this edge's signed fan offset plus a small extra gap scaled
-    //      by index, so adjacent chips never overlap even where curves converge.
+    // Item 2 — labels sit ON the link line. The chip anchor is placed EXACTLY on
+    // this edge's own curve (perpendicular offset 0); the chip's own opaque
+    // background masks the line passing behind it. Parallel chips no longer need
+    // an extra perpendicular nudge to separate — each chip rides ITS OWN curve
+    // (the endpoint fan + bow already put the curves at different places), so
+    // on-curve placement separates them for free. A tiny per-index t-shift keeps
+    // chips of adjacent parallels from landing at the same distance-along, so
+    // they don't collide where curves happen to cross near the node.
     const count = info.parallelCount ?? 1;
     const single = count <= 1;
-    // Base chip t at 0.16 / 0.84; slide toward mid by up to ~0.12 for dense fans.
-    const tPush = single ? 0 : Math.min(0.12, 0.05 + count * 0.012);
-    const su = 0.16 + tPush;
-    const tu = 0.84 - tPush;
-    // Extra perpendicular separation (px,py already unit). The edge's own fan
-    // offset spreads chips like the cable; an extra 4px * index guarantees a
-    // gap between neighbours regardless of curvature at the chip's t.
     const idx = info.parallelIndex ?? 0;
-    const spread = single ? 0 : off + Math.sign(off || 1) * 0 + (idx - (count - 1) / 2) * 4;
+    // Base chip t at 0.22 / 0.78; nudge by a small signed per-index amount.
+    const tShift = single ? 0 : (idx - (count - 1) / 2) * 0.03;
+    const su = 0.22 + tShift;
+    const tu = 0.78 + tShift;
     const sPt = at(su);
     const tPt = at(tu);
     return {
       path,
-      sChip: { x: sPt.x + px * spread, y: sPt.y + py * spread },
-      tChip: { x: tPt.x + px * spread, y: tPt.y + py * spread },
+      // Perpendicular offset 0 → chip centered over the path.
+      sChip: { x: sPt.x, y: sPt.y },
+      tChip: { x: tPt.x, y: tPt.y },
       // origin inside each chip pointing back at its own node
       sOrigin: dx >= 0 ? "left" : "right",
       tOrigin: dx >= 0 ? "right" : "left",
@@ -312,9 +335,11 @@
     font-size: calc(var(--fs-chip) + 1px);
     line-height: 1;
     color: var(--ink);
-    background: color-mix(in oklab, var(--chip-bg) 92%, var(--ground));
-    -webkit-backdrop-filter: var(--blur);
-    backdrop-filter: var(--blur);
+    /* Item 2 — the chip sits ON the link line, so its background must be OPAQUE
+       to mask the cable passing behind it (a translucent chip let the stroke
+       bleed through the label). Paint the opaque --ground first, then the
+       (translucent) chip tint on top → the composite is fully opaque, no blur. */
+    background: linear-gradient(color-mix(in oklab, var(--chip-bg) 100%, transparent), color-mix(in oklab, var(--chip-bg) 100%, transparent)), var(--ground);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     /* R1 — more compact so parallel-link chips need less room to separate. */

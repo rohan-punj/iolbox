@@ -292,19 +292,70 @@ func listenSocketInode(port int) string {
 // killVPCS reaps a daemonized vpcs as reliably as we can:
 //  1. SIGKILL the process group we launched it in (Setpgid). If vpcs forked but
 //     did NOT setsid, the daemon is still in this group and dies here.
-//  2. Fallback: if vpcs called setsid() and escaped the group, find whatever pid
-//     is now LISTENing on its console port (via /proc) and kill that too. This
-//     catches the double-fork-daemon case the group kill misses, so lab.stop
-//     leaves no orphan vpcs.
+//  2. Whatever pid is now LISTENing on its console port (via /proc), if any.
+//  3. DETERMINISTIC: any vpcs process whose argv carries this node's unique
+//     "-p <port>" console flag. VPCS double-forks AND setsid()s, escaping the
+//     group (step 1 finds an empty group) and, once it has re-daemonized or a
+//     duplicate stole the bind, it may no longer own the LISTEN socket step 2
+//     keys on — so those two miss real orphans (observed: VPCS spinning at
+//     100% CPU after lab.stop). The console port is unique per node and appears
+//     verbatim in the daemon's argv, so matching it reaps the exact process
+//     regardless of session/group/socket state.
 //
-// Both steps are best-effort; a missing process / already-dead pid is not an
-// error. port is the vpcs console port (unique per node), which the daemon owns.
+// All steps are best-effort; a missing/already-dead pid is not an error.
 func killVPCS(pgid, port int) error {
 	err := killGroup(pgid)
 	if pid := pidListeningOn(port); pid > 0 && pid != pgid {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
+	for _, pid := range pidsWithVPCSConsolePort(port) {
+		if pid != pgid {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
 	return err
+}
+
+// pidsWithVPCSConsolePort returns every pid whose argv is a vpcs invocation
+// carrying "-p <port>" (this node's unique console flag). It scans
+// /proc/<pid>/cmdline (NUL-separated argv) for a token "vpcs" followed later by
+// "-p" then the exact port. Best-effort: unreadable procs are skipped.
+func pidsWithVPCSConsolePort(port int) []int {
+	want := strconv.Itoa(port)
+	var out []int
+	entries, err := filepath.Glob("/proc/[0-9]*/cmdline")
+	if err != nil {
+		return nil
+	}
+	for _, path := range entries {
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil || len(raw) == 0 {
+			continue
+		}
+		args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+		isVPCS := false
+		for _, a := range args {
+			if a == "vpcs" || strings.HasSuffix(a, "/vpcs") {
+				isVPCS = true
+				break
+			}
+		}
+		if !isVPCS {
+			continue
+		}
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "-p" && args[i+1] == want {
+				rest := strings.TrimPrefix(path, "/proc/")
+				if slash := strings.IndexByte(rest, '/'); slash > 0 {
+					if pid, perr := strconv.Atoi(rest[:slash]); perr == nil {
+						out = append(out, pid)
+					}
+				}
+				break
+			}
+		}
+	}
+	return out
 }
 
 // serveConsole accepts telnet clients on the console port and bridges each to

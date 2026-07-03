@@ -25,6 +25,15 @@
   const y2 = $derived((data as any).y2 as number);
   const color = $derived(((data as any).color as string | undefined) ?? "var(--accent)");
   const width = $derived(((data as any).width as number | undefined) ?? 2.5);
+  // Item 7 — arrowheads + dashed style. arrow: none | one (at x2/y2) | both.
+  const arrow = $derived(((data as any).arrow as "none" | "one" | "both" | undefined) ?? "none");
+  const dash = $derived(((data as any).dash as boolean | undefined) ?? false);
+  // Unique marker ids per line so multiple arrowed lines don't collide.
+  const markerId = $derived(`anno-arrow-${annoId}`);
+  // Marker sized in userSpace so it scales with stroke width; dash pattern also
+  // scales so thick lines get proportional dashes.
+  const markerSize = $derived(3 + width * 1.6);
+  const dashArray = $derived(dash ? `${width * 2.4} ${width * 2}` : undefined);
 
   // Box-local origin = min corner minus pad.
   const ox = $derived(Math.min(x1, x2) - LINE_PAD);
@@ -83,6 +92,34 @@
   tabindex="-1"
 >
   <svg width={boxW} height={boxH} viewBox={`0 0 ${boxW} ${boxH}`}>
+    {#if arrow !== "none"}
+      <!-- Item 7 — arrowhead marker, sized in userSpace so it tracks stroke
+           width, filled with the line colour. orient=auto rotates to the line. -->
+      <defs>
+        <marker
+          id={markerId}
+          markerUnits="userSpaceOnUse"
+          markerWidth={markerSize}
+          markerHeight={markerSize}
+          refX={markerSize * 0.85}
+          refY={markerSize / 2}
+          orient="auto"
+        >
+          <path d={`M0,0 L${markerSize},${markerSize / 2} L0,${markerSize} z`} fill={color} />
+        </marker>
+        <marker
+          id={`${markerId}-start`}
+          markerUnits="userSpaceOnUse"
+          markerWidth={markerSize}
+          markerHeight={markerSize}
+          refX={markerSize * 0.15}
+          refY={markerSize / 2}
+          orient="auto-start-reverse"
+        >
+          <path d={`M0,0 L${markerSize},${markerSize / 2} L0,${markerSize} z`} fill={color} />
+        </marker>
+      </defs>
+    {/if}
     <!-- Wide transparent hit-line so the thin cable is easy to grab/hover. -->
     <line
       class="hit"
@@ -99,6 +136,9 @@
       y2={p2.y - oy}
       stroke={color}
       stroke-width={width}
+      stroke-dasharray={dashArray}
+      marker-end={arrow === "one" || arrow === "both" ? `url(#${markerId})` : undefined}
+      marker-start={arrow === "both" ? `url(#${markerId}-start)` : undefined}
     />
   </svg>
   {#if selected}

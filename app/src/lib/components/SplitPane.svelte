@@ -38,14 +38,25 @@
   }
 
   let dragging = $state(false);
+  let dividerEl: HTMLElement | undefined = $state();
 
+  // Item 4 — the divider is the resize handle. The prior version measured the
+  // pane against `e.currentTarget.parentElement` (the divider's parent = the
+  // flex row/column that holds pane+divider). That is correct, but the divider
+  // was ALWAYS rendered AFTER the pane; for an `edge="end"` dock (console at the
+  // bottom / right) the handle ended up on the far outer edge of the window,
+  // past the pane, so a drag on the *inner* seam between canvas and console
+  // never landed on it. We now render the divider on the correct side of the
+  // pane (before it for edge="end") AND resolve the wrapper via the divider's
+  // own parent so the math is stable regardless of which side we captured on.
   function onPointerDown(e: PointerEvent) {
     dragging = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dividerEl?.setPointerCapture(e.pointerId);
+    e.preventDefault();
   }
   function onPointerMove(e: PointerEvent) {
     if (!dragging) return;
-    const wrapper = (e.currentTarget as HTMLElement).parentElement;
+    const wrapper = dividerEl?.parentElement;
     if (!wrapper) return;
     const rect = wrapper.getBoundingClientRect();
     let next: number;
@@ -56,8 +67,10 @@
     }
     size = Math.min(max, Math.max(min, next));
   }
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent) {
+    if (!dragging) return;
     dragging = false;
+    dividerEl?.releasePointerCapture?.(e.pointerId);
     if (storageKey) {
       try {
         localStorage.setItem(storageKey, String(Math.round(size)));
@@ -68,6 +81,28 @@
   }
 </script>
 
+{#snippet handle()}
+  <div
+    class="divider"
+    class:horizontal={direction === "horizontal"}
+    class:vertical={direction === "vertical"}
+    class:dragging
+    bind:this={dividerEl}
+    role="separator"
+    aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
+    onpointerdown={onPointerDown}
+    onpointermove={onPointerMove}
+    onpointerup={onPointerUp}
+    onpointercancel={onPointerUp}
+  ></div>
+{/snippet}
+
+<!-- edge="end" docks (console bottom/right) put the handle on the INNER seam,
+     i.e. BEFORE the pane in flow order; edge="start" docks (palette) put it
+     after. -->
+{#if edge === "end"}
+  {@render handle()}
+{/if}
 <div
   class="pane"
   class:horizontal={direction === "horizontal"}
@@ -76,17 +111,9 @@
 >
   {@render children()}
 </div>
-<div
-  class="divider"
-  class:horizontal={direction === "horizontal"}
-  class:vertical={direction === "vertical"}
-  class:dragging
-  role="separator"
-  aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
-  onpointerdown={onPointerDown}
-  onpointermove={onPointerMove}
-  onpointerup={onPointerUp}
-></div>
+{#if edge === "start"}
+  {@render handle()}
+{/if}
 
 <style>
   .pane {
@@ -95,21 +122,26 @@
     min-width: 0;
     min-height: 0;
   }
+  /* Item 4 — a real, grabbable handle. ≥6px hit area with a col/row-resize
+     cursor. The thin visible rule lives in ::after; the whole .divider is the
+     hit target, and its z-index sits above adjacent panes so the console's
+     xterm/term-area can't swallow the pointerdown. */
   .divider {
     flex-shrink: 0;
     background: transparent;
     position: relative;
-    z-index: 5;
+    z-index: 20;
+    touch-action: none;
   }
   .divider.horizontal {
-    width: 5px;
+    width: 8px;
     cursor: col-resize;
-    margin: 0 -2px;
+    margin: 0 -4px;
   }
   .divider.vertical {
-    height: 5px;
+    height: 8px;
     cursor: row-resize;
-    margin: -2px 0;
+    margin: -4px 0;
   }
   .divider::after {
     content: "";
@@ -142,8 +174,5 @@
   .divider.vertical:hover::after,
   .divider.vertical.dragging::after {
     height: 3px;
-  }
-  .divider.horizontal {
-    width: 5px;
   }
 </style>

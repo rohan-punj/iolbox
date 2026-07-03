@@ -116,6 +116,10 @@ export type Annotation =
       color?: string;
       /** Stroke width in px; missing = 2.5. */
       width?: number;
+      /** Arrowheads: "none" (default) | "one" (at x2/y2) | "both" endpoints. */
+      arrow?: "none" | "one" | "both";
+      /** Dashed stroke when true; missing/false = solid (current look). */
+      dash?: boolean;
     };
 
 export interface LabDocument {

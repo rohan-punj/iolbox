@@ -87,12 +87,7 @@
     tabindex="0"
     ondragstart={(e) => onDragStart(e, "vpcs")}
   >
-    <span class="swatch vpcs" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="16" height="16">
-        <rect x="3" y="4" width="18" height="12" rx="1.5" fill="currentColor" opacity="0.2" />
-        <rect x="3" y="4" width="18" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" />
-      </svg>
-    </span>
+    <span class="swatch vpcs" aria-hidden="true">{@html iconSvg("pc", 18)}</span>
     <div class="item-text">
       <div class="item-name">VPCS</div>
       <div class="item-sub">Virtual PC</div>
@@ -146,18 +141,10 @@
       ondragstart={(e) => onDragStart(e, "iol", img.id)}
       title={img.filename}
     >
+      <!-- Item 5 — real EVE device artwork per image class (l2→switch,
+           l3/unknown→router), matching the icon a dropped node will show. -->
       <span class="swatch" class:l2={img.class === "l2"} aria-hidden="true">
-        {#if img.class === "l2"}
-          <svg viewBox="0 0 24 24" width="16" height="16">
-            <rect x="2" y="8" width="20" height="8" rx="1.5" fill="currentColor" opacity="0.2" />
-            <rect x="2" y="8" width="20" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" />
-          </svg>
-        {:else}
-          <svg viewBox="0 0 24 24" width="16" height="16">
-            <circle cx="12" cy="12" r="9" fill="currentColor" opacity="0.2" />
-            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5" />
-          </svg>
-        {/if}
+        {@html iconSvg(img.class === "l2" ? "switch" : "router", 18)}
       </span>
       <div class="item-text">
         <div class="item-name">{img.filename}</div>
@@ -406,8 +393,12 @@
     color: var(--accent);
   }
   .swatch :global(svg) {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
+  }
+  .swatch :global(img) {
+    width: 18px;
+    height: 18px;
   }
   .swatch.l2 {
     color: var(--node-iol-l2);
