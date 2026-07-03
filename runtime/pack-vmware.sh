@@ -1,53 +1,94 @@
 #!/usr/bin/env bash
 # pack-vmware.sh — turn the rootfs built by build-rootfs.sh into a bootable
 # VMware appliance: a GPT disk (bios_grub + root) with legacy-BIOS GRUB and a
-# Debian kernel, converted to .vmdk, plus a templated .vmx
+# Debian kernel, converted to monolithicSparse .vmdk, plus a templated .vmx
 # (runtime/files/iolab-appliance.vmx.tmpl). See docs/providers.md
 # "vmware (primary)" for the contract.
 #
-# Must run as root (loop devices, mount, chroot, grub-install all need it)
-# on a real Linux box. Requires: qemu-img, parted, mkfs.ext4, grub tooling
-# is installed INSIDE the chroot (grub-pc), so the builder itself only
-# needs qemu-utils, parted, e2fsprogs, rsync.
+# The disk-image build itself (partition -> loop -> mkfs -> rsync rootfs ->
+# chroot kernel/grub/open-vm-tools -> MAC-matched networkd configs) lives in
+# the shared runtime/lib-disk.sh (also consumed by pack-ova.sh / pack-qemu.sh)
+# so all appliance formats build byte-identical disk contents. This script is
+# just: call build_raw_disk (with VMware options), then raw -> vmdk, then
+# template the vmx.
 #
-# Disk layout (GPT, legacy BIOS boot — VMware Workstation's default; the
-# vmx template deliberately does not set firmware="efi"):
-#   p1  bios_grub  1MiB..2MiB   (grub-install --target=i386-pc core.img home)
+# Must run as root (loop devices, mount, chroot, grub-install all need it)
+# on a real Linux box. Requires: qemu-img, parted, mkfs.ext4, rsync (grub
+# tooling is installed INSIDE the chroot, so the builder needs only
+# qemu-utils, parted, e2fsprogs, rsync).
+#
+# Disk layout (GPT, legacy BIOS boot — VMware Workstation's default; the vmx
+# template deliberately does not set firmware="efi"):
+#   p1  bios_grub  1MiB..2MiB
 #   p2  root ext4  2MiB..100%   (LABEL=iolab-root)
-# No ESP: nothing here boots EFI, and one partition fewer is one less
-# thing to break. 16 GB virtual size — the image library
-# (/opt/iolab/images) lives INSIDE the appliance and real IOL images run
-# 100-400 MB each; the vmdk is monolithicSparse so actual on-disk size
-# stays near the written bytes (~600-800 MB with kernel + tools).
+# 16 GB virtual size (the image library lives INSIDE the appliance);
+# monolithicSparse vmdk so actual on-disk bytes stay near what's written.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
-ROOTFS_DIR="$BUILD_DIR/rootfs"
-WORK_DIR="$BUILD_DIR/vmware-work"
-RAW_DISK="$WORK_DIR/iolab-appliance.raw"
-OUT_VMDK="$BUILD_DIR/iolab-appliance.vmdk"
-OUT_VMX="$BUILD_DIR/iolab-appliance.vmx"
+
+# --version stamps the artifact names. Default empty -> historical unversioned
+# names (iolab-appliance.vmdk/.vmx) so existing tooling keeps working.
+VERSION=""
+
+# Size levers (opt-in; forwarded to lib-disk.sh's build_raw_disk). Defaults
+# keep the historical byte-comparable eager-mkfs, i386-included, vmtools-in
+# behavior.
+LAZY_INIT=0
+INODE_COUNT=""
+NO_I386=0
+ZEROFREE=0
+
+recompute_paths() {
+    ROOTFS_DIR="$BUILD_DIR/rootfs"
+    WORK_DIR="$BUILD_DIR/vmware-work"
+    RAW_DISK="$WORK_DIR/iolab-appliance.raw"
+    # Versioned artifact names: iolab-appliance-<version>.{vmdk,vmx}. Empty
+    # VERSION -> the historical unversioned names.
+    local stem="iolab-appliance"
+    [ -n "$VERSION" ] && stem="iolab-appliance-$VERSION"
+    OUT_VMDK="$BUILD_DIR/$stem.vmdk"
+    OUT_VMX="$BUILD_DIR/$stem.vmx"
+}
+recompute_paths
 
 DISK_SIZE_MB=16384         # 16 GB virtual; sparse vmdk only consumes written blocks
 
-# Fixed NIC MACs — MUST match files/iolab-appliance.vmx.tmpl. The networkd
-# configs written below match on these so "which NIC is host-only" never
+# Fixed NIC MACs — MUST match files/iolab-appliance.vmx.tmpl. lib-disk.sh
+# writes MAC-matched networkd configs so "which NIC is host-only" never
 # depends on interface naming (ens160 vs ens33 vs eth0).
 MAC_HOSTONLY="00:50:56:3f:ab:01"
 MAC_NAT="00:50:56:3f:ab:02"
 
 usage() {
     cat <<EOF
-Usage: $0 [--build-dir DIR]
+Usage: $0 [options]
 
   --build-dir DIR     Root containing rootfs/ (default: $BUILD_DIR)
+  --version VER       Stamp artifact names as iolab-appliance-VER.{vmdk,vmx}
+                       (default: unversioned iolab-appliance.{vmdk,vmx})
+  --zerofree          Zero free blocks before conversion — THE size lever:
+                       measured ~1.55 GiB -> ~0.81 GiB vmdk (needs the
+                       'zerofree' package; dd fallback otherwise)
+  --lazy-init         mkfs.ext4 lazy_itable_init+lazy_journal_init (measured to
+                       NOT shrink the vmdk; kept for completeness)
+  --inode-count N     mkfs.ext4 -N N (negligible size effect; kept for tuning)
+  --no-i386           Exclude i386 multiarch libs from the disk (64-bit-only)
+  -h, --help          This help
+
+Defaults (no size levers) reproduce the historical byte-comparable build.
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --build-dir) BUILD_DIR="$2"; ROOTFS_DIR="$BUILD_DIR/rootfs"; WORK_DIR="$BUILD_DIR/vmware-work"; RAW_DISK="$WORK_DIR/iolab-appliance.raw"; OUT_VMDK="$BUILD_DIR/iolab-appliance.vmdk"; OUT_VMX="$BUILD_DIR/iolab-appliance.vmx"; shift 2 ;;
+        --build-dir) BUILD_DIR="$2"; recompute_paths; shift 2 ;;
+        --version) VERSION="$2"; recompute_paths; shift 2 ;;
+        --zerofree) ZEROFREE=1; shift ;;
+        --lazy-init) LAZY_INIT=1; shift ;;
+        --inode-count) INODE_COUNT="$2"; shift 2 ;;
+        --no-i386) NO_I386=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -63,155 +104,44 @@ if [ ! -d "$ROOTFS_DIR" ]; then
     exit 1
 fi
 
-for tool in qemu-img parted mkfs.ext4 rsync chroot; do
-    command -v "$tool" >/dev/null 2>&1 || {
-        echo "pack-vmware: required tool '$tool' not found." >&2
-        echo "  apt-get install qemu-utils parted e2fsprogs rsync" >&2
-        exit 1
-    }
-done
+# shellcheck source=lib-disk.sh
+source "$SCRIPT_DIR/lib-disk.sh"
 
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 
 # ---------------------------------------------------------------------------
-# Stage 1: raw disk + GPT partition table (bios_grub + root)
+# Stage 1-4: build the bootable raw disk (shared lib). VMware keeps
+# open-vm-tools (--no-vmtools NOT passed) and the MAC-matched NIC configs.
 # ---------------------------------------------------------------------------
-echo "== pack-vmware: creating ${DISK_SIZE_MB}MB raw disk =="
-qemu-img create -f raw "$RAW_DISK" "${DISK_SIZE_MB}M"
+disk_opts=(
+    --rootfs "$ROOTFS_DIR"
+    --out "$RAW_DISK"
+    --files-dir "$SCRIPT_DIR/files"
+    --size-mb "$DISK_SIZE_MB"
+    --hostonly-mac "$MAC_HOSTONLY"
+    --nat-mac "$MAC_NAT"
+)
+[ "$ZEROFREE" -eq 1 ] && disk_opts+=(--zerofree)
+[ "$LAZY_INIT" -eq 1 ] && disk_opts+=(--lazy-init)
+[ -n "$INODE_COUNT" ] && disk_opts+=(--inode-count "$INODE_COUNT")
+[ "$NO_I386" -eq 1 ] && disk_opts+=(--no-i386)
 
-parted --script "$RAW_DISK" \
-    mklabel gpt \
-    mkpart bios_grub 1MiB 2MiB \
-    set 1 bios_grub on \
-    mkpart root ext4 2MiB 100%
-
-# ---------------------------------------------------------------------------
-# Stage 2: loop-mount, format, copy rootfs
-# ---------------------------------------------------------------------------
-echo "== pack-vmware: attaching loop device =="
-LOOP_DEV="$(losetup --show -f -P "$RAW_DISK")"
-trap 'losetup -d "$LOOP_DEV" 2>/dev/null || true' EXIT
-
-ROOT_PART="${LOOP_DEV}p2"
-
-mkfs.ext4 -q -L iolab-root "$ROOT_PART"
-
-MNT="$WORK_DIR/mnt"
-mkdir -p "$MNT"
-mount "$ROOT_PART" "$MNT"
-
-echo "== pack-vmware: copying rootfs onto disk =="
-# -a preserves everything build-rootfs.sh set up (symlinks for the systemd
-# unit enablement, root's shadow entry, file modes).
-rsync -aHAX --numeric-ids "$ROOTFS_DIR"/ "$MNT"/
-
-# Bind-mount pseudo-filesystems for the chroot steps (kernel install,
-# grub-install) that follow — both need /proc, /dev, /sys to work.
-for fs in proc sys dev dev/pts; do
-    mkdir -p "$MNT/$fs"
-    mount --bind "/$fs" "$MNT/$fs"
-done
-trap 'for fs in dev/pts dev sys proc; do umount -lf "$MNT/$fs" 2>/dev/null || true; done; umount -lf "$MNT" 2>/dev/null || true; losetup -d "$LOOP_DEV" 2>/dev/null || true' EXIT
+build_raw_disk "${disk_opts[@]}"
 
 # ---------------------------------------------------------------------------
-# Stage 3: kernel + grub + open-vm-tools inside the chroot
-# ---------------------------------------------------------------------------
-echo "== pack-vmware: installing kernel + grub + open-vm-tools =="
-
-# fstab: root by LABEL (inside the guest the disk enumerates as /dev/sda,
-# never as this build's loop device).
-cat > "$MNT/etc/fstab" <<EOF
-LABEL=iolab-root   /   ext4   errors=remount-ro   0 1
-EOF
-
-# The finished rootfs ships an EMPTY resolv.conf (see build-rootfs.sh
-# stage 6) — apt inside this chroot needs a real one. Restore the empty
-# file after the installs below.
-cp -L /etc/resolv.conf "$MNT/etc/resolv.conf"
-
-chroot "$MNT" env DEBIAN_FRONTEND=noninteractive apt-get update
-# linux-image-amd64 (the generic metapackage) — NOT linux-image-cloud-amd64:
-# the cloud flavor sheds non-virtio drivers and this appliance's vmx uses
-# lsilogic SCSI + e1000e NICs, which the generic flavor supports out of the
-# box. open-vm-tools makes `vmrun getGuestIPAddress` work — the primary
-# host-only IP discovery mechanism (the appliance's host-only address is a
-# DHCP lease whose subnet differs per Workstation install; a baked static
-# IP would only be right on the machine that built the image).
-chroot "$MNT" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    linux-image-amd64 grub-pc open-vm-tools
-
-chroot "$MNT" update-grub
-
-# --target=i386-pc: legacy BIOS boot, matching the vmx NOT setting
-# firmware="efi". --recheck avoids grub-install caching a device map from
-# a previous run's loop device node.
-chroot "$MNT" grub-install --target=i386-pc --recheck "$LOOP_DEV"
-
-# ---------------------------------------------------------------------------
-# Stage 4: per-NIC networkd configs, matched by the vmx's fixed MACs
-# ---------------------------------------------------------------------------
-echo "== pack-vmware: writing MAC-matched networkd configs =="
-
-# Host-only NIC: DHCP lease from VMware's vmnetdhcp (subnet varies per
-# install — that's WHY it's DHCP). No gateway/DNS ever wanted from this
-# segment even if a misconfigured vmnet offers one: the default route must
-# stay on the NAT NIC or the NAT node MASQUERADEs into a dead end.
-cat > "$MNT/etc/systemd/network/10-hostonly.network" <<EOF
-# Written by pack-vmware.sh (VMware artifact only). MAC matches
-# ethernet0 in the vmx template.
-[Match]
-MACAddress=$MAC_HOSTONLY
-
-[Network]
-DHCP=ipv4
-
-[DHCPv4]
-UseGateway=false
-UseDNS=false
-UseRoutes=false
-EOF
-
-# NAT NIC: full DHCP — its gateway IS the NAT node's outbound path.
-cat > "$MNT/etc/systemd/network/20-nat.network" <<EOF
-# Written by pack-vmware.sh (VMware artifact only). MAC matches
-# ethernet1 in the vmx template.
-[Match]
-MACAddress=$MAC_NAT
-
-[Network]
-DHCP=ipv4
-EOF
-
-# ---------------------------------------------------------------------------
-# Stage 5: cleanup + unmount
-# ---------------------------------------------------------------------------
-echo "== pack-vmware: cleaning apt cache inside image =="
-chroot "$MNT" apt-get clean
-rm -rf "$MNT"/var/lib/apt/lists/*
-: > "$MNT/etc/resolv.conf"
-
-sync
-for fs in dev/pts dev sys proc; do
-    umount -lf "$MNT/$fs"
-done
-umount -lf "$MNT"
-losetup -d "$LOOP_DEV"
-trap - EXIT
-
-# ---------------------------------------------------------------------------
-# Stage 6: raw -> vmdk
+# Stage 5: raw -> vmdk
 # ---------------------------------------------------------------------------
 echo "== pack-vmware: converting raw -> vmdk =="
 # monolithicSparse: single-file, growable. VMware Workstation reads this
 # subformat natively; the split/streamOptimized variants only matter for
-# OVA/ESXi distribution.
+# OVA/ESXi distribution (that's pack-ova.sh's job).
 qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse \
     "$RAW_DISK" "$OUT_VMDK"
 rm -f "$RAW_DISK"
 
 # ---------------------------------------------------------------------------
-# Stage 7: template the .vmx
+# Stage 6: template the .vmx
 # ---------------------------------------------------------------------------
 echo "== pack-vmware: templating .vmx =="
 VMDK_FILENAME="$(basename "$OUT_VMDK")"

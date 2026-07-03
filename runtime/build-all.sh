@@ -14,7 +14,9 @@ SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"
 BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
 SKIP_VMWARE=0
 SKIP_WSL=0
+VERSION=""
 EXTRA_ROOTFS_ARGS=()
+EXTRA_VMWARE_ARGS=()
 
 usage() {
     cat <<EOF
@@ -25,16 +27,26 @@ Usage: $0 --supervisor-bin PATH [options]
                            GUI bundle is embedded — a plain go build ships
                            the placeholder GUI)
   --build-dir DIR          Output root (default: $BUILD_DIR)
+  --version VER            Stamp appliance artifact names (iolab-appliance-VER
+                           .{vmdk,vmx}); default: unversioned names. Forwarded
+                           to pack-vmware.sh. (The WSL tar name is unaffected.)
   --skip-wsl               Don't produce iolab-rootfs.tar
   --skip-vmware             Don't produce the vmdk/vmx appliance
-  --no-i386                 Forwarded to build-rootfs.sh (smaller, 64-bit-IOL-only build)
+  --no-i386                 Forwarded to BOTH build-rootfs.sh and pack-vmware.sh
+                             (smaller, 64-bit-IOL-only build)
+  --zerofree                Forwarded to pack-vmware.sh: zero free blocks before
+                             conversion — the effective vmdk size lever
+                             (~1.55 GiB -> ~0.81 GiB)
+  --lazy-init               Forwarded to pack-vmware.sh: mkfs.ext4 lazy init
+                             (measured to NOT shrink the vmdk)
+  --inode-count N           Forwarded to pack-vmware.sh: mkfs.ext4 -N N
   -h, --help                This help
 
 Runs, in order:
   1. ./fetch-vpcs.sh          (only if runtime/build/vpcs/vpcs is missing)
   2. ./build-rootfs.sh         -> runtime/build/rootfs/
   3. ./pack-wsl.sh              -> runtime/build/iolab-rootfs.tar   (unless --skip-wsl)
-  4. ./pack-vmware.sh           -> runtime/build/iolab-appliance.{vmdk,vmx} (unless --skip-vmware)
+  4. ./pack-vmware.sh           -> runtime/build/iolab-appliance[-VER].{vmdk,vmx} (unless --skip-vmware)
 EOF
 }
 
@@ -42,9 +54,13 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --supervisor-bin) SUPERVISOR_BIN="$2"; shift 2 ;;
         --build-dir) BUILD_DIR="$2"; shift 2 ;;
+        --version) VERSION="$2"; shift 2 ;;
         --skip-wsl) SKIP_WSL=1; shift ;;
         --skip-vmware) SKIP_VMWARE=1; shift ;;
-        --no-i386) EXTRA_ROOTFS_ARGS+=(--no-i386); shift ;;
+        --no-i386) EXTRA_ROOTFS_ARGS+=(--no-i386); EXTRA_VMWARE_ARGS+=(--no-i386); shift ;;
+        --zerofree) EXTRA_VMWARE_ARGS+=(--zerofree); shift ;;
+        --lazy-init) EXTRA_VMWARE_ARGS+=(--lazy-init); shift ;;
+        --inode-count) EXTRA_VMWARE_ARGS+=(--inode-count "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -88,7 +104,10 @@ fi
 
 if [ "$SKIP_VMWARE" -eq 0 ]; then
     echo "== build-all: pack-vmware.sh =="
-    "$SCRIPT_DIR/pack-vmware.sh" --build-dir "$BUILD_DIR"
+    VMWARE_ARGS=(--build-dir "$BUILD_DIR")
+    [ -n "$VERSION" ] && VMWARE_ARGS+=(--version "$VERSION")
+    VMWARE_ARGS+=("${EXTRA_VMWARE_ARGS[@]}")
+    "$SCRIPT_DIR/pack-vmware.sh" "${VMWARE_ARGS[@]}"
 else
     echo "== build-all: --skip-vmware given, skipping =="
 fi
