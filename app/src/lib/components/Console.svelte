@@ -10,6 +10,17 @@
   // was most recently activated.
   let activeCapture = $state<number | null>(null);
 
+  // Per-tab web/native flip state — SESSION-ONLY, never persisted.
+  // Console tabs: flipped-to-native unmounts the ConsoleTerm (its WS
+  // disconnects on destroy) and shows a placeholder; flipping back remounts a
+  // fresh ConsoleTerm/transport, and the supervisor's console replay buffer
+  // repaints the recent context.
+  let nativeConsole = $state<Record<number, boolean>>({});
+  // Capture tabs: flipped shows the native Wireshark attach command as an
+  // overlay ON TOP of the live summary, which keeps running underneath (the
+  // stream is cheap and keeping it hot means flipping back shows no gap).
+  let nativeCapture = $state<Record<number, boolean>>({});
+
   // Live-capture tab title: "R1 e0/0 ⇄ e0/0 SW1" from the link's endpoints.
   function captureTitle(linkId: number): string {
     const link = labStore.lab.links.find((l) => l.id === linkId);
@@ -30,10 +41,39 @@
   }
   function closeCapture(linkId: number) {
     labStore.closeCapture(linkId);
+    nativeCapture = { ...nativeCapture, [linkId]: false };
     if (activeCapture === linkId) {
       activeCapture = labStore.openCaptureTabs[0] ?? null;
       if (activeCapture === null) labStore.activeConsoleTab = labStore.openConsoleTabs[0] ?? null;
     }
+  }
+
+  function closeConsole(nodeId: number) {
+    labStore.closeConsole(nodeId);
+    nativeConsole = { ...nativeConsole, [nodeId]: false };
+  }
+
+  /** Flip a console tab between the web terminal and a native telnet session. */
+  function flipConsole(nodeId: number) {
+    if (nativeConsole[nodeId]) {
+      nativeConsole = { ...nativeConsole, [nodeId]: false };
+      labStore.pushLog("info", `${nodeName(nodeId)}: reattached web console`, nodeId);
+      return;
+    }
+    nativeConsole = { ...nativeConsole, [nodeId]: true };
+    openNative(nodeId);
+  }
+
+  function flipCapture(linkId: number) {
+    nativeCapture = { ...nativeCapture, [linkId]: !nativeCapture[linkId] };
+  }
+
+  /** The native Wireshark attach command for a capturing link, or null while
+   *  the capture port is not known yet (no capture.started seen). */
+  function wiresharkCmd(linkId: number): string | null {
+    const port = labStore.capturePorts[linkId];
+    if (!port) return null;
+    return `wireshark -k -i TCP@${location.hostname || "localhost"}:${port}`;
   }
 
   // Inline icon glyphs (kept local per turf rules — no shared icons.svelte.ts).
@@ -48,6 +88,9 @@
   // Small "waveform" glyph marking a live-capture tab.
   const CAPTURE =
     '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h2l1.5-4 2 8 2-6 1.5 4h2"/></svg>';
+  // Shark-fin glyph for the native-Wireshark flip on capture tabs.
+  const SHARK =
+    '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5c3.5 0 4-7 8.5-8.5-.5 2 0 3.5 1 4.5s2 1.5 2.5 4z"/><path d="M1.5 14.5h13"/></svg>';
 
   function nodeName(id: number): string {
     return labStore.lab.nodes.find((n) => n.id === id)?.name ?? `#${id}`;
@@ -84,22 +127,25 @@
     labStore.pushLog("info", `native console for ${nodeName(nodeId)} → ${url}`, nodeId);
   }
 
-  /** Click-to-copy host:port. clipboard API needs a secure context and this page
-   *  is plain-HTTP, so fall back to prompt() when it's unavailable/denied. */
-  async function copyAddr(nodeId: number) {
-    const a = consoleAddr(nodeId);
-    if (!a) return;
-    const text = `${a.host}:${a.port}`;
+  /** Click-to-copy. clipboard API needs a secure context and this page is
+   *  plain-HTTP, so fall back to prompt() when it's unavailable/denied. */
+  async function copyText(text: string, promptLabel: string) {
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
-        labStore.pushLog("info", `copied ${text}`, nodeId);
+        labStore.pushLog("info", `copied ${text}`);
         return;
       }
     } catch {
       /* fall through to prompt */
     }
-    window.prompt("Copy console address:", text);
+    window.prompt(promptLabel, text);
+  }
+
+  async function copyAddr(nodeId: number) {
+    const a = consoleAddr(nodeId);
+    if (!a) return;
+    await copyText(`${a.host}:${a.port}`, "Copy console address:");
   }
 </script>
 
@@ -127,13 +173,17 @@
             </button>
             <button
               class="tab-ext"
-              title={telnetTitle(nodeId)}
-              aria-label="Open in native telnet client"
-              onclick={() => openNative(nodeId)}
+              class:on={nativeConsole[nodeId]}
+              title={nativeConsole[nodeId]
+                ? "Native session active — flip back to web console"
+                : `Flip to native telnet — ${telnetTitle(nodeId)}`}
+              aria-label={nativeConsole[nodeId] ? "Flip back to web console" : "Flip to native telnet client"}
+              aria-pressed={!!nativeConsole[nodeId]}
+              onclick={() => flipConsole(nodeId)}
             >
               {@html TELNET}
             </button>
-            <button class="tab-close" title="Close" onclick={() => labStore.closeConsole(nodeId)}>
+            <button class="tab-close" title="Close" onclick={() => closeConsole(nodeId)}>
               ✕
             </button>
           </div>
@@ -149,6 +199,17 @@
             >
               {@html CAPTURE}
               {captureTitle(linkId)}
+            </button>
+            <button
+              class="tab-ext"
+              class:on={nativeCapture[linkId]}
+              title={nativeCapture[linkId]
+                ? "Hide native Wireshark command"
+                : "Flip to native Wireshark (shows the attach command)"}
+              aria-pressed={!!nativeCapture[linkId]}
+              onclick={() => flipCapture(linkId)}
+            >
+              {@html SHARK}
             </button>
             <button class="tab-close" title="Close capture" onclick={() => closeCapture(linkId)}>
               ✕
@@ -193,12 +254,69 @@
     <div class="term-area">
       {#each labStore.openConsoleTabs as nodeId (nodeId)}
         <div class="term-slot" class:hidden={labStore.activeConsoleTab !== nodeId}>
-          <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
+          {#if nativeConsole[nodeId]}
+            <!-- Native flip: the ConsoleTerm is UNMOUNTED (its WS closed on
+                 destroy) so the native telnet session owns the console UX; the
+                 supervisor's console hub happily serves both, but a deliberate
+                 flip avoids double-echo confusion. Flip back = fresh transport;
+                 the hub replay buffer repaints the recent context. -->
+            <div class="native-hold">
+              <div class="native-card">
+                <div class="native-title">Native session active</div>
+                <div class="native-sub">
+                  This tab's web console is detached. Connect a telnet client to:
+                </div>
+                {#if consoleAddr(nodeId)}
+                  {@const a = consoleAddr(nodeId)}
+                  <button
+                    class="addr-chip mono"
+                    title="Click to copy"
+                    onclick={() => copyAddr(nodeId)}
+                  >
+                    {a?.host}:{a?.port}
+                  </button>
+                {/if}
+                <button class="native-back" onclick={() => flipConsole(nodeId)}>
+                  Flip back to web console
+                </button>
+              </div>
+            </div>
+          {:else}
+            <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
+          {/if}
         </div>
       {/each}
       {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
         <div class="term-slot" class:hidden={activeCapture !== linkId}>
+          <!-- The live summary keeps running under the native overlay: the
+               stream is cheap, and flipping back shows no gap. -->
           <CaptureTerm {linkId} active={activeCapture === linkId} />
+          {#if nativeCapture[linkId]}
+            <div class="native-hold overlay">
+              <div class="native-card">
+                <div class="native-title">Native Wireshark</div>
+                {#if wiresharkCmd(linkId)}
+                  <div class="native-sub">
+                    Run this on your machine (Wireshark attaches to the live pcapng stream):
+                  </div>
+                  <button
+                    class="addr-chip mono"
+                    title="Click to copy"
+                    onclick={() => copyText(wiresharkCmd(linkId)!, "Copy Wireshark command:")}
+                  >
+                    {wiresharkCmd(linkId)}
+                  </button>
+                {:else}
+                  <div class="native-sub">
+                    Capture port not assigned yet — start the lab (or the capture) first.
+                  </div>
+                {/if}
+                <button class="native-back" onclick={() => flipCapture(linkId)}>
+                  Back to live summary
+                </button>
+              </div>
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -372,5 +490,63 @@
   .term-slot.hidden {
     visibility: hidden;
     pointer-events: none;
+  }
+  /* Active (flipped-to-native) state of a tab's flip button. */
+  .tab-ext.on {
+    color: var(--accent);
+  }
+  /* Placeholder (console flip) / overlay (capture flip) panel. */
+  .native-hold {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--term-bg);
+  }
+  .native-hold.overlay {
+    background: color-mix(in oklab, var(--term-bg) 82%, transparent);
+    backdrop-filter: blur(2px);
+  }
+  .native-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-5) var(--sp-6);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    max-width: min(90%, 560px);
+  }
+  .native-title {
+    font-size: var(--fs-sm);
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+  .native-sub {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    text-align: center;
+  }
+  .native-card .addr-chip {
+    font-family: var(--font-mono);
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+  }
+  .native-back {
+    all: unset;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+    padding: 4px 10px;
+    border: 1px solid var(--accent-muted);
+    border-radius: var(--radius-sm);
+  }
+  .native-back:hover {
+    background: var(--bg-hover);
   }
 </style>
