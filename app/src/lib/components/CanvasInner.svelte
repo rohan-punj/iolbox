@@ -18,6 +18,8 @@
   import { themeStore } from "../themeStore.svelte";
   import IolNode from "../nodes/IolNode.svelte";
   import VpcsNode from "../nodes/VpcsNode.svelte";
+  import AnnoText from "../nodes/AnnoText.svelte";
+  import AnnoShape from "../nodes/AnnoShape.svelte";
   import FloatingEdge from "../edges/FloatingEdge.svelte";
   import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
   import ChangeImagePopover from "./ChangeImagePopover.svelte";
@@ -27,11 +29,21 @@
   import { uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
   import { nextFreeInterface } from "../interfaces";
-  import type { LabNode } from "../labTypes";
+  import { annoTool } from "../annoTool.svelte";
+  import type { Annotation, LabNode } from "../labTypes";
 
   // NAT gateway + MGMT bridge reuse the VPCS single-interface node chrome; the
-  // distinct glyph comes from their default icon (defaultIconFor).
-  const nodeTypes: NodeTypes = { iol: IolNode, vpcs: VpcsNode, nat: VpcsNode, mgmt: VpcsNode };
+  // distinct glyph comes from their default icon (defaultIconFor). annoText /
+  // annoShape are the Excalidraw-style annotation layer — rendered as flow nodes
+  // (so drag/pan/zoom come free) but derived from lab.annotations, never lab.nodes.
+  const nodeTypes: NodeTypes = {
+    iol: IolNode,
+    vpcs: VpcsNode,
+    nat: VpcsNode,
+    mgmt: VpcsNode,
+    annoText: AnnoText,
+    annoShape: AnnoShape,
+  };
   const edgeTypes: EdgeTypes = { floating: FloatingEdge };
 
   // Fixed node box. Provided explicitly (width/height + a handle on every side)
@@ -64,6 +76,44 @@
         imageLabel: img?.filename ?? n.image?.filename,
       },
       selected: labStore.selectedNodeId === n.id,
+    };
+  }
+
+  // Annotation flow-node id namespace. Device nodes use String(numericId); the
+  // "anno-" prefix keeps the two disjoint so drag-stop / delete can tell them
+  // apart (isAnnoId) and never collide with a numeric node id.
+  const ANNO_PREFIX = "anno-";
+  const isAnnoId = (fid: string) => fid.startsWith(ANNO_PREFIX);
+  const annoIdFromFlow = (fid: string) => fid.slice(ANNO_PREFIX.length);
+
+  // Derive one Svelte Flow node from an annotation. Shapes carry explicit
+  // width/height (drag-movable box); text is auto-sized. Both sit BELOW device
+  // nodes (low zIndex), take no handles, and are selectable but not
+  // connectable — they are pure canvas decoration.
+  function toAnnoFlowNode(a: Annotation): Node {
+    const common = {
+      id: ANNO_PREFIX + a.id,
+      position: { x: a.x, y: a.y },
+      selectable: true,
+      connectable: false,
+      deletable: true,
+      draggable: true,
+      zIndex: -1,
+      selected: labStore.selectedAnnotationId === a.id,
+    };
+    if (a.type === "text") {
+      return {
+        ...common,
+        type: "annoText",
+        data: { annoId: a.id, text: a.text, size: a.size, color: a.color },
+      };
+    }
+    return {
+      ...common,
+      type: "annoShape",
+      width: a.w,
+      height: a.h,
+      data: { annoId: a.id, shape: a.type, label: a.label, color: a.color },
     };
   }
 
@@ -134,19 +184,28 @@
   // measured dimensions and silently drop all edges (floating edges need
   // measured nodes). So we merge in place, preserving xyflow's managed fields.
   $effect(() => {
-    const desired = labStore.lab.nodes.map(toFlowNode);
+    const desired = [
+      ...labStore.lab.nodes.map(toFlowNode),
+      ...(labStore.lab.annotations ?? []).map(toAnnoFlowNode),
+    ];
     // Read the current flow-node array untracked so this effect doesn't loop on
     // its own write (and doesn't re-run when xyflow mutates measured fields).
     const prev = new Map(untrack(() => nodes).map((n) => [n.id, n]));
     nodes = desired.map((d) => {
       const existing = prev.get(d.id);
       if (!existing) return d;
+      // Merge, preserving xyflow's managed measurement fields. Annotation shape
+      // nodes carry width/height in the doc, so re-assert those too (device
+      // nodes keep the fixed NODE_W/H already baked into toFlowNode).
       return {
         ...existing,
         type: d.type,
         position: d.position,
+        width: d.width ?? existing.width,
+        height: d.height ?? existing.height,
         data: d.data,
         selected: d.selected,
+        zIndex: d.zIndex,
       };
     });
   });
@@ -160,6 +219,13 @@
   // Sync dragged positions back into the lab doc (debounced via drag-stop).
   function onNodeDragStop({ nodes: dragged }: { nodes: Node[] }) {
     for (const fn of dragged) {
+      if (isAnnoId(fn.id)) {
+        labStore.updateAnnotation(annoIdFromFlow(fn.id), {
+          x: fn.position.x,
+          y: fn.position.y,
+        } as Partial<Annotation>);
+        continue;
+      }
       const ln = labStore.lab.nodes.find((n) => n.id === Number(fn.id));
       if (ln) {
         ln.x = fn.position.x;
@@ -364,6 +430,7 @@
   // --- context menus / popovers ---
   let nodeMenu = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let linkMenu = $state<{ x: number; y: number; linkId: number } | null>(null);
+  let annoMenu = $state<{ x: number; y: number; annoId: string } | null>(null);
   let imagePopover = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let iconPicker = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let editDialog = $state<{ nodeId: number } | null>(null);
@@ -375,6 +442,14 @@
 
   function onNodeContextMenu({ node, event }: { node: Node; event: MouseEvent }) {
     event.preventDefault();
+    if (isAnnoId(node.id)) {
+      const aid = annoIdFromFlow(node.id);
+      labStore.selectedAnnotationId = aid;
+      labStore.selectedNodeId = null;
+      labStore.selectedLinkId = null;
+      annoMenu = { x: event.clientX, y: event.clientY, annoId: aid };
+      return;
+    }
     labStore.selectedNodeId = Number(node.id);
     nodeMenu = { x: event.clientX, y: event.clientY, nodeId: Number(node.id) };
   }
@@ -387,18 +462,76 @@
   }
 
   function onNodeClick({ node }: { node: Node }) {
+    if (isAnnoId(node.id)) {
+      labStore.selectedAnnotationId = annoIdFromFlow(node.id);
+      labStore.selectedNodeId = null;
+      labStore.selectedLinkId = null;
+      return;
+    }
     labStore.selectedNodeId = Number(node.id);
     labStore.selectedLinkId = null;
+    labStore.selectedAnnotationId = null;
   }
 
   function onEdgeClick({ edge }: { edge: Edge }) {
     labStore.selectedLinkId = (edge.data as any)?.linkId as number;
     labStore.selectedNodeId = null;
+    labStore.selectedAnnotationId = null;
   }
 
-  function onPaneClick() {
+  function onPaneClick({ event }: { event: MouseEvent } = { event: undefined as any }) {
+    // An armed DRAW tool places its annotation at the click point, then disarms.
+    if (annoTool.active && event) {
+      placeAnnotation(annoTool.active, event);
+      annoTool.disarm();
+      return;
+    }
     labStore.selectedNodeId = null;
     labStore.selectedLinkId = null;
+    labStore.selectedAnnotationId = null;
+  }
+
+  // Place a new annotation at the pointer's flow position. Text opens inline
+  // editing immediately (via annoTool.editRequestId, consumed by AnnoText);
+  // shapes drop a default ~200x120 box, drag-movable + double-click-to-label.
+  function placeAnnotation(tool: typeof annoTool.active, event: MouseEvent) {
+    if (!tool) return;
+    const p = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const id = labStore.newAnnotationId();
+    let anno: Annotation;
+    if (tool === "text") {
+      anno = { id, type: "text", x: p.x, y: p.y, text: "Text", size: "m", color: annoTool.color };
+    } else {
+      // Centre the default box on the click point.
+      const w = 200;
+      const h = 120;
+      anno = {
+        id,
+        type: tool,
+        x: p.x - w / 2,
+        y: p.y - h / 2,
+        w,
+        h,
+        color: annoTool.color,
+      };
+    }
+    labStore.addAnnotation(anno);
+    labStore.selectedAnnotationId = id;
+    labStore.selectedNodeId = null;
+    labStore.selectedLinkId = null;
+    if (tool === "text") annoTool.editRequestId = id;
+  }
+
+  // Delete the selected annotation on Delete/Backspace (when not typing in a
+  // field). Node/link deletion stays on the context menu — matching prior UX.
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (labStore.selectedAnnotationId) {
+      e.preventDefault();
+      labStore.removeAnnotation(labStore.selectedAnnotationId);
+    }
   }
 
   function buildNodeMenuItems(menu: { x: number; y: number; nodeId: number }): MenuItem[] {
@@ -476,9 +609,35 @@
     ];
   }
 
+  function buildAnnoMenuItems(menu: { annoId: string }): MenuItem[] {
+    const anno = labStore.lab.annotations?.find((a) => a.id === menu.annoId);
+    const items: MenuItem[] = [];
+    items.push({
+      label: anno?.type === "text" ? "Edit text…" : "Edit label…",
+      action: () => {
+        annoTool.editRequestId = menu.annoId;
+      },
+    });
+    items.push({ separator: true, label: "sep", action: () => {} });
+    items.push({
+      label: "Delete",
+      danger: true,
+      action: () => labStore.removeAnnotation(menu.annoId),
+    });
+    return items;
+  }
 </script>
 
-<div class="canvas-wrap" bind:this={canvasEl} ondragover={onDragOver} ondrop={onDrop} role="application">
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div
+  class="canvas-wrap"
+  class:arming={annoTool.active !== null}
+  bind:this={canvasEl}
+  ondragover={onDragOver}
+  ondrop={onDrop}
+  role="application"
+>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -542,6 +701,14 @@
       onClose={() => (linkMenu = null)}
     />
   {/if}
+  {#if annoMenu}
+    <ContextMenu
+      x={annoMenu.x}
+      y={annoMenu.y}
+      items={buildAnnoMenuItems(annoMenu)}
+      onClose={() => (annoMenu = null)}
+    />
+  {/if}
   {#if imagePopover}
     <ChangeImagePopover
       x={imagePopover.x}
@@ -583,6 +750,10 @@
     width: 100%;
     height: 100%;
     background: var(--ground);
+  }
+  /* A DRAW tool is armed — the next canvas click drops the annotation. */
+  .canvas-wrap.arming :global(.svelte-flow__pane) {
+    cursor: crosshair;
   }
   :global(.svelte-flow) {
     background: var(--ground);

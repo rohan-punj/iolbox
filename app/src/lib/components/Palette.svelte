@@ -1,6 +1,7 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
   import { iconSvg } from "../icons.svelte";
+  import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
 
   function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat" | "mgmt", imageId?: string) {
     if (!e.dataTransfer) return;
@@ -36,6 +37,14 @@
   }
   async function saveConfigs() {
     await labStore.saveAllConfigs();
+  }
+
+  const armed = $derived(annoTool.active);
+  function pickTool(tool: AnnoTool) {
+    annoTool.arm(tool);
+  }
+  function pickColor(c: string) {
+    annoTool.color = c;
   }
 </script>
 
@@ -147,6 +156,62 @@
   <button class="btn manage-btn" onclick={() => (labStore.showImageManager = true)}>
     Manage images…
   </button>
+
+  <div class="section-title">Draw</div>
+  <div class="draw-tools" role="group" aria-label="Annotation tools">
+    <button
+      class="draw-btn"
+      class:on={armed === "text"}
+      aria-pressed={armed === "text"}
+      title="Text — click the canvas to place, then type"
+      onclick={() => pickTool("text")}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 6V5h14v1M12 5v14M9 19h6" />
+      </svg>
+      <span>Text</span>
+    </button>
+    <button
+      class="draw-btn"
+      class:on={armed === "rect"}
+      aria-pressed={armed === "rect"}
+      title="Rectangle — click the canvas to place"
+      onclick={() => pickTool("rect")}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+        <rect x="4" y="6" width="16" height="12" rx="2" />
+      </svg>
+      <span>Rect</span>
+    </button>
+    <button
+      class="draw-btn"
+      class:on={armed === "ellipse"}
+      aria-pressed={armed === "ellipse"}
+      title="Ellipse — click the canvas to place"
+      onclick={() => pickTool("ellipse")}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+        <ellipse cx="12" cy="12" rx="8" ry="6" />
+      </svg>
+      <span>Ellipse</span>
+    </button>
+  </div>
+  <div class="draw-colors" role="group" aria-label="Annotation colour">
+    {#each ANNO_COLORS as c (c)}
+      <button
+        class="swatch-dot"
+        class:on={annoTool.color === c}
+        style:background={c}
+        title="Colour"
+        aria-label="Colour"
+        aria-pressed={annoTool.color === c}
+        onclick={() => pickColor(c)}
+      ></button>
+    {/each}
+  </div>
+  {#if armed}
+    <div class="draw-hint">Click the canvas to place the {armed}.</div>
+  {/if}
 </div>
 
 <style>
@@ -269,5 +334,64 @@
     margin-top: var(--sp-2);
     justify-content: center;
     width: 100%;
+  }
+
+  /* DRAW cluster — annotation tools + colour swatches. */
+  .draw-tools {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+  .draw-btn {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 7px 4px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-2);
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 550;
+    cursor: pointer;
+    transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  }
+  .draw-btn:hover {
+    background: var(--bg-hover);
+    color: var(--ink);
+  }
+  .draw-btn.on {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-muted);
+  }
+  .draw-colors {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+  }
+  .swatch-dot {
+    all: unset;
+    box-sizing: border-box;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    box-shadow: 0 0 0 1px var(--border-strong);
+  }
+  .swatch-dot.on {
+    border-color: var(--ground);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  .draw-hint {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--accent);
+    line-height: 1.4;
   }
 </style>

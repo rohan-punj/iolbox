@@ -134,6 +134,16 @@
     {@html uiSvg("folder", 13)} Labs
   </button>
 
+  <button
+    class="btn"
+    class:on={labStore.showTasks}
+    aria-pressed={labStore.showTasks}
+    title="Lab tasks / instructions"
+    onclick={() => (labStore.showTasks = !labStore.showTasks)}
+  >
+    {@html uiSvg("tasks", 13)} Tasks
+  </button>
+
   <button class="btn" class:saved={justSaved} onclick={save} title="Save lab to the store">
     {@html uiSvg("save", 13)} {justSaved ? "Saved ✓" : "Save"}
   </button>
@@ -291,6 +301,11 @@
   .btn.saved {
     color: var(--state-running);
     border-color: color-mix(in oklab, var(--state-running) 55%, transparent);
+  }
+  .btn.on {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-muted);
   }
   .io-seg {
     padding: 3px;

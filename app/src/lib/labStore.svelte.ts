@@ -1,6 +1,7 @@
 // Central app state, Svelte 5 runes. One instance shared via module scope
 // (simple singleton store — no context provider needed for a single-window app).
-import { emptyLab, type LabDocument, type LabLink, type LabNode, type LibraryImage, type NodeState } from "./labTypes";
+import { emptyLab, type Annotation, type LabDocument, type LabLink, type LabNode, type LibraryImage, type NodeState } from "./labTypes";
+import { uuid } from "./uid";
 import { SupervisorClient } from "./supervisor";
 import { MockTransport } from "./mockTransport";
 import { selectTransport } from "./transportSelect";
@@ -20,6 +21,9 @@ class LabStore {
   lab = $state<LabDocument>(emptyLab("Demo Topology"));
   selectedNodeId = $state<number | null>(null);
   selectedLinkId = $state<number | null>(null);
+  /** Selected canvas annotation (Excalidraw layer). Independent of node/link
+   *  selection — annotations never open the node Inspector. */
+  selectedAnnotationId = $state<string | null>(null);
   nodeStates = $state<Record<number, NodeState>>({});
   consolePorts = $state<Record<number, number>>({});
   images = $state<LibraryImage[]>([]);
@@ -37,6 +41,9 @@ class LabStore {
   showPreflight = $state(true);
   showImageManager = $state(false);
   showLabBrowser = $state(false);
+  /** Tasks pane toggle (TopBar checklist). When on it takes precedence over the
+   *  empty-selection auto-hide of the right pane. */
+  showTasks = $state(false);
   /** Supervisor feature flags from the hello handshake (e.g. "natgw","mgmt").
    *  Drives feature-gated palette entries. */
   features = $state<string[]>([]);
@@ -433,6 +440,45 @@ class LabStore {
 
   /** Called after a node-drag settles to persist positions (autosaved). */
   notifyTopologyChanged() {
+    this.scheduleAutosave();
+  }
+
+  // ---- canvas annotations (Excalidraw-style) ----
+
+  /** Add a new annotation and return its id (so the caller can arm inline edit). */
+  addAnnotation(anno: Annotation): string {
+    this.lab.annotations = [...(this.lab.annotations ?? []), anno];
+    this.scheduleAutosave();
+    return anno.id;
+  }
+
+  /** Shallow-merge a patch into one annotation, preserving its discriminant. */
+  updateAnnotation(id: string, patch: Partial<Annotation>) {
+    const list = this.lab.annotations;
+    if (!list) return;
+    const idx = list.findIndex((a) => a.id === id);
+    if (idx < 0) return;
+    // Merge in place; the caller only ever patches fields valid for the type.
+    list[idx] = { ...list[idx], ...patch } as Annotation;
+    this.scheduleAutosave();
+  }
+
+  removeAnnotation(id: string) {
+    if (!this.lab.annotations) return;
+    this.lab.annotations = this.lab.annotations.filter((a) => a.id !== id);
+    if (this.selectedAnnotationId === id) this.selectedAnnotationId = null;
+    this.scheduleAutosave();
+  }
+
+  newAnnotationId(): string {
+    return uuid();
+  }
+
+  // ---- lab tasks ----
+
+  /** Replace the lab task text (from the Tasks pane editor / checkbox toggles). */
+  setTasks(text: string) {
+    this.lab.tasks = text;
     this.scheduleAutosave();
   }
 

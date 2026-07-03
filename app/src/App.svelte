@@ -5,6 +5,7 @@
   import Palette from "./lib/components/Palette.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
   import Inspector from "./lib/components/Inspector.svelte";
+  import TasksPane from "./lib/components/TasksPane.svelte";
   import Console from "./lib/components/Console.svelte";
   import Preflight from "./lib/components/Preflight.svelte";
   import ImageManager from "./lib/components/ImageManager.svelte";
@@ -13,6 +14,7 @@
 
   let paletteWidth = $state(220);
   let inspectorWidth = $state(300);
+  let tasksWidth = $state(360);
   let consoleHeight = $state(240);
   let consoleWidth = $state(420);
 
@@ -24,11 +26,14 @@
   );
   const dockRight = $derived(consoleUiStore.dockSide === "right");
 
-  // Right Inspector pane only exists when something is selected. Clicking empty
-  // canvas clears selection (CanvasInner onPaneClick), which collapses the pane
-  // and hands its width back to the canvas.
+  // Right pane. The Tasks pane (TopBar toggle) takes precedence over the
+  // empty-selection auto-hide and, while toggled on, wins even when a node is
+  // selected. Otherwise the Inspector shows only when something is selected;
+  // clicking empty canvas clears selection (CanvasInner onPaneClick), collapsing
+  // the pane and handing its width back to the canvas.
+  const showTasks = $derived(labStore.showTasks);
   const showInspector = $derived(
-    labStore.selectedNodeId !== null || labStore.selectedLinkId !== null
+    !showTasks && (labStore.selectedNodeId !== null || labStore.selectedLinkId !== null)
   );
 </script>
 
@@ -65,7 +70,11 @@
       {/if}
     </div>
 
-    {#if showInspector}
+    {#if showTasks}
+      <div class="inspector-pane" style:flex-basis={`${tasksWidth}px`}>
+        <TasksPane />
+      </div>
+    {:else if showInspector}
       <div class="inspector-pane" style:flex-basis={`${inspectorWidth}px`}>
         <Inspector />
       </div>

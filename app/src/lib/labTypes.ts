@@ -69,6 +69,33 @@ export interface LabCanvas {
   background?: CanvasBackground;
 }
 
+/** Excalidraw-style canvas annotation. Persisted in lab.annotations; the Go
+ *  server ignores it at lab.load, and the store preserves unknown fields, so
+ *  it survives the round-trip byte-exact. Text opens inline editing on place;
+ *  shapes get a default box and are drag-movable with an optional label. */
+export type AnnotationSize = "s" | "m" | "l";
+
+export type Annotation =
+  | {
+      id: string;
+      type: "text";
+      x: number;
+      y: number;
+      text: string;
+      size?: AnnotationSize;
+      color?: string;
+    }
+  | {
+      id: string;
+      type: "rect" | "ellipse";
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      color?: string;
+      label?: string;
+    };
+
 export interface LabDocument {
   version: 1;
   /** Stable unique lab id (uuid-ish string). */
@@ -82,6 +109,12 @@ export interface LabDocument {
   canvas?: LabCanvas;
   nodes: LabNode[];
   links: LabLink[];
+  /** Excalidraw-style canvas annotations (text + shapes). Optional; survives
+   *  the server round-trip untouched. */
+  annotations?: Annotation[];
+  /** Free-form lab instructions / checklist. Markdown-lite: "- [ ]"/"- [x]"
+   *  lines become live checkboxes, "## " lines become headings. Optional. */
+  tasks?: string;
 }
 
 /** Library image metadata, as returned by image.list / image.register. */
