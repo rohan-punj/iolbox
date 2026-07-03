@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -754,8 +755,39 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	if _, err := s.relays.Start(cfg); err != nil {
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
 	}
+	// Re-point any already-running nat/mgmt endpoint on this link to the plan's
+	// relay ports. A NAT the GUI auto-started the instant it was dropped (before
+	// its link existed) first bound an EPHEMERAL relay port; without this the new
+	// relay would forward DHCP to the plan port while the endpoint listens on the
+	// stale ephemeral one — the node never gets a lease. Rebind is idempotent, so
+	// this is a no-op for IOL/VPCS endpoints and for a NAT already on-port.
+	s.resyncExtnetPorts(ll, &args.Link)
 	s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
 	return protocol.LinkData{Link: args.Link.ID}, nil
+}
+
+// resyncExtnetPorts rebinds every running nat/mgmt endpoint that is an endpoint
+// of the given link to the UDP relay ports the CURRENT plan assigns it, so the
+// endpoint's socket always matches the relay forwarding to it. Called after any
+// (re)build of a link's relay (link.add today). Safe to call with a link that
+// has no extnet endpoints — it simply finds none to rebind.
+func (s *Server) resyncExtnetPorts(ll *loadedLab, link *lab.Link) {
+	if ll.bridge == nil {
+		return
+	}
+	for _, ep := range link.Endpoints {
+		nr := ll.get(ep.Node)
+		if nr == nil || nr.extnet == nil {
+			continue
+		}
+		send, listen, ok := ll.bridge.extnetUDPFor(ep.Node)
+		if !ok {
+			continue
+		}
+		if err := nr.extnet.Rebind(send, listen); err != nil {
+			log.Printf("extnet node %d: rebind to relay ports send=%d listen=%d: %v", ep.Node, send, listen, err)
+		}
+	}
 }
 
 func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {

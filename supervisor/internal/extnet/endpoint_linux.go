@@ -25,18 +25,24 @@ import (
 // process-less — the server drives its lifecycle directly (Start/Close) rather
 // than through node.Process, but reports running/stopped the same way.
 type Endpoint struct {
-	cfg Config
 	dev string // tap/macvtap device name
 
-	tap     *os.File     // /dev/net/tun (nat) or /dev/tapN (mgmt) fd
-	udpConn *net.UDPConn // bound on ListenPort; sends to SendPort
-	sendTo  *net.UDPAddr
-
+	tap  *os.File    // /dev/net/tun (nat) or /dev/tapN (mgmt) fd
 	dhcp *dhcpServer // nat only
 
 	closeOnce sync.Once
 	closed    chan struct{}
-	wg        sync.WaitGroup
+
+	// mu guards cfg, udpConn, sendTo and the pump generation (pumpStop/pumpWG),
+	// so Rebind can swap the relay socket + restart the pumps while Close or a
+	// concurrent Rebind is possible. The tap fd, dhcp server, subnet and iptables
+	// rules are NOT touched by Rebind — only the UDP relay binding is.
+	mu       sync.Mutex
+	cfg      Config
+	udpConn  *net.UDPConn // bound on ListenPort; sends to SendPort
+	sendTo   *net.UDPAddr
+	pumpStop chan struct{}  // closed to stop the current pump generation
+	pumpWG   sync.WaitGroup // the current generation's two pumps
 }
 
 // ioctl constants for TUNSETIFF (opening a tap via /dev/net/tun).
@@ -175,33 +181,125 @@ func Start(cfg Config) (*Endpoint, error) {
 	// Frame pumps: tap->relay and relay->tap. A nat endpoint also intercepts
 	// DHCP traffic on the tap side (the DHCP server both consumes client
 	// requests and injects replies straight to the tap).
-	e.wg.Add(2)
-	go func() { defer e.wg.Done(); e.pumpTapToRelay() }()
-	go func() { defer e.wg.Done(); e.pumpRelayToTap() }()
+	e.startPumps()
 	return e, nil
 }
 
+// startPumps launches the tap<->relay pump pair against the CURRENT relay
+// socket, recording the generation's stop channel + waitgroup so Rebind/Close
+// can cycle it. Each pump captures its (stop, conn) so a rebind's new pumps and
+// the old ones never share a socket. Caller holds no lock; startPumps takes mu.
+func (e *Endpoint) startPumps() {
+	e.mu.Lock()
+	stop := make(chan struct{})
+	e.pumpStop = stop
+	conn := e.udpConn
+	e.pumpWG.Add(2)
+	e.mu.Unlock()
+	go func() { defer e.pumpWG.Done(); e.pumpTapToRelay(stop, conn) }()
+	go func() { defer e.pumpWG.Done(); e.pumpRelayToTap(stop, conn) }()
+}
+
+// stopPumps signals the current pump generation and waits for both pumps to
+// exit. It nudges the tap + relay read deadlines so the blocked reads observe
+// the stop promptly instead of after a full 500ms poll.
+func (e *Endpoint) stopPumps() {
+	e.mu.Lock()
+	stop := e.pumpStop
+	conn := e.udpConn
+	e.pumpStop = nil
+	e.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	if e.tap != nil {
+		_ = e.tap.SetReadDeadline(time.Now().Add(-time.Second))
+	}
+	if conn != nil {
+		_ = conn.SetReadDeadline(time.Now().Add(-time.Second))
+	}
+	e.pumpWG.Wait()
+}
+
+// Rebind re-points the relay UDP socket to new ports WITHOUT disturbing the tap,
+// DHCP server, subnet, or iptables rules. It exists because a nat/mgmt node can
+// be started before its link exists (the GUI auto-starts a NAT the instant it is
+// dropped on the canvas, so the endpoint first binds an EPHEMERAL relay port);
+// when the link is later drawn, the relay is created on the plan's deterministic
+// port and the endpoint must move its socket to match or the two never meet
+// (the DHCP DISCOVER lands on a dead port and the node never gets a lease). Also
+// covers a link reshaped/removed+readded after the endpoint started. Idempotent:
+// a no-op when already bound to these ports. Safe against a concurrent Close.
+func (e *Endpoint) Rebind(sendPort, listenPort int) error {
+	if e.isClosed() {
+		return nil
+	}
+	e.mu.Lock()
+	same := e.udpConn != nil && e.cfg.SendPort == sendPort && e.cfg.ListenPort == listenPort
+	e.mu.Unlock()
+	if same {
+		return nil
+	}
+	e.stopPumps()
+	e.mu.Lock()
+	if e.udpConn != nil {
+		_ = e.udpConn.Close()
+		e.udpConn = nil
+	}
+	e.cfg.SendPort = sendPort
+	e.cfg.ListenPort = listenPort
+	e.mu.Unlock()
+	if err := e.bindRelay(); err != nil {
+		return err
+	}
+	e.startPumps()
+	return nil
+}
+
+// Ports reports the relay ports this endpoint is currently bound to (SendPort =
+// where it sends tap frames, ListenPort = where it receives). Used by the server
+// to decide whether a Rebind is needed after a plan rebuild.
+func (e *Endpoint) Ports() (sendPort, listenPort int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cfg.SendPort, e.cfg.ListenPort
+}
+
 // bindRelay binds the UDP socket on ListenPort (frames the relay delivers) and
-// resolves the SendPort target (frames we send to the relay).
+// resolves the SendPort target (frames we send to the relay). Takes mu to
+// publish the new socket + target atomically for a concurrent Rebind/Close.
 func (e *Endpoint) bindRelay() error {
+	e.mu.Lock()
 	host := e.cfg.resolvedHost()
-	laddr := &net.UDPAddr{IP: net.ParseIP(host), Port: e.cfg.ListenPort}
+	listenPort := e.cfg.ListenPort
+	sendPort := e.cfg.SendPort
+	e.mu.Unlock()
+
+	laddr := &net.UDPAddr{IP: net.ParseIP(host), Port: listenPort}
 	conn, err := net.ListenUDP("udp", laddr)
 	if err != nil {
 		return fmt.Errorf("extnet: bind relay udp %s: %w", laddr, err)
 	}
+
+	e.mu.Lock()
 	e.udpConn = conn
-	e.sendTo = &net.UDPAddr{IP: net.ParseIP(host), Port: e.cfg.SendPort}
+	e.sendTo = &net.UDPAddr{IP: net.ParseIP(host), Port: sendPort}
+	e.mu.Unlock()
 	return nil
 }
 
 // pumpTapToRelay reads ethernet frames off the tap (the kernel/NAT side —
 // un-NAT'd return traffic and ARP replies for the gateway IP) and forwards them
-// to the relay so the connected lab node sees them.
-func (e *Endpoint) pumpTapToRelay() {
+// to the relay so the connected lab node sees them. conn/stop are this pump
+// generation's socket + stop channel (a Rebind starts a fresh generation with a
+// new socket), so this loop never touches e.udpConn after a swap.
+func (e *Endpoint) pumpTapToRelay(stop chan struct{}, conn *net.UDPConn) {
 	buf := make([]byte, frameMax)
 	for {
 		select {
+		case <-stop:
+			return
 		case <-e.closed:
 			return
 		default:
@@ -217,7 +315,15 @@ func (e *Endpoint) pumpTapToRelay() {
 		if n == 0 {
 			continue
 		}
-		if _, err := e.udpConn.WriteToUDP(buf[:n], e.sendTo); err != nil {
+		e.mu.Lock()
+		sendTo := e.sendTo
+		e.mu.Unlock()
+		if _, err := conn.WriteToUDP(buf[:n], sendTo); err != nil {
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			if e.isClosed() {
 				return
 			}
@@ -231,19 +337,26 @@ func (e *Endpoint) pumpTapToRelay() {
 // exchange is between the lab node and our userspace server, not the kernel.
 // Every other frame (real IP traffic, ARP for the gateway) is written into the
 // tap so the kernel routes/NATs or answers it.
-func (e *Endpoint) pumpRelayToTap() {
+func (e *Endpoint) pumpRelayToTap(stop chan struct{}, conn *net.UDPConn) {
 	buf := make([]byte, frameMax)
 	for {
 		select {
+		case <-stop:
+			return
 		case <-e.closed:
 			return
 		default:
 		}
-		_ = e.udpConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		n, _, err := e.udpConn.ReadFromUDP(buf)
+		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, _, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				continue
+				select {
+				case <-stop:
+					return
+				default:
+					continue
+				}
 			}
 			return
 		}
@@ -254,7 +367,10 @@ func (e *Endpoint) pumpRelayToTap() {
 		if e.dhcp != nil {
 			if reply, consumed := e.dhcp.consume(frame); consumed {
 				if reply != nil {
-					_, _ = e.udpConn.WriteToUDP(reply, e.sendTo)
+					e.mu.Lock()
+					sendTo := e.sendTo
+					e.mu.Unlock()
+					_, _ = conn.WriteToUDP(reply, sendTo)
 				}
 				continue // DHCP handled in userspace; never touches the kernel
 			}
@@ -281,19 +397,17 @@ func (e *Endpoint) isClosed() bool {
 func (e *Endpoint) Close() error {
 	e.closeOnce.Do(func() {
 		close(e.closed)
-		// Nudge the blocking reads so the pumps observe closed within a poll.
-		if e.tap != nil {
-			_ = e.tap.SetReadDeadline(time.Now().Add(-time.Second))
-		}
-		if e.udpConn != nil {
-			_ = e.udpConn.SetReadDeadline(time.Now().Add(-time.Second))
-		}
-		e.wg.Wait()
+		// Stop the current pump generation (also nudges the tap+relay deadlines).
+		e.stopPumps()
 		if e.tap != nil {
 			_ = e.tap.Close()
 		}
-		if e.udpConn != nil {
-			_ = e.udpConn.Close()
+		e.mu.Lock()
+		conn := e.udpConn
+		e.udpConn = nil
+		e.mu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
 		}
 		e.runTeardown()
 	})
