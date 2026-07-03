@@ -121,6 +121,50 @@ install -m 0644 "$SCRIPT_DIR/files/lxc/zz-lxc-eth-fallback.network" \
     "$STAGE_DIR/etc/systemd/network/zz-lxc-eth-fallback.network"
 
 # ---------------------------------------------------------------------------
+# Tweak 2b: ensure /etc/network/ exists so Proxmox's create hook can write
+# to it.
+#
+# This rootfs is systemd-networkd-only — build-rootfs.sh installs no
+# ifupdown package, so debootstrap never creates the /etc/network/
+# directory (there is no ifupdown to own it). BUT Proxmox's per-distro
+# container setup plugin (PVE::LXC::Setup::Debian) unconditionally REWRITES
+# /etc/network/interfaces during its post_create_hook, regardless of
+# whether the container actually uses ifupdown — it opens
+# "/etc/network/interfaces.tmp.<pid>" for atomic write and renames it into
+# place. If /etc/network/ doesn't exist, that open() fails with
+# "No such file or directory" and `pct create` aborts with
+# "error in setup task PVE::LXC::Setup::post_create_hook", rolling back the
+# whole container (the LV is created then removed) — i.e. the template is
+# unusable via the documented `pct create` flow without this directory.
+#
+# VERIFIED on PVE 8.4.19: creating the CT from a rootfs lacking
+# /etc/network/ fails exactly this way; adding an empty /etc/network/
+# (with a stub interfaces file so the plugin has something to
+# read/merge/rewrite) lets post_create_hook complete. The stub is inert at
+# runtime: nothing in this rootfs runs ifupdown (no ifup/ifdown binaries,
+# no networking.service), so /etc/network/interfaces is never consumed by
+# the container itself — networkd + pct's injected eth0.network (or our
+# zz- fallback) remain authoritative for actual addressing. This is purely
+# to satisfy Proxmox's create-time contract, matching what every stock
+# Debian-family CT template already ships.
+# ---------------------------------------------------------------------------
+echo "== pack-lxc: ensuring /etc/network/ exists for pct's create hook =="
+install -d -m 0755 "$STAGE_DIR/etc/network"
+install -d -m 0755 "$STAGE_DIR/etc/network/interfaces.d"
+if [ ! -f "$STAGE_DIR/etc/network/interfaces" ]; then
+    cat > "$STAGE_DIR/etc/network/interfaces" <<'IFACE_EOF'
+# This file is present only to satisfy Proxmox's container create hook,
+# which rewrites it. This rootfs uses systemd-networkd (no ifupdown), so
+# nothing here is actually consumed at runtime. See pack-lxc.sh Tweak 2b.
+auto lo
+iface lo inet loopback
+
+source /etc/network/interfaces.d/*
+IFACE_EOF
+    chmod 0644 "$STAGE_DIR/etc/network/interfaces"
+fi
+
+# ---------------------------------------------------------------------------
 # Tweak 3: /etc/hosts 127.0.1.1 safety net.
 #
 # VERIFIED CLAIM: Proxmox's container setup (pve-container's per-distro
@@ -150,6 +194,62 @@ install -m 0644 "$SCRIPT_DIR/files/lxc/iolab-firstboot-lxc-hosts.service" \
     "$STAGE_DIR/etc/systemd/system/iolab-firstboot-lxc-hosts.service"
 ln -sf ../iolab-firstboot-lxc-hosts.service \
     "$STAGE_DIR/etc/systemd/system/multi-user.target.wants/iolab-firstboot-lxc-hosts.service"
+
+# ---------------------------------------------------------------------------
+# Tweak 3b: make systemd-networkd start inside an UNPRIVILEGED CT.
+#
+# THE bug that otherwise leaves the CT with no network at all. Debian's
+# stock systemd-networkd.service (bookworm, systemd 252) ships mount-
+# namespace sandboxing directives — ProtectSystem=strict, ProtectHome=yes,
+# ProtectProc=invisible, ProtectControlGroups=yes, ProtectKernelLogs=yes,
+# ProtectKernelModules=yes, ProtectClock=yes, RestrictNamespaces=yes — that
+# require setting up a private mount namespace (bind /run/systemd/unit-root,
+# remount /proc, etc.). An unprivileged LXC container lacks the privilege to
+# perform those mounts, so the unit dies at:
+#
+#   systemd-networkd.service: Failed to set up mount namespacing:
+#     /run/systemd/unit-root/proc: Permission denied
+#   systemd-networkd.service: Failed at step NAMESPACE ...
+#   Main process exited, code=exited, status=226/NAMESPACE
+#
+# and after 5 rapid restarts systemd gives up ("start request repeated too
+# quickly"). Result: networkd never runs, neither pct's injected
+# eth0.network NOR our zz- DHCP fallback is ever applied, eth0 stays DOWN
+# with no address, and the :4001 GUI is unreachable — a total-network
+# failure of the artifact.
+#
+# Stock Debian Proxmox CT templates never hit this because they use
+# ifupdown, not networkd; this networkd-based rootfs does, so it needs the
+# fix. The fix is a drop-in that turns OFF exactly the sandboxing knobs that
+# need mount-namespacing — networkd's actual job (talk to the kernel over
+# rtnetlink, write /run/systemd/netif, run DHCP) needs none of that
+# hardening to function; the hardening is pure defense-in-depth that an
+# unprivileged CT already provides at the container boundary. VERIFIED on
+# PVE 8.4.19: with this drop-in networkd goes active and eth0 gets its DHCP
+# lease; without it, 226/NAMESPACE and no network.
+# ---------------------------------------------------------------------------
+echo "== pack-lxc: installing systemd-networkd unprivileged-CT drop-in =="
+install -d -m 0755 "$STAGE_DIR/etc/systemd/system/systemd-networkd.service.d"
+cat > "$STAGE_DIR/etc/systemd/system/systemd-networkd.service.d/override.conf" <<'NETWORKD_EOF'
+# Installed by pack-lxc.sh (Tweak 3b). Disables the stock unit's mount-
+# namespace sandboxing so systemd-networkd can start in an UNPRIVILEGED
+# Proxmox LXC container, where those ProtectX=/RestrictNamespaces= knobs
+# fail with status=226/NAMESPACE ("/run/systemd/unit-root/proc: Permission
+# denied"). The container boundary already provides isolation; these
+# in-unit hardening directives are redundant here and merely prevent the
+# service from starting at all. Without this file the CT has NO network.
+[Service]
+ProtectProc=default
+ProtectSystem=no
+ProtectHome=no
+ProtectControlGroups=no
+ProtectKernelLogs=no
+ProtectKernelModules=no
+ProtectClock=no
+RestrictNamespaces=no
+PrivateMounts=no
+NETWORKD_EOF
+chmod 0644 "$STAGE_DIR/etc/systemd/system/systemd-networkd.service.d/override.conf"
 
 # ---------------------------------------------------------------------------
 # Tweak 4: mask units that can't (or shouldn't) run unprivileged inside an
