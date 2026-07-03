@@ -115,10 +115,12 @@ func TestExtnetLinkIsBridged(t *testing.T) {
 		{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}}
 	mgmtLink := lab.Link{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{
 		{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}}
-	if wiringFor(&natLink, isIOL) != wiringBridged {
+	// nat/mgmt endpoints are bridged intrinsically; capture-ready off proves the
+	// reason is the non-IOL endpoint, not capture-ready mode.
+	if wiringFor(&natLink, isIOL, false) != wiringBridged {
 		t.Fatal("nat link must be bridged")
 	}
-	if wiringFor(&mgmtLink, isIOL) != wiringBridged {
+	if wiringFor(&mgmtLink, isIOL, false) != wiringBridged {
 		t.Fatal("mgmt link must be bridged")
 	}
 }

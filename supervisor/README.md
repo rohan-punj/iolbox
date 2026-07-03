@@ -160,17 +160,27 @@ header's port byte is the reverse nibble order, `iouyap.EncodePortByte`.)
 
 ### Native vs. bridged links (`internal/server/links.go`)
 
-`wiringFor(link, isIOL)` is the single decision point:
+`wiringFor(link, isIOL, captureReady)` is the single decision point:
 
 - **Native** (`wiringNative`) — a point-to-point link whose **both** endpoints
-  are IOL nodes, with **no capture** requested. Realized purely through the
-  whole-lab NETMAP (netio); no UDP relay, no supervisor in the data path. This
-  is the default fast path P0 validated.
+  are IOL nodes, with **no capture** requested **and capture-ready mode OFF**.
+  Realized purely through the whole-lab NETMAP (netio); no UDP relay, no
+  supervisor in the data path. This is the zero-CPU fast path P0 validated.
 - **Bridged** (`wiringBridged`) — a link that needs **capture**, involves a
-  **VPCS** (or any non-IOL) endpoint, is a **segment**, or (future) spans
-  **hosts**. These route through the UDP relay + pcapng tee, fronted by an
-  `iouyap` netio↔UDP bridge. `nativeLinkSpecs` deliberately excludes bridged
-  links from the NETMAP so a port is never double-wired.
+  **VPCS** (or any non-IOL) endpoint, is a **segment**, (future) spans
+  **hosts**, or is a plain IOL↔IOL link while **capture-ready mode is on**.
+  These route through the UDP relay + pcapng tee, fronted by an `iouyap`
+  netio↔UDP bridge. `nativeLinkSpecs` deliberately excludes bridged links from
+  the NETMAP so a port is never double-wired.
+
+**Capture-ready mode (Option A, default ON)** — `lab.CaptureReadyEnabled()`
+(the lab-level `captureReady` flag; a nil/absent flag counts as on). When on, a
+plain same-host IOL↔IOL p2p link is bridged too, so it can be packet-captured
+**live** — `capture.start` attaches a pcapng tee to the already-running relay
+with no node restart. Native netio has no relay to tee, so capturing a native
+link otherwise requires the IOL to reboot and re-read a pseudo-instance NETMAP.
+Turn it off per-lab (GUI: Palette → Lab → "Capture-ready links") to reclaim the
+zero-relay native path when live inter-IOL capture isn't needed.
 
 ### Bridged links: iouyap netio↔UDP bridge + pseudo-instances
 

@@ -14,6 +14,10 @@
 
   const iolImages = $derived(labStore.images);
   const running = $derived(labStore.labRunning);
+  // Capture-ready wiring (Option A): bridge same-host IOL↔IOL links so any can
+  // be captured live. Default on; only settable while stopped (the native-vs-
+  // bridged NETMAP is read at IOL boot, so it applies at the next lab start).
+  const captureReady = $derived(labStore.captureReady);
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
   const hasNat = $derived(labStore.features.includes("natgw"));
@@ -77,6 +81,22 @@
     >Save configs</button>
     <button class="btn lab-btn btn-danger" onclick={wipeAll} disabled={running}>Wipe all</button>
   </div>
+
+  <label
+    class="lab-opt"
+    class:disabled={running}
+    title={running
+      ? "Stop the lab to change capture-ready wiring — it applies at the next start."
+      : "Capture-ready: wire IOL↔IOL links through the capture bridge so any link can be packet-captured live (no node restart). Off = faster native netio, but inter-IOL links need a restart to capture. Applies at the next lab start."}
+  >
+    <input
+      type="checkbox"
+      checked={captureReady}
+      disabled={running}
+      onchange={(e) => labStore.setCaptureReady((e.currentTarget as HTMLInputElement).checked)}
+    />
+    <span>Capture-ready links</span>
+  </label>
 
   <div class="section-title">Nodes</div>
 
@@ -360,6 +380,28 @@
     width: 100%;
     font-size: var(--fs-xs);
     padding: 6px 8px;
+  }
+  .lab-opt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: -2px 0 var(--sp-2);
+    padding: 4px 2px;
+    font-size: var(--fs-xs);
+    color: var(--ink-2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .lab-opt input {
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .lab-opt.disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .lab-opt.disabled input {
+    cursor: not-allowed;
   }
   .palette-item {
     display: flex;

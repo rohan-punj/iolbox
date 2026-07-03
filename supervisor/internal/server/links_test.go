@@ -20,6 +20,9 @@ func vpcsNode(id int) lab.Node {
 	return lab.Node{ID: id, Kind: lab.KindVPCS, Name: "PC"}
 }
 
+// boolPtr returns a pointer to b, for the tri-state lab.CaptureReady flag.
+func boolPtr(b bool) *bool { return &b }
+
 func TestWiringForNativeIOLtoIOL(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
 		Nodes: []lab.Node{iolNode(0), iolNode(1)},
@@ -28,8 +31,36 @@ func TestWiringForNativeIOLtoIOL(t *testing.T) {
 		}}},
 	}
 	isIOL := isIOLMap(doc)
-	if w := wiringFor(&doc.Links[0], isIOL); w != wiringNative {
-		t.Fatalf("plain IOL<->IOL p2p must be native, got %s", w)
+	// capture-ready OFF: plain IOL<->IOL p2p takes the native netio fast path.
+	if w := wiringFor(&doc.Links[0], isIOL, false); w != wiringNative {
+		t.Fatalf("plain IOL<->IOL p2p must be native with capture-ready off, got %s", w)
+	}
+	// capture-ready ON (the default): the same link is bridged so it can be
+	// captured live without a node restart.
+	if w := wiringFor(&doc.Links[0], isIOL, true); w != wiringBridged {
+		t.Fatalf("plain IOL<->IOL p2p must be bridged with capture-ready on, got %s", w)
+	}
+}
+
+// TestCaptureReadyDefaultBridgesInterIOL locks the Option-A default: a lab with
+// no captureReady field (nil) treats capture-ready as ON, so a plain IOL<->IOL
+// p2p link is bridged (live-capturable) rather than native.
+func TestCaptureReadyDefaultBridgesInterIOL(t *testing.T) {
+	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
+		Nodes: []lab.Node{iolNode(0), iolNode(1)},
+		Links: []lab.Link{{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{
+			{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"},
+		}}},
+	}
+	if !doc.CaptureReadyEnabled() {
+		t.Fatal("nil captureReady must count as enabled (default on)")
+	}
+	if w := wiringFor(&doc.Links[0], isIOLMap(doc), doc.CaptureReadyEnabled()); w != wiringBridged {
+		t.Fatalf("default (nil captureReady) must bridge IOL<->IOL, got %s", w)
+	}
+	// nativeLinkSpecs must therefore emit NO native line for this link.
+	if specs := nativeLinkSpecs(doc); len(specs) != 0 {
+		t.Fatalf("default capture-ready must leave no native link specs, got %d", len(specs))
 	}
 }
 
@@ -52,7 +83,10 @@ func TestWiringForBridgedCases(t *testing.T) {
 	isIOL := isIOLMap(doc)
 	for _, c := range cases {
 		link := c.link
-		if w := wiringFor(&link, isIOL); w != wiringBridged {
+		// These are bridged intrinsically (vpcs/segment/capture) regardless of
+		// the capture-ready flag; assert with it OFF so the reason is the case
+		// itself, not capture-ready mode.
+		if w := wiringFor(&link, isIOL, false); w != wiringBridged {
 			t.Fatalf("%s must be bridged, got %s", c.name, w)
 		}
 	}
@@ -62,7 +96,10 @@ func TestWiringForBridgedCases(t *testing.T) {
 // the native IOL<->IOL link and NONE for the VPCS/segment/capture links.
 func TestNetmapForOnlyNativeLinks(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "lab-x", Name: "n",
-		Nodes: []lab.Node{iolNode(1), iolNode(2), vpcsNode(3)},
+		// capture-ready OFF so the IOL<->IOL link stays native and this test
+		// exercises the native-NETMAP path specifically.
+		CaptureReady: boolPtr(false),
+		Nodes:        []lab.Node{iolNode(1), iolNode(2), vpcsNode(3)},
 		Links: []lab.Link{
 			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{ // native
 				{Node: 1, Interface: "e0/0"}, {Node: 2, Interface: "e0/0"}}},

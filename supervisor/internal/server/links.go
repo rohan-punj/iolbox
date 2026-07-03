@@ -46,8 +46,16 @@ func (w linkWiring) String() string {
 //   - it is point-to-point (segment links flood via the userspace hub, not netio)
 //   - both endpoints are IOL nodes (VPCS speaks UDP, never netio)
 //   - capture is not requested on it (a tee needs the UDP relay in the path)
+//   - capture-ready mode is OFF for the lab (see below)
 //   - (cross-host is not represented in the single-host lab doc today; when it
 //     is, add the host check here — this is the one place to do it.)
+//
+// captureReady is the lab-level flag (lab.CaptureReadyEnabled, default on). When
+// it is on, a plain IOL<->IOL p2p link that would otherwise be native is bridged
+// anyway, so it can be packet-captured live: capture.start attaches a pcapng tee
+// to the already-running relay with no node restart (native netio has no relay
+// to tee, so capturing it otherwise requires the IOL to reboot and re-read a
+// pseudo-instance NETMAP). Off restores the zero-relay native fast path.
 //
 // isIOL maps node id -> whether that node is an IOL node.
 //
@@ -55,7 +63,7 @@ func (w linkWiring) String() string {
 // unit-testable on any OS. A wiringBridged result feeds bridgePlan
 // (bridgeplan.go), which allocates the pseudo-instance + iouyap bridge + relay
 // for the link. See docs/p0-spike.md "Architecture corrections" #2.
-func wiringFor(link *lab.Link, isIOL map[int]bool) linkWiring {
+func wiringFor(link *lab.Link, isIOL map[int]bool, captureReady bool) linkWiring {
 	if link.EffectiveType() != lab.LinkP2P {
 		return wiringBridged
 	}
@@ -69,6 +77,11 @@ func wiringFor(link *lab.Link, isIOL map[int]bool) linkWiring {
 		if !isIOL[ep.Node] {
 			return wiringBridged
 		}
+	}
+	// Plain same-host IOL<->IOL p2p. Bridge it in capture-ready mode (the
+	// default) so it is live-capturable; otherwise take native netio.
+	if captureReady {
+		return wiringBridged
 	}
 	return wiringNative
 }
@@ -101,10 +114,11 @@ func kindMap(doc *lab.Lab) map[int]lab.Kind {
 // through iouyap+relay instead, and a NETMAP line would double-wire the port.
 func nativeLinkSpecs(doc *lab.Lab) []netmap.LinkSpec {
 	isIOL := isIOLMap(doc)
+	captureReady := doc.CaptureReadyEnabled()
 	out := make([]netmap.LinkSpec, 0, len(doc.Links))
 	for i := range doc.Links {
 		l := &doc.Links[i]
-		if wiringFor(l, isIOL) != wiringNative {
+		if wiringFor(l, isIOL, captureReady) != wiringNative {
 			continue
 		}
 		ls := netmap.LinkSpec{P2P: true}

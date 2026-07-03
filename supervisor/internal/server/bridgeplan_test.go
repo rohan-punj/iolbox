@@ -144,7 +144,10 @@ func TestBridgePlanVPCStoIOL(t *testing.T) {
 // in addition to any native lines.
 func TestNetmapIncludesBridgedLines(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "lab-z", Name: "n",
-		Nodes: []lab.Node{iolNode(0), iolNode(1), vpcsNode(2)},
+		// capture-ready OFF so link 0 stays native and this test can assert that
+		// native and bridged NETMAP lines coexist.
+		CaptureReady: boolPtr(false),
+		Nodes:        []lab.Node{iolNode(0), iolNode(1), vpcsNode(2)},
 		Links: []lab.Link{
 			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{ // native
 				{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"}}},

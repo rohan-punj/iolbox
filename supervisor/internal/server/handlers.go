@@ -581,7 +581,7 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	// NETMAP; there is no relay to start. (A native link added at runtime that
 	// wasn't in the boot NETMAP needs a node restart to take effect; we still
 	// report link.up so the GUI reflects intent.)
-	if wiringFor(&args.Link, isIOLMap(ll.doc)) == wiringNative {
+	if wiringFor(&args.Link, isIOLMap(ll.doc), ll.doc.CaptureReadyEnabled()) == wiringNative {
 		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
 		return protocol.LinkData{Link: args.Link.ID}, nil
 	}
@@ -736,16 +736,18 @@ func (s *Server) handleCaptureStop(raw json.RawMessage) (any, error) {
 	if ok {
 		s.capturePorts.Release(port)
 	}
-	// Rebuild the plan without this link's tee. If the link is IOL<->IOL it is now
-	// native again (wiringFor flips back once capture is off); the relay is torn
-	// down and traffic returns to native netio only after the affected nodes
-	// restart to re-read the NETMAP. VPCS/segment links stay bridged and get a
-	// fresh relay without the tee.
+	// Rebuild the plan without this link's tee. In capture-ready mode (the
+	// default) an IOL<->IOL link stays bridged, so it simply gets a fresh relay
+	// without the tee below — no restart, and still live-capturable again later.
+	// With capture-ready OFF the link reverts to native (wiringFor flips back
+	// once capture is off); its relay is torn down and traffic returns to native
+	// netio only after the affected nodes restart to re-read the NETMAP.
+	// VPCS/segment links always stay bridged and get a fresh relay without the tee.
 	_ = s.relays.Stop(args.Link)
 	if err := s.rebuildBridgePlan(ll); err != nil {
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
 	}
-	if link := ll.findLink(args.Link); link != nil && wiringFor(link, isIOLMap(ll.doc)) == wiringBridged {
+	if link := ll.findLink(args.Link); link != nil && wiringFor(link, isIOLMap(ll.doc), ll.doc.CaptureReadyEnabled()) == wiringBridged {
 		if cfg, ok := ll.bridge.relayConfigFor(args.Link); ok {
 			_, _ = s.relays.Start(cfg)
 		}

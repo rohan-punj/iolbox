@@ -148,6 +148,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 	isIOL := isIOLMap(doc)
 	kindByID := kindMap(doc)
 	reals := realInstances(doc)
+	captureReady := doc.CaptureReadyEnabled()
 
 	// Count bridged IOL endpoints first so pseudo-instances are allocated in one
 	// deterministic pass (ascending link id, endpoint order).
@@ -158,7 +159,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 	nBridgedIOL := 0
 	for i := range linksSorted {
 		l := &linksSorted[i]
-		if wiringFor(l, isIOL) != wiringBridged {
+		if wiringFor(l, isIOL, captureReady) != wiringBridged {
 			continue
 		}
 		for _, ep := range l.Endpoints {
@@ -178,7 +179,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 
 	for i := range linksSorted {
 		l := &linksSorted[i]
-		if wiringFor(l, isIOL) != wiringBridged {
+		if wiringFor(l, isIOL, captureReady) != wiringBridged {
 			continue
 		}
 		kind := relay.KindP2P
