@@ -18,8 +18,11 @@
   let fit: FitAddon | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let capture: CaptureTransport | undefined;
-  const parser = new PcapngParser();
+  // Fresh parser per (re)connection: every reconnect delivers a brand-new
+  // pcapng stream (SHB first), so index/t0 must restart cleanly.
+  let parser = new PcapngParser();
   let sawData = false;
+  let hintShown = false;
 
   // SGR palette for the protocol column (mirrors consoleColorizer's approach).
   const ESC = "\x1b[";
@@ -60,11 +63,18 @@
     return (link?.capture?.enabled ?? false) && labStore.labRunning;
   }
 
+  /** One-shot idle hint. Honest: printed only while genuinely idle (no packets
+   *  yet) and only once — the transport keeps retrying in the background, so
+   *  the tab is never a tombstone; packets simply start appearing when the
+   *  capture comes up. */
   function writeHint() {
+    if (hintShown || sawData) return;
+    hintShown = true;
     term?.write(
       `${DIM}Waiting for packets on this link…${RESET}\r\n\r\n` +
-        `${DIM}Capture only carries traffic when the link is bridged. If nothing\r\n` +
-        `appears, enable capture on this link and restart the lab to see traffic.${RESET}\r\n\r\n`
+        `${DIM}This view reconnects automatically. An IOL-to-IOL link that was\r\n` +
+        `started without capture only carries capture traffic after its nodes\r\n` +
+        `restart (IOL reads its wiring once at boot).${RESET}\r\n\r\n`
     );
   }
 
@@ -92,16 +102,16 @@
 
     if (labStore.transportKind === "ws") {
       const cap = new CaptureTransport(linkId, {
+        onOpen: () => {
+          // A (re)connection restarts the pcapng stream from its SHB.
+          parser = new PcapngParser();
+        },
         onData: (bytes) => {
           sawData = true;
           for (const pkt of parser.push(bytes)) writePacket(pkt);
         },
-        onError: () => {
-          if (!sawData) writeHint();
-        },
-        onClose: () => {
-          if (!sawData) writeHint();
-        },
+        onError: () => writeHint(),
+        onClose: () => writeHint(),
       });
       cap.connect();
       capture = cap;
@@ -113,7 +123,7 @@
     }
 
     // If no data has arrived shortly after opening on a non-bridged link, hint.
-    if (!linkBridged()) setTimeout(() => { if (!sawData) writeHint(); }, 400);
+    if (!linkBridged()) setTimeout(() => writeHint(), 400);
 
     resizeObserver = new ResizeObserver(() => fit?.fit());
     if (container) resizeObserver.observe(container);
@@ -132,6 +142,15 @@
   $effect(() => {
     void themeStore.current;
     if (term) term.options.theme = termTheme();
+  });
+
+  // Collapse the reconnect backoff the moment the app KNOWS this capture is
+  // live: a capture.started event recorded the port (capturePorts), or the lab
+  // just started (auto-arm re-announces every capturing link on start).
+  $effect(() => {
+    const port = labStore.capturePorts[linkId];
+    const running = labStore.labRunning;
+    if ((port || running) && capture) capture.retryNow();
   });
 
   function writePacket(pkt: { index: number; tRel: number; data: Uint8Array; origLen: number }) {

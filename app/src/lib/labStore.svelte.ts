@@ -72,6 +72,11 @@ class LabStore {
   /** Open live-capture console tabs (feature 1), keyed by link id. Kept separate
    *  from node console tabs (openConsoleTabs) which are keyed by node id. */
   openCaptureTabs = $state<number[]>([]);
+  /** Live pcapng tee TCP port per capturing link, learned from capture.started
+   *  events (mirrors how consolePorts tracks node.console). Drives the native
+   *  Wireshark flip (wireshark -k -i TCP@<host>:<port>) and capture-tab
+   *  reconnects; entries clear on capture.stopped / lab switch. */
+  capturePorts = $state<Record<number, number>>({});
   /** Ids of docs previously saved to the durable store — gates autosave (only
    *  autosave a lab the user has explicitly saved at least once). */
   private savedDocIds = new Set<string>();
@@ -231,6 +236,15 @@ class LabStore {
       case "node.console":
         this.consolePorts = { ...this.consolePorts, [evt.data.node]: evt.data.consolePort };
         break;
+      case "capture.started":
+        this.capturePorts = { ...this.capturePorts, [evt.data.link]: evt.data.capturePort };
+        break;
+      case "capture.stopped": {
+        const next = { ...this.capturePorts };
+        delete next[evt.data.link];
+        this.capturePorts = next;
+        break;
+      }
       case "link.stats":
         // Replace the whole record so $derived/$effect readers re-run; carry a
         // receive timestamp so FloatingEdge can expire stale glow.
@@ -262,6 +276,7 @@ class LabStore {
     this.linkStats = {};
     this.openConsoleTabs = [];
     this.openCaptureTabs = [];
+    this.capturePorts = {};
     this.activeConsoleTab = null;
     const res = await this.client.labLoad(lab);
     const ports: Record<number, number> = {};
@@ -423,6 +438,15 @@ class LabStore {
 
   closeCapture(linkId: number) {
     this.openCaptureTabs = this.openCaptureTabs.filter((id) => id !== linkId);
+    // Withdraw the doc-level capture intent too (openCapture set it): the
+    // supervisor auto-arms every capture-enabled doc link on lab start, so
+    // leaving the flag behind would keep re-arming a capture whose tab the
+    // user closed. Symmetric with openCapture; autosaved like any doc edit.
+    const link = this.lab.links.find((l) => l.id === linkId);
+    if (link?.capture?.enabled) {
+      link.capture = { ...link.capture, enabled: false };
+      this.scheduleAutosave();
+    }
     if (this.lab.id) void this.client.captureStop(this.lab.id, linkId).catch(() => {});
   }
 
