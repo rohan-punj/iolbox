@@ -349,6 +349,20 @@ func openMacvtap(name, owner string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extnet: open %s: %w", dev, err)
 	}
+	// macvtap queues default to IFF_VNET_HDR: every read/write is prefixed
+	// with a 10-byte virtio_net_hdr, so bare ethernet writes get parsed as a
+	// bogus virtio header and silently dropped (and reads arrive shifted).
+	// Clear it via the same TUNSETIFF ioctl the tap path uses — macvtap
+	// accepts IFF_TAP|IFF_NO_PI flag updates on an open queue (the name field
+	// is ignored) — so both directions carry bare frames like the nat tap.
+	var ifr [ifnamsiz + 24]byte
+	flags := uint16(iffTap | iffNoPI)
+	ifr[ifnamsiz] = byte(flags)
+	ifr[ifnamsiz+1] = byte(flags >> 8)
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), tunSetIff, uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("extnet: clear IFF_VNET_HDR on %s: %v", dev, errno)
+	}
 	return f, nil
 }
 
