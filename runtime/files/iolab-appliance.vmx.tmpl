@@ -21,6 +21,18 @@ numvcpus = "2"
 cpuid.coresPerSocket = "1"
 memsize = "4096"
 
+## PCIe root ports — REQUIRED for the e1000e NICs below (e1000e is a PCIe
+## device; without a pcieRootPort bridge there is "No PCIe slot available
+## for Ethernet0" and Workstation hard-crashes at power-on instead of
+## erroring). Same block the reference iolab-rt vmx carries.
+pciBridge0.present = "TRUE"
+pciBridge4.present = "TRUE"
+pciBridge4.virtualDev = "pcieRootPort"
+pciBridge4.functions = "8"
+pciBridge5.present = "TRUE"
+pciBridge5.virtualDev = "pcieRootPort"
+pciBridge5.functions = "8"
+
 ## Single disk: the vmdk produced by pack-vmware.sh (rootfs + kernel + grub,
 ## see that script's header comment for the partition layout).
 scsi0.present = "TRUE"
