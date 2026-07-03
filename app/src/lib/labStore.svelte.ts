@@ -347,6 +347,31 @@ class LabStore {
     });
   }
 
+  /** Clone a stored lab under a fresh id + " (copy)" name and persist the copy,
+   *  so the original (e.g. a built-in starter lab) stays pristine while the user
+   *  edits the clone. Returns the new doc, or null on failure. Existing "copy"
+   *  names get a numeric suffix so repeated clones don't collide. */
+  async cloneLab(source: LabDocument): Promise<LabDocument | null> {
+    let out: LabDocument | null = null;
+    await this.guarded("clone lab", async () => {
+      const now = new Date().toISOString();
+      const existing = new Set((await this.client.labListDocs()).labs.map((l) => l.name));
+      let name = `${source.name} (copy)`;
+      for (let n = 2; existing.has(name); n++) name = `${source.name} (copy ${n})`;
+      const copy: LabDocument = {
+        ...structuredClone($state.snapshot(source) as LabDocument),
+        id: uuid(),
+        name,
+        created: now,
+        modified: now,
+      };
+      await this.client.labSaveDoc(copy);
+      this.savedDocIds.add(copy.id);
+      out = copy;
+    });
+    return out;
+  }
+
   /** Open a doc into the workspace (reuses loadLab's connect-time path). Pass
    *  fromStore=true when the doc came from the durable store (so it's treated as
    *  already-saved and eligible for autosave); false for New/Import of a doc the

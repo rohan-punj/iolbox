@@ -99,6 +99,17 @@
     await refresh();
   }
 
+  // Clone a lab (keeps the original — e.g. a starter lab — pristine) and open
+  // the copy so the user edits the clone, not the source.
+  async function clone(doc: LabDocument, ev: MouseEvent) {
+    ev.stopPropagation();
+    const copy = await labStore.cloneLab(doc);
+    if (copy) {
+      await labStore.openLab(copy, true);
+      onClose();
+    }
+  }
+
   function onScrimDown(e: MouseEvent) {
     if (e.target === e.currentTarget) onClose();
   }
@@ -160,12 +171,25 @@
                 {/if}
               </div>
             </div>
-            <button
-              class="card-del"
-              title="Delete lab"
-              aria-label="Delete lab"
-              onclick={(e) => remove(doc, e)}
-            >✕</button>
+            <div class="card-actions">
+              <button
+                class="card-act"
+                title="Clone this lab (keeps the original untouched)"
+                aria-label="Clone lab"
+                onclick={(e) => clone(doc, e)}
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="12" height="12" rx="2" />
+                  <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+                </svg>
+              </button>
+              <button
+                class="card-act card-del"
+                title="Delete lab"
+                aria-label="Delete lab"
+                onclick={(e) => remove(doc, e)}
+              >✕</button>
+            </div>
           </div>
         {/each}
       </div>
@@ -276,11 +300,21 @@
     color: var(--ink-3);
     font-family: var(--font-mono);
   }
-  .card-del {
-    all: unset;
+  .card-actions {
     position: absolute;
     top: 5px;
     right: 5px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+  }
+  .card:hover .card-actions,
+  .card:focus-within .card-actions {
+    opacity: 1;
+  }
+  .card-act {
+    all: unset;
     width: 20px;
     height: 20px;
     display: grid;
@@ -290,11 +324,11 @@
     color: var(--ink-3);
     font-size: 11px;
     cursor: pointer;
-    opacity: 0;
-    transition: opacity var(--transition-fast), color var(--transition-fast);
+    transition: color var(--transition-fast), background var(--transition-fast);
   }
-  .card:hover .card-del {
-    opacity: 1;
+  .card-act:hover {
+    color: var(--ink);
+    background: var(--ground);
   }
   .card-del:hover {
     color: var(--danger);
