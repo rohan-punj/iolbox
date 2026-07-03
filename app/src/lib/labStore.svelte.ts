@@ -882,22 +882,57 @@ class LabStore {
   }
 
   async setNodeImage(nodeId: number, imageId: string) {
-    await this.client.nodeSetImage(this.lab.id, nodeId, imageId);
     const node = this.lab.nodes.find((n) => n.id === nodeId);
     const img = this.images.find((i) => i.id === imageId);
-    if (node && img) {
-      node.image = { id: img.id, filename: img.filename, class: img.class };
+    if (!node || !img) return;
+    // Local doc first, and persist it: the user's choice must stick even when
+    // the supervisor sync needs the fallback below.
+    node.image = { id: img.id, filename: img.filename, class: img.class };
+    this.scheduleAutosave();
+    try {
+      await this.client.nodeSetImage(this.lab.id, nodeId, imageId);
+    } catch {
+      // Typically "unknown lab": the doc never loaded (e.g. it predates the
+      // image upload and lab.load failed). Now that it carries a valid image
+      // the full doc can load — re-send it when nothing is running.
+      await this.resyncAfterImageChange();
     }
   }
 
   replaceImageEverywhere(fromId: string, toId: string) {
     const img = this.images.find((i) => i.id === toId);
     if (!img) return;
+    let failed = false;
+    const applied: Promise<unknown>[] = [];
     for (const node of this.lab.nodes) {
       if (node.image?.id === fromId) {
         node.image = { id: img.id, filename: img.filename, class: img.class };
-        void this.client.nodeSetImage(this.lab.id, node.id, img.id);
+        applied.push(this.client.nodeSetImage(this.lab.id, node.id, img.id).catch(() => (failed = true)));
       }
+    }
+    if (applied.length === 0) return;
+    this.scheduleAutosave();
+    void Promise.all(applied).then(() => {
+      if (failed) return this.resyncAfterImageChange();
+    });
+  }
+
+  /** Fallback sync when node.setImage was rejected (lab not loaded at the
+   *  supervisor): re-send the whole doc, unless nodes are running. */
+  private async resyncAfterImageChange() {
+    const busy = this.lab.nodes.some(
+      (n) => this.nodeStates[n.id] === "running" || this.nodeStates[n.id] === "starting"
+    );
+    if (busy) {
+      this.lastError = "image change saved locally — restart the lab to apply it";
+      this.pushLog("warn", this.lastError);
+      return;
+    }
+    try {
+      await this.loadLab(this.lab);
+    } catch (e) {
+      this.lastError = `apply image change: ${(e as Error).message}`;
+      this.pushLog("error", this.lastError);
     }
   }
 
