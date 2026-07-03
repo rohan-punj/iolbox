@@ -59,7 +59,7 @@ func (w *wslBackend) run(ctx context.Context) error {
 
 	guiURL := fmt.Sprintf("http://localhost:%d", w.ranges.guiPort)
 	logf("Waiting for the GUI on :%d ...", w.ranges.guiPort)
-	up := waitForPort(ctx, "127.0.0.1", w.ranges.guiPort, w.opts.bootTimeout, nil)
+	up := waitForGUI(ctx, "127.0.0.1", w.ranges.guiPort, w.opts.bootTimeout, nil)
 	if !up {
 		return fmt.Errorf("timed out waiting for the GUI on %s.\n"+
 			"  Check the supervisor: wsl -d %s -- systemctl status iolab-supervisor.service\n"+

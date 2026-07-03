@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,7 +162,7 @@ func (q *qemuBackend) run(ctx context.Context) error {
 	// minutes-slow — that's expected; keep a generous timeout.
 	guiURL := fmt.Sprintf("http://localhost:%d", q.ranges.guiPort)
 	logf("Waiting for the GUI on :%d (TCG boot is slow — this can take a few minutes)...", q.ranges.guiPort)
-	up := waitForPort(ctx, "127.0.0.1", q.ranges.guiPort, q.opts.bootTimeout, procDone)
+	up := waitForGUI(ctx, "127.0.0.1", q.ranges.guiPort, q.opts.bootTimeout, procDone)
 	select {
 	case <-procDone:
 		return fmt.Errorf("qemu exited before the GUI came up (exit: %v) — check the qemu output above", procErr)
@@ -248,21 +249,33 @@ func pickQMPPort(gui int) int {
 	return p
 }
 
-// waitForPort polls a TCP connect to host:port until it succeeds, ctx is
-// cancelled, the timeout elapses, or the watched process exits (procDone
-// closed; pass nil when there is no process to watch — a nil channel never
-// fires in a select). Returns true once the port accepts a connection.
-func waitForPort(ctx context.Context, host string, port int, timeout time.Duration, procDone <-chan struct{}) bool {
+// waitForGUI polls an HTTP GET of http://host:port/ until it returns a real
+// HTTP response (any status < 500 — the GUI serves 200; <500 tolerates a
+// transient 4xx during startup), ctx is cancelled, the timeout elapses, or the
+// watched process exits (procDone closed; pass nil for no process to watch).
+// Returns true once the GUI actually responds. This replaces a bare TCP-connect
+// probe, which false-positives instantly under QEMU user-mode networking
+// because slirp accepts the host-side hostfwd connection before the guest is up.
+func waitForGUI(ctx context.Context, host string, port int, timeout time.Duration, procDone <-chan struct{}) bool {
 	deadline := time.Now().Add(timeout)
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	target := fmt.Sprintf("http://%s:%d/", host, port)
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	lastLog := time.Now()
 	for {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		resp, err := client.Get(target)
 		if err == nil {
-			_ = conn.Close()
-			return true
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return true
+			}
 		}
 		select {
 		case <-ctx.Done():
