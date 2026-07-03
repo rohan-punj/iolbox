@@ -84,6 +84,16 @@ func newConsoleHub(pty io.ReadWriter) *consoleHub {
 func (h *consoleHub) readLoop() {
 	buf := make([]byte, 4096)
 	for {
+		// Exit promptly once the hub is shut down (teardown closed done), even if
+		// the pty keeps yielding: without this a pty that returns (0, nil) on a
+		// dead node — or a Close that fails to interrupt the read — would spin
+		// this goroutine at 100% CPU (observed: leaked readLoops burning CPU
+		// after a node was stopped). This is a non-blocking guard between reads.
+		select {
+		case <-h.done:
+			return
+		default:
+		}
 		n, err := h.pty.Read(buf)
 		if n > 0 {
 			// Copy out of the reused read buffer before it escapes to queues.

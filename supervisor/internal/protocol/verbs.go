@@ -148,6 +148,13 @@ type LabWipeResult struct {
 	Wiped []int `json:"wiped"`
 }
 
+// --- lab.reap ---
+
+// ReapResult reports how many tracked nodes a force-clean reap stopped.
+type ReapResult struct {
+	Reaped int `json:"reaped"`
+}
+
 // --- node.setImage ---
 
 // NodeSetImageArgs is the node.setImage request payload.

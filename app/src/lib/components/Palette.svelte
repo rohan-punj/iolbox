@@ -40,6 +40,9 @@
     if (!confirm("Wipe all saved configs/state for this lab? This cannot be undone.")) return;
     await labStore.wipeLab();
   }
+  async function forceClean() {
+    await labStore.forceClean();
+  }
   async function saveConfigs() {
     await labStore.saveAllConfigs();
   }
@@ -81,6 +84,11 @@
       title="Extract each running IOL node's saved NVRAM startup-config into the lab — write memory on the nodes first"
     >Save configs</button>
     <button class="btn lab-btn btn-danger" onclick={wipeAll} disabled={running}>Wipe all</button>
+    <button
+      class="btn lab-btn"
+      onclick={forceClean}
+      title="Force-stop every node, relay and capture on the runtime — clears orphaned processes when nodes still show running or host CPU stays high after a normal stop."
+    >Force clean</button>
   </div>
 
   <label

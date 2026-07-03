@@ -115,6 +115,13 @@ export class SupervisorClient {
     return this.call<LabWipeResult>("lab.wipe", { labId, nodes });
   }
 
+  /** Force-clean: stop every tracked node + all relays/bridges/captures on the
+   *  supervisor, regardless of labId. Clears orphaned runtime state (leaked
+   *  relays, nodes still shown running) that a normal lab.stop might miss. */
+  labReap() {
+    return this.call<{ reaped: number }>("lab.reap", {});
+  }
+
   // node.start/stop/restart all reply with the same {started:[...]} shape as
   // lab.start (see docs/protocol.md "Same shape as above" and
   // handleNodeStart/Stop/Restart -> startNodes in

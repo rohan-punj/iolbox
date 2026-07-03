@@ -234,8 +234,47 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 	if all {
 		s.stopBridges(ll)
 		s.releaseCaptures(ll, true)
+		// Stop EVERY bridged-link relay, not just the captured ones
+		// releaseCaptures handles: lab.stop previously left the UDP pump
+		// goroutine + bound socket of every non-captured bridged link running
+		// (e.g. every capture-ready IOL<->IOL link), leaking one spinning relay
+		// per link on each start/stop cycle — the supervisor sat at tens of % CPU
+		// with no lab running. The plan is kept so a restart reuses the same
+		// wiring; startLinkRelays does Stop-then-Start per link, and the next
+		// start's rebuildBridgePlan refreshes the ports.
+		if ll.bridge != nil {
+			for _, bl := range ll.bridge.links {
+				_ = s.relays.Stop(bl.linkID)
+			}
+		}
 	}
 	return protocol.StartResult{Started: []protocol.StartedNode{}}, nil
+}
+
+// handleLabReap is the GUI "Force clean": it force-stops all runtime state
+// regardless of tracking so orphans (leaked relays, nodes the GUI still thinks
+// are running, a spinning console after an odd teardown) can be cleared from the
+// GUI in one click. It stops every node of the loaded lab, tears down its
+// iouyap bridges and captures, and stops EVERY relay in the manager
+// (relays.StopAll) — including any not reachable from the current plan. Unlike
+// lab.stop it takes no labId and never errors on a mismatch.
+func (s *Server) handleLabReap(_ json.RawMessage) (any, error) {
+	s.mu.Lock()
+	ll := s.lab
+	s.mu.Unlock()
+	reaped := 0
+	if ll != nil {
+		for id := range ll.nodes {
+			s.stopNode(ll, id)
+			reaped++
+		}
+		s.stopBridges(ll)
+		s.releaseCaptures(ll, true)
+	}
+	// Stop every relay the manager still holds, even ones no longer in any
+	// plan — the backstop that guarantees no relay pump/socket survives a reap.
+	s.relays.StopAll()
+	return protocol.ReapResult{Reaped: reaped}, nil
 }
 
 // handleLabWipe resets node state like PNetLab's wipe: for each targeted node

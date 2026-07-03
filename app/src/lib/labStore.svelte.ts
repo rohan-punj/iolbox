@@ -550,6 +550,28 @@ class LabStore {
     });
   }
 
+  /** Force-clean orphaned runtime state: ask the supervisor to stop every
+   *  tracked node + all relays/bridges/captures (regardless of labId), then
+   *  reset local runtime state so the GUI matches. Use when nodes still show
+   *  running or host CPU stays high after a normal stop. */
+  async forceClean() {
+    await this.guarded("force clean", async () => {
+      const res = await this.client.labReap();
+      // Reset local runtime view: everything is stopped now.
+      const states: Record<number, NodeState> = {};
+      for (const n of this.lab.nodes) states[n.id] = "stopped";
+      this.nodeStates = states;
+      this.openConsoleTabs = [];
+      this.activeConsoleTab = null;
+      this.openCaptureTabs = [];
+      this.capturePorts = {};
+      this.captureBuffers.clear();
+      this.captureRecorded = {};
+      this.linkStats = {};
+      this.pushLog("info", `force clean: stopped ${res?.reaped ?? 0} node(s) and all relays`);
+    });
+  }
+
   async stopLab() {
     await this.guarded("stop lab", async () => {
       await this.client.labStop(this.lab.id);
