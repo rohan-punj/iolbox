@@ -352,6 +352,23 @@ with the returned path afterwards.
   body with a 4xx/5xx status otherwise. If no image dir is configured the
   endpoint 503s.
 
+### Image registry persistence (startup rescan)
+
+The image registry itself is in-memory, but it is **derived from `ImageDir` at
+startup**: before the listeners accept, the supervisor scans `ImageDir` for
+`*.bin`/`*.iol` files and registers each one (sha256 id + ELF arch + L2/L3
+class sniff, the same `image.Inspect` path `image.register` uses). A supervisor
+restart or runtime reboot therefore keeps every image registered without the
+user re-uploading; the GUI's connect-time reconcile then rebinds existing labs
+automatically.
+
+Fingerprints are cached in `<ImageDir>/.image-cache.json`, keyed by filename
+and validated by `(size, mtime)`, so unchanged 300 MB images are not re-hashed
+on every boot. `image.register` seeds the cache for files inside `ImageDir`
+(uploads are cache hits on their first post-upload boot); the rescan rewrites
+the sidecar, pruning entries for deleted files. A missing or corrupt sidecar
+just costs a one-time re-hash. See `internal/server/imagescan.go`.
+
 The exact `/api/upload/image` pattern is more specific than the `/` catch-all, so
 `ServeMux` routes it here rather than to the SPA fallback.
 

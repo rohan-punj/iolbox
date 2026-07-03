@@ -70,6 +70,9 @@ func (s *Server) handleImageRegister(raw json.RawMessage) (any, error) {
 	s.mu.Lock()
 	s.images[info.ID] = *info
 	s.mu.Unlock()
+	// Seed the sidecar fingerprint cache so the startup rescan re-registers
+	// this file after a restart without re-hashing it (see imagescan.go).
+	s.cacheRegisteredImage(args.Path, info)
 	return protocol.ImageRegisterResult{
 		ID:     info.ID,
 		Class:  string(info.Class),

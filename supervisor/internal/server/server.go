@@ -74,6 +74,10 @@ type Server struct {
 	images map[string]image.Info // by id
 	lab    *loadedLab
 
+	// cacheMu serializes read-modify-write cycles on the sidecar image
+	// fingerprint cache in ImageDir (see imagescan.go).
+	cacheMu sync.Mutex
+
 	// broadcaster fans events out to connected clients.
 	bc *broadcaster
 }
@@ -197,6 +201,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Materialize the embedded starter labs on first run (no-op once the
 	// store holds any lab).
 	s.seedLabs()
+
+	// Rebuild the image registry from ImageDir: the registry is in-memory
+	// only, so without this a supervisor restart forgets every registered
+	// image even though the files persist on disk.
+	s.rescanImages()
 
 	host, _, err := net.SplitHostPort(s.cfg.ControlAddr)
 	if err != nil {
