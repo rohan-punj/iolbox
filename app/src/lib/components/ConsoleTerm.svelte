@@ -126,6 +126,15 @@
     if (term) term.options.theme = termTheme();
   });
 
+  // Collapse the reconnect backoff the moment this node reports running: its
+  // console listener is bound before spawn returns, so a tab opened while the
+  // lab was still starting (or across a node restart) reattaches immediately
+  // instead of waiting out the backoff. The hub replays recent output.
+  $effect(() => {
+    const state = labStore.nodeStates[nodeId];
+    if (state === "running" && realConsole) realConsole.retryNow();
+  });
+
   function handleInput(data: string) {
     if (!term) return;
     const code = data.charCodeAt(0);
