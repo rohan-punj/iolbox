@@ -3,9 +3,14 @@
 // labStore because these are pure view prefs, not lab/runtime state.
 
 export type DockSide = "bottom" | "right";
+/** How the node-hover Console button (and context-menu Console) opens a console:
+ *  "web" = an in-app web console tab; "native" = hand off to the OS telnet
+ *  client via the telnet:// scheme. Global, not per-node. */
+export type ConsoleMode = "web" | "native";
 
 const SIDE_KEY = "iolab.console.dockSide";
 const COLOR_KEY = "iolab.console.colorize";
+const MODE_KEY = "iolab.console.mode";
 
 function initialSide(): DockSide {
   try {
@@ -26,13 +31,37 @@ function initialColorize(): boolean {
   }
 }
 
+function initialMode(): ConsoleMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === "native" ? "native" : "web";
+  } catch {
+    return "web";
+  }
+}
+
 class ConsoleUiStore {
   dockSide = $state<DockSide>("bottom");
   colorize = $state(true);
+  /** Global console-open mode (web tab vs native telnet client). Default web. */
+  consoleMode = $state<ConsoleMode>("web");
 
   constructor() {
     this.dockSide = initialSide();
     this.colorize = initialColorize();
+    this.consoleMode = initialMode();
+  }
+
+  setConsoleMode(mode: ConsoleMode) {
+    this.consoleMode = mode;
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      /* ignore persistence failure */
+    }
+  }
+
+  toggleConsoleMode() {
+    this.setConsoleMode(this.consoleMode === "web" ? "native" : "web");
   }
 
   setDockSide(side: DockSide) {

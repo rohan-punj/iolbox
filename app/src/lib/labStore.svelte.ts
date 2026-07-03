@@ -5,6 +5,7 @@ import { uuid } from "./uid";
 import { SupervisorClient } from "./supervisor";
 import { MockTransport } from "./mockTransport";
 import { selectTransport } from "./transportSelect";
+import { consoleUiStore } from "./consoleUiStore.svelte";
 import type { SupervisorEvent } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
@@ -277,6 +278,8 @@ class LabStore {
     this.openConsoleTabs = [];
     this.openCaptureTabs = [];
     this.capturePorts = {};
+    this.captureBuffers.clear();
+    this.captureRecorded = {};
     this.activeConsoleTab = null;
     const res = await this.client.labLoad(lab);
     const ports: Record<number, number> = {};
@@ -452,11 +455,73 @@ class LabStore {
     // Ask the supervisor to start teeing this link (idempotent; harmless when
     // the lab is stopped — it'll bridge on next start).
     if (this.lab.id) void this.client.captureStart(this.lab.id, linkId).catch(() => {});
+    // Fresh recording buffer for the "Save .pcapng" download each time a tab is
+    // (re)opened, so a saved file isn't polluted by a prior session's bytes.
+    this.captureBuffers.delete(linkId);
     this.scheduleAutosave();
+  }
+
+  // ---- raw capture recording (for "Save .pcapng" download) ----
+  // Wireshark's live `-i TCP@host:port` attach works, but requires wireshark on
+  // PATH; a downloaded .pcapng opens in Wireshark by double-click with zero
+  // setup, so we buffer the raw pcapng byte stream a CaptureTerm receives and
+  // offer it as a file. Plain Map (not reactive) — binary, appended per frame.
+  private captureBuffers = new Map<number, { chunks: Uint8Array[]; bytes: number }>();
+  private static CAPTURE_BUF_CAP = 64 * 1024 * 1024;
+  /** Reactive byte counter so the download button can show size / enable state. */
+  captureRecorded = $state<Record<number, number>>({});
+
+  /** Append raw pcapng bytes from a link's live capture stream (called by
+   *  CaptureTerm). Copies the view (the transport reuses its buffer) and caps
+   *  total size; the stream stays a valid pcapng (a truncated trailing block is
+   *  ignored by readers). */
+  appendCaptureBytes(linkId: number, bytes: Uint8Array) {
+    let b = this.captureBuffers.get(linkId);
+    if (!b) {
+      b = { chunks: [], bytes: 0 };
+      this.captureBuffers.set(linkId, b);
+    }
+    if (b.bytes >= LabStore.CAPTURE_BUF_CAP) return;
+    b.chunks.push(bytes.slice());
+    b.bytes += bytes.length;
+    this.captureRecorded = { ...this.captureRecorded, [linkId]: b.bytes };
+  }
+
+  /** Trigger a browser download of the buffered pcapng for a link. The file
+   *  opens directly in Wireshark (no PATH/command needed). */
+  downloadCapture(linkId: number) {
+    const b = this.captureBuffers.get(linkId);
+    if (!b || b.chunks.length === 0) {
+      this.pushLog("warn", "no packets captured yet — wait for traffic on this link");
+      return;
+    }
+    const blob = new Blob(b.chunks as BlobPart[], { type: "application/vnd.tcpdump.pcap" });
+    const link = this.lab.links.find((l) => l.id === linkId);
+    const ep = link?.endpoints ?? [];
+    const nm = (i: number) => this.lab.nodes.find((n) => n.id === ep[i]?.node)?.name ?? `n${ep[i]?.node}`;
+    const base = link ? `${this.lab.name}-${nm(0)}-${nm(1)}` : `capture-link${linkId}`;
+    const fname = `${base}.pcapng`.replace(/[^\w.\-]+/g, "_");
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+    this.pushLog("info", `saved ${fname} (${(b.bytes / 1024).toFixed(0)} KiB)`);
   }
 
   closeCapture(linkId: number) {
     this.openCaptureTabs = this.openCaptureTabs.filter((id) => id !== linkId);
+    this.captureBuffers.delete(linkId);
+    if (this.captureRecorded[linkId] !== undefined) {
+      const { [linkId]: _drop, ...rest } = this.captureRecorded;
+      this.captureRecorded = rest;
+    }
     // Withdraw the doc-level capture intent too (openCapture set it): the
     // supervisor auto-arms every capture-enabled doc link on lab start, so
     // leaving the flag behind would keep re-arming a capture whose tab the
@@ -539,6 +604,40 @@ class LabStore {
       this.openConsoleTabs = [...this.openConsoleTabs, nodeId];
     }
     this.activeConsoleTab = nodeId;
+  }
+
+  /** Open a node's console in the OS telnet client via the telnet:// scheme,
+   *  WITHOUT opening a web tab. Uses a transient anchor click so the OS handler
+   *  is invoked without navigating the app: a `location=`/`window.open(_,"_self")`
+   *  navigation unloads the page and drops the supervisor WebSocket, which is
+   *  what previously broke every *other* console once one was opened natively. */
+  openNativeConsole(nodeId: number) {
+    const port = this.consolePorts[nodeId];
+    const name = this.lab.nodes.find((n) => n.id === nodeId)?.name ?? `#${nodeId}`;
+    if (!port) {
+      this.pushLog("warn", `${name}: console port not assigned yet`, nodeId);
+      return;
+    }
+    const host = location.hostname || "localhost";
+    const url = `telnet://${host}:${port}`;
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      /* no telnet:// handler registered — non-fatal; the log shows the address */
+    }
+    this.pushLog("info", `native console for ${name} → ${url}`, nodeId);
+  }
+
+  /** Open a node's console honouring the global console mode (consoleUiStore):
+   *  a web tab in "web" mode, the native telnet client in "native" mode. */
+  openConsoleByMode(nodeId: number) {
+    if (consoleUiStore.consoleMode === "native") this.openNativeConsole(nodeId);
+    else this.openConsole(nodeId);
   }
 
   closeConsole(nodeId: number) {

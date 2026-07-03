@@ -663,7 +663,7 @@
       {
         label: "Console",
         disabled: nodeState !== "running",
-        action: () => labStore.openConsole(nid),
+        action: () => labStore.openConsoleByMode(nid),
       },
       { separator: true, label: "sep1", action: () => {} },
       {

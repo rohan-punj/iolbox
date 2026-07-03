@@ -1,5 +1,6 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
+  import { consoleUiStore } from "../consoleUiStore.svelte";
   import { iconSvg } from "../icons.svelte";
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
 
@@ -97,6 +98,27 @@
     />
     <span>Capture-ready links</span>
   </label>
+
+  <div class="section-title">Console</div>
+  <div
+    class="seg"
+    role="group"
+    aria-label="Console open mode"
+    title="How the node Console button opens: an in-app web console, or hand off to your OS telnet client (PuTTY etc.) for every node."
+  >
+    <button
+      class="seg-btn"
+      class:on={consoleUiStore.consoleMode === "web"}
+      aria-pressed={consoleUiStore.consoleMode === "web"}
+      onclick={() => consoleUiStore.setConsoleMode("web")}
+    >Web</button>
+    <button
+      class="seg-btn"
+      class:on={consoleUiStore.consoleMode === "native"}
+      aria-pressed={consoleUiStore.consoleMode === "native"}
+      onclick={() => consoleUiStore.setConsoleMode("native")}
+    >Native</button>
+  </div>
 
   <div class="section-title">Nodes</div>
 
@@ -402,6 +424,39 @@
   }
   .lab-opt.disabled input {
     cursor: not-allowed;
+  }
+  /* Segmented toggle (Console open mode). */
+  .seg {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-bottom: var(--sp-2);
+  }
+  .seg-btn {
+    all: unset;
+    box-sizing: border-box;
+    flex: 1;
+    text-align: center;
+    padding: 5px 6px;
+    font-size: var(--fs-xs);
+    font-weight: 550;
+    color: var(--ink-2);
+    background: var(--bg-2);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+  .seg-btn + .seg-btn {
+    border-left: 1px solid var(--border-strong);
+  }
+  .seg-btn:hover {
+    background: var(--bg-hover);
+    color: var(--ink);
+  }
+  .seg-btn.on {
+    background: var(--accent-muted);
+    color: var(--accent);
   }
   .palette-item {
     display: flex;

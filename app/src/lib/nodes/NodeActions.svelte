@@ -28,7 +28,7 @@
     void labStore.stopNode(nodeId);
   }
   function console_() {
-    labStore.openConsole(nodeId);
+    labStore.openConsoleByMode(nodeId);
   }
   function saveConfig() {
     void labStore.saveNodeConfig(nodeId);

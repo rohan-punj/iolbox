@@ -10,12 +10,11 @@
   // was most recently activated.
   let activeCapture = $state<number | null>(null);
 
-  // Per-tab web/native flip state — SESSION-ONLY, never persisted.
-  // Console tabs: flipped-to-native unmounts the ConsoleTerm (its WS
-  // disconnects on destroy) and shows a placeholder; flipping back remounts a
-  // fresh ConsoleTerm/transport, and the supervisor's console replay buffer
-  // repaints the recent context.
-  let nativeConsole = $state<Record<number, boolean>>({});
+  // Console tabs are always the in-app web terminal now. Native telnet is a
+  // global mode chosen in the left palette (consoleUiStore.consoleMode) which
+  // makes the node Console button hand off to the OS telnet client instead of
+  // opening a tab — so there is no per-tab web/native flip here anymore.
+  //
   // Capture tabs: flipped shows the native Wireshark attach command as an
   // overlay ON TOP of the live summary, which keeps running underneath (the
   // stream is cheap and keeping it hot means flipping back shows no gap).
@@ -50,30 +49,39 @@
 
   function closeConsole(nodeId: number) {
     labStore.closeConsole(nodeId);
-    nativeConsole = { ...nativeConsole, [nodeId]: false };
-  }
-
-  /** Flip a console tab between the web terminal and a native telnet session. */
-  function flipConsole(nodeId: number) {
-    if (nativeConsole[nodeId]) {
-      nativeConsole = { ...nativeConsole, [nodeId]: false };
-      labStore.pushLog("info", `${nodeName(nodeId)}: reattached web console`, nodeId);
-      return;
-    }
-    nativeConsole = { ...nativeConsole, [nodeId]: true };
-    openNative(nodeId);
   }
 
   function flipCapture(linkId: number) {
     nativeCapture = { ...nativeCapture, [linkId]: !nativeCapture[linkId] };
   }
 
-  /** The native Wireshark attach command for a capturing link, or null while
-   *  the capture port is not known yet (no capture.started seen). */
-  function wiresharkCmd(linkId: number): string | null {
+  /** host:port of a link's live pcapng tee, or null until the capture port is
+   *  known (no capture.started seen yet). */
+  function captureAddr(linkId: number): { host: string; port: number } | null {
     const port = labStore.capturePorts[linkId];
     if (!port) return null;
-    return `wireshark -k -i TCP@${location.hostname || "localhost"}:${port}`;
+    return { host: location.hostname || "localhost", port };
+  }
+
+  /** The native Wireshark live-attach command for a capturing link, or null
+   *  while the capture port is not known yet. Wireshark's TCP@ interface reads
+   *  the live pcapng stream directly. */
+  function wiresharkCmd(linkId: number): string | null {
+    const a = captureAddr(linkId);
+    return a ? `wireshark -k -i TCP@${a.host}:${a.port}` : null;
+  }
+
+  /** Full-path Windows fallback for when wireshark isn't on PATH. */
+  function wiresharkCmdFull(linkId: number): string | null {
+    const a = captureAddr(linkId);
+    return a
+      ? `"C:\\Program Files\\Wireshark\\Wireshark.exe" -k -i TCP@${a.host}:${a.port}`
+      : null;
+  }
+
+  function fmtBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KiB`;
   }
 
   // Inline icon glyphs (kept local per turf rules — no shared icons.svelte.ts).
@@ -83,8 +91,6 @@
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="9.5" y="2.5" width="5" height="11" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
   const PAINT =
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 9.5 9 3.5l3.5 3.5-6 6H3z"/><path d="M2 14.5h6" stroke-linecap="round"/></svg>';
-  const TELNET =
-    '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M4 5.5l2 1.5-2 1.5M7.5 9h4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   // Small "waveform" glyph marking a live-capture tab.
   const CAPTURE =
     '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h2l1.5-4 2 8 2-6 1.5 4h2"/></svg>';
@@ -101,30 +107,6 @@
     const port = labStore.consolePorts[nodeId];
     if (!port) return null;
     return { host: location.hostname || "localhost", port };
-  }
-
-  function telnetTitle(nodeId: number): string {
-    const a = consoleAddr(nodeId);
-    return a ? `telnet ${a.host}:${a.port}` : "console port not assigned yet";
-  }
-
-  /** Flip a console to a native telnet client via the telnet:// scheme handler
-   *  (PuTTY etc. on Windows). If no handler is registered the navigation fails
-   *  silently — that's fine; the tooltip + copy-chip still tell the user the
-   *  address to dial manually. */
-  function openNative(nodeId: number) {
-    const a = consoleAddr(nodeId);
-    if (!a) {
-      labStore.pushLog("warn", `node ${nodeId}: console port not assigned yet`, nodeId);
-      return;
-    }
-    const url = `telnet://${a.host}:${a.port}`;
-    try {
-      window.open(url, "_self");
-    } catch {
-      /* no telnet:// handler — tooltip/copy chip cover it */
-    }
-    labStore.pushLog("info", `native console for ${nodeName(nodeId)} → ${url}`, nodeId);
   }
 
   /** Click-to-copy. clipboard API needs a secure context and this page is
@@ -170,18 +152,6 @@
               onclick={() => selectConsole(nodeId)}
             >
               {nodeName(nodeId)}
-            </button>
-            <button
-              class="tab-ext"
-              class:on={nativeConsole[nodeId]}
-              title={nativeConsole[nodeId]
-                ? "Native session active — flip back to web console"
-                : `Flip to native telnet — ${telnetTitle(nodeId)}`}
-              aria-label={nativeConsole[nodeId] ? "Flip back to web console" : "Flip to native telnet client"}
-              aria-pressed={!!nativeConsole[nodeId]}
-              onclick={() => flipConsole(nodeId)}
-            >
-              {@html TELNET}
             </button>
             <button class="tab-close" title="Close" onclick={() => closeConsole(nodeId)}>
               ✕
@@ -254,36 +224,7 @@
     <div class="term-area">
       {#each labStore.openConsoleTabs as nodeId (nodeId)}
         <div class="term-slot" class:hidden={labStore.activeConsoleTab !== nodeId}>
-          {#if nativeConsole[nodeId]}
-            <!-- Native flip: the ConsoleTerm is UNMOUNTED (its WS closed on
-                 destroy) so the native telnet session owns the console UX; the
-                 supervisor's console hub happily serves both, but a deliberate
-                 flip avoids double-echo confusion. Flip back = fresh transport;
-                 the hub replay buffer repaints the recent context. -->
-            <div class="native-hold">
-              <div class="native-card">
-                <div class="native-title">Native session active</div>
-                <div class="native-sub">
-                  This tab's web console is detached. Connect a telnet client to:
-                </div>
-                {#if consoleAddr(nodeId)}
-                  {@const a = consoleAddr(nodeId)}
-                  <button
-                    class="addr-chip mono"
-                    title="Click to copy"
-                    onclick={() => copyAddr(nodeId)}
-                  >
-                    {a?.host}:{a?.port}
-                  </button>
-                {/if}
-                <button class="native-back" onclick={() => flipConsole(nodeId)}>
-                  Flip back to web console
-                </button>
-              </div>
-            </div>
-          {:else}
-            <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
-          {/if}
+          <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
         </div>
       {/each}
       {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
@@ -292,12 +233,35 @@
                stream is cheap, and flipping back shows no gap. -->
           <CaptureTerm {linkId} active={activeCapture === linkId} />
           {#if nativeCapture[linkId]}
+            {@const recorded = labStore.captureRecorded[linkId] ?? 0}
             <div class="native-hold overlay">
               <div class="native-card">
-                <div class="native-title">Native Wireshark</div>
+                <div class="native-title">Open in Wireshark</div>
+
+                <!-- Reliable path: download a .pcapng and open it by double-click.
+                     No Wireshark-on-PATH, no command to run. -->
+                <div class="native-sub">
+                  Save the capture as a file and open it in Wireshark — no setup needed:
+                </div>
+                <button
+                  class="native-primary"
+                  disabled={recorded === 0}
+                  title={recorded === 0 ? "Waiting for packets on this link" : "Download .pcapng"}
+                  onclick={() => labStore.downloadCapture(linkId)}
+                >
+                  {@html SHARK}
+                  Save .pcapng{recorded > 0 ? ` · ${fmtBytes(recorded)}` : ""}
+                </button>
+                {#if recorded === 0}
+                  <div class="native-hint">
+                    Waiting for packets — generate traffic on the link, then save.
+                  </div>
+                {/if}
+
+                <div class="native-div">or attach a live session</div>
                 {#if wiresharkCmd(linkId)}
                   <div class="native-sub">
-                    Run this on your machine (Wireshark attaches to the live pcapng stream):
+                    Run in a terminal where Wireshark is on your PATH:
                   </div>
                   <button
                     class="addr-chip mono"
@@ -306,11 +270,22 @@
                   >
                     {wiresharkCmd(linkId)}
                   </button>
+                  <div class="native-hint">
+                    Not on PATH? Use the full path (click to copy):
+                  </div>
+                  <button
+                    class="addr-chip mono"
+                    title="Click to copy"
+                    onclick={() => copyText(wiresharkCmdFull(linkId)!, "Copy Wireshark command:")}
+                  >
+                    {wiresharkCmdFull(linkId)}
+                  </button>
                 {:else}
                   <div class="native-sub">
-                    Capture port not assigned yet — start the lab (or the capture) first.
+                    Live attach unlocks once the capture port is assigned (start the lab or the capture first).
                   </div>
                 {/if}
+
                 <button class="native-back" onclick={() => flipCapture(linkId)}>
                   Back to live summary
                 </button>
@@ -548,5 +523,43 @@
   }
   .native-back:hover {
     background: var(--bg-hover);
+  }
+  .native-primary {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    font-weight: 650;
+    color: var(--accent-ink, #04120c);
+    background: var(--accent);
+    cursor: pointer;
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+  }
+  .native-primary:hover {
+    filter: brightness(1.08);
+  }
+  .native-primary[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: none;
+  }
+  .native-primary :global(svg) {
+    color: currentColor;
+  }
+  .native-hint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-align: center;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .native-div {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    margin-top: 4px;
   }
 </style>

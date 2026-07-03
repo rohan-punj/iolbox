@@ -108,6 +108,9 @@
         },
         onData: (bytes) => {
           sawData = true;
+          // Buffer the raw pcapng bytes for the "Save .pcapng" download (a
+          // reliable path into Wireshark that needs no PATH/command).
+          labStore.appendCaptureBytes(linkId, bytes);
           for (const pkt of parser.push(bytes)) writePacket(pkt);
         },
         onError: () => writeHint(),
