@@ -164,3 +164,46 @@ wsl --import iolab C:\Users\<you>\iolab-wsl runtime\build\iolab-rootfs.tar
 wsl -d iolab -- systemctl status iolab-supervisor.service
 # browse to http://localhost:4001
 ```
+
+## CI (GitHub Actions) — what a release build needs
+
+The whole pipeline runs unprivileged-runner-friendly on `ubuntu-latest`
+(sudo is passwordless there; loop devices and chroots work on the standard
+runners):
+
+```yaml
+jobs:
+  runtime-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4       # GUI bundle for the embed
+        with: { node-version: 20 }
+      - uses: actions/setup-go@v5
+        with: { go-version: 'stable' }
+      - run: sudo apt-get update && sudo apt-get install -y
+             debootstrap qemu-utils parted e2fsprogs rsync
+             debian-archive-keyring build-essential
+      - run: cd app && npm ci
+      - run: bash build-release.sh        # GUI-embedded supervisor binary
+      - run: cd runtime && sudo ./build-all.sh
+             --supervisor-bin ../supervisor/bin/supervisor-linux-amd64
+      - uses: actions/upload-artifact@v4   # or softprops/action-gh-release on tags
+        with:
+          name: iolab-runtime
+          path: |
+            runtime/build/iolab-rootfs.tar
+            runtime/build/iolab-appliance.vmdk
+            runtime/build/iolab-appliance.vmx
+```
+
+Notes:
+- `debian-archive-keyring` matters on Ubuntu builders — without it
+  debootstrap proceeds UNVERIFIED with only a warning.
+- Artifact sizes: tar ~170 MB, vmdk ~1.6 GB (sparse file; consider
+  zstd-compressing the vmdk for release assets).
+- No secrets, no Cisco bits — everything fetched is public Debian + GNS3
+  vpcs source.
+- What CI cannot do: boot-smoke the VMware appliance (no nested VMware).
+  The boot smoke stays a manual/release-checklist step; see the
+  drive-appliance smoke notes in the repo docs.
