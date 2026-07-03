@@ -99,11 +99,16 @@ func New(cfg Config) *Server {
 		images:       make(map[string]image.Info),
 		bc:           newBroadcaster(),
 	}
-	// Detect nat/mgmt support once: nat needs /dev/net/tun + passwordless sudo;
-	// mgmt additionally needs a candidate management interface. Off Linux this is
-	// always all-false, so the dev box never advertises the features. See
-	// extnet.Detect / handleHello.
+	// Detect nat support once: nat needs /dev/net/tun + passwordless sudo. Off
+	// Linux this is always false, so the dev box never advertises the feature.
+	// See extnet.Detect / handleHello.
 	s.caps = extnet.Detect(extnet.SudoOK(), cfg.MgmtIface)
+	// mgmt is PARKED and never advertised: macvlan bridge mode filters inbound
+	// unicast by the macvtap's own MAC, so a foreign-MAC lab node behind the
+	// endpoint never receives replies. NAT covers the outbound-connectivity
+	// need; revisit mgmt via MAC adoption (adopt the peer's MAC onto the
+	// macvtap) if direct L2 presence on the mgmt network is wanted later.
+	s.caps.Mgmt = false
 	s.register()
 	return s
 }
