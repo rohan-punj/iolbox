@@ -18,6 +18,10 @@
   let tasksWidth = $state(360);
   let consoleHeight = $state(240);
   let consoleWidth = $state(420);
+  // Live viewport width so the right-docked console's drag limit scales with
+  // the window: it may stretch to HALF the screen (a wide terminal for configs)
+  // instead of the old fixed 720px cap.
+  let winW = $state(typeof window !== "undefined" ? window.innerWidth : 1280);
 
   // Only show the console dock when at least one tab is open — an empty dock
   // just steals canvas space. Placement (bottom bar vs right pane) is the
@@ -37,6 +41,8 @@
     !showTasks && (labStore.selectedNodeId !== null || labStore.selectedLinkId !== null)
   );
 </script>
+
+<svelte:window bind:innerWidth={winW} />
 
 <div class="shell">
   <TopBar />
@@ -91,7 +97,7 @@
         edge="end"
         bind:size={consoleWidth}
         min={280}
-        max={720}
+        max={Math.max(720, Math.floor(winW * 0.5))}
         storageKey="iolab.split.consoleRight"
       >
         <Console />

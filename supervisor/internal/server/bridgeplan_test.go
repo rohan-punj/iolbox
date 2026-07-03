@@ -25,7 +25,7 @@ func TestBridgePlanCapturedIOLtoIOL(t *testing.T) {
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"}}}},
 	}
 	captures := map[int]int{7: 5500}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), captures, "")
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), captures, "", map[int]*linkAssign{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBridgePlanVPCStoIOL(t *testing.T) {
 		Links: []lab.Link{{ID: 3, Type: lab.LinkP2P,
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 1, Interface: "eth0"}}}},
 	}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "")
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,5 +197,79 @@ func TestBridgePlanReleasesPortsOnRebuild(t *testing.T) {
 		if first[i] != second[i] {
 			t.Fatalf("rebuild leaked ports: first %v second %v", first, second)
 		}
+	}
+}
+
+// TestStickyAssignmentsAcrossLinkRemoval pins the fix for the mid-session
+// desync: removing one link must NOT shift any surviving link's relay ports or
+// pseudo-instances on rebuild. (Pre-fix, allocation ran in link-id order from
+// scratch each rebuild, so removing link 1 shifted link 2's whole identity —
+// silently orphaning endpoints whose configs were frozen at start; observed as
+// a NAT's DHCP OFFERs never reaching a router after topology edits.)
+func TestStickyAssignmentsAcrossLinkRemoval(t *testing.T) {
+	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
+		Nodes: []lab.Node{iolNode(0), iolNode(1), iolNode(2), natNode(3)},
+		Links: []lab.Link{
+			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"}}},
+			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 1, Interface: "e0/1"}, {Node: 2, Interface: "e0/1"}}},
+			{ID: 2, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 3, Interface: "eth0"}}},
+		},
+	}
+	s := newTestServer()
+	ll := newLoadedLab(doc, "/run/iolab")
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		t.Fatal(err)
+	}
+	cfg2Before, ok := ll.bridge.relayConfigFor(2)
+	if !ok {
+		t.Fatal("link 2 must be bridged")
+	}
+	var pseudo2Before int
+	for _, bl := range ll.bridge.links {
+		if bl.linkID == 2 {
+			for _, ep := range bl.endpoints {
+				if ep.isIOL {
+					pseudo2Before = ep.pseudo
+				}
+			}
+		}
+	}
+
+	// Remove link 1 (the middle link) from the doc, rebuild.
+	ll.doc.Links = append(ll.doc.Links[:1], ll.doc.Links[2:]...)
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		t.Fatal(err)
+	}
+	cfg2After, ok := ll.bridge.relayConfigFor(2)
+	if !ok {
+		t.Fatal("link 2 must still be bridged")
+	}
+	for i := range cfg2Before.Endpoints {
+		if cfg2Before.Endpoints[i] != cfg2After.Endpoints[i] {
+			t.Fatalf("link 2 relay ports SHIFTED across rebuild: before=%+v after=%+v",
+				cfg2Before.Endpoints, cfg2After.Endpoints)
+		}
+	}
+	for _, bl := range ll.bridge.links {
+		if bl.linkID == 2 {
+			for _, ep := range bl.endpoints {
+				if ep.isIOL && ep.pseudo != pseudo2Before {
+					t.Fatalf("link 2 pseudo-instance SHIFTED: %d -> %d", pseudo2Before, ep.pseudo)
+				}
+			}
+		}
+	}
+	// Link 1's assignment must be released (gone from assigns).
+	if _, still := ll.assigns[1]; still {
+		t.Fatal("removed link 1's assignment must be released")
+	}
+	// And a NEW link picks up fresh (recycled) resources without error.
+	ll.doc.Links = append(ll.doc.Links, lab.Link{ID: 9, Type: lab.LinkP2P,
+		Endpoints: []lab.Endpoint{{Node: 1, Interface: "e0/2"}, {Node: 2, Interface: "e0/2"}}})
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ll.bridge.relayConfigFor(9); !ok {
+		t.Fatal("new link 9 must be bridged with fresh assignment")
 	}
 }

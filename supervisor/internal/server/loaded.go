@@ -27,6 +27,18 @@ type loadedLab struct {
 	// bridges holds the live iouyap bridges started for this lab, keyed by netio
 	// socket path, so they can be Closed on stop (Linux only). Guarded by mu.
 	bridges map[string]*labBridge
+	// assigns is each bridged link's STICKY data-plane identity (relay UDP port
+	// pair per endpoint + pseudo-instance per IOL endpoint), keyed by link id.
+	// Once assigned, a link keeps these values across every plan rebuild for the
+	// lab's lifetime; only a link removed from the doc (or reshaped) releases
+	// them. Without stickiness, rebuilds re-allocated in link-id order, so ANY
+	// change to the link set (a mid-session link.remove, say) shifted every
+	// later link's ports/pseudos — silently desyncing long-running endpoints
+	// whose configs were frozen at start (VPCS argv, NAT/MGMT endpoint, IOL
+	// NETMAPs written at earlier boots, stale iouyap bridges). Observed as "R1
+	// stops getting DHCP offers after some topology edits". Accessed only from
+	// the dispatch path (like doc); not guarded by mu.
+	assigns map[int]*linkAssign
 }
 
 // nodeRuntime is the runtime state of a single node.
@@ -55,6 +67,7 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		captures: make(map[int]int),
 		runDir:   runDir,
 		bridges:  make(map[string]*labBridge),
+		assigns:  make(map[int]*linkAssign),
 	}
 }
 

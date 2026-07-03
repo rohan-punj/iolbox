@@ -102,6 +102,46 @@ type iouyapConfig struct {
 	PseudoInstance int
 }
 
+// linkAssign is one bridged link's sticky data-plane identity: the relay UDP
+// port pair and (for IOL endpoints) the pseudo-instance, per endpoint, in the
+// link's doc endpoint order. Held in loadedLab.assigns so every plan rebuild
+// reproduces the SAME wiring for a surviving link (see the assigns field's
+// comment for why that matters).
+type linkAssign struct {
+	eps []epAssign
+}
+
+// epAssign is one endpoint's sticky assignment.
+type epAssign struct {
+	local  int // relay's receiving UDP port for this endpoint
+	remote int // this endpoint's delivery UDP port
+	pseudo int // pseudo-instance id (0 = not an IOL endpoint)
+}
+
+// compatible reports whether an existing assignment still fits the link's
+// current shape (same endpoint count, IOL-ness per slot) — an upserted link
+// that changed endpoints gets fresh assignments instead of inheriting stale
+// ones.
+func (a *linkAssign) compatible(l *lab.Link, isIOL map[int]bool) bool {
+	if a == nil || len(a.eps) != len(l.Endpoints) {
+		return false
+	}
+	for i, ep := range l.Endpoints {
+		if (a.eps[i].pseudo != 0) != isIOL[ep.Node] {
+			return false
+		}
+	}
+	return true
+}
+
+// release returns an assignment's UDP ports to the allocator.
+func (a *linkAssign) release(udp *node.PortAllocator) {
+	for _, ep := range a.eps {
+		udp.Release(ep.local)
+		udp.Release(ep.remote)
+	}
+}
+
 // netioDir returns the per-uid netio socket directory IOL uses, /tmp/netio<uid>.
 // Confirmed via lsof on real IOL (docs/p0-spike.md "IOL netio socket
 // convention"): each IOL binds /tmp/netio<uid>/<instance-id>, so an iouyap
@@ -129,12 +169,19 @@ func realInstances(doc *lab.Lab) map[int]bool {
 	return m
 }
 
-// buildBridgePlan computes the whole-lab bridge plan deterministically. It
-// allocates:
+// buildBridgePlan computes the whole-lab bridge plan. For each bridged link it
+// pairs:
 //   - a pseudo-instance id (from the reserved pool, skipping real instances) for
 //     each bridged IOL endpoint,
 //   - a relay UDPEndpoint (local+remote UDP port) per link endpoint via udp, and
 //   - the iouyap bridge config pairing that endpoint's netio socket to the relay.
+//
+// assigns is the lab's STICKY assignment table (loadedLab.assigns): a link that
+// already has a compatible assignment reuses it verbatim, so its wiring is
+// STABLE across rebuilds no matter how the rest of the link set changed; only
+// links without one (new, or reshaped by an upsert) allocate fresh, and the
+// fresh values are recorded back into assigns. Callers own releasing the
+// assignments of links that left the doc (see rebuildBridgePlan).
 //
 // captures maps linkID -> capturePort for links that currently have a capture
 // tee attached; the relay config carries the tee port so newRelay opens it.
@@ -144,38 +191,59 @@ func realInstances(doc *lab.Lab) map[int]bool {
 // It is pure except for port allocation (udp) — no sockets are bound and no
 // iouyap bridge is created here; that is the Linux data-plane's job (see
 // bridgeplan_linux.go). uid is os.Getuid() on Linux (the netio dir owner).
-func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int, captureBind string) (*bridgePlan, error) {
+func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int, captureBind string, assigns map[int]*linkAssign) (*bridgePlan, error) {
 	isIOL := isIOLMap(doc)
 	kindByID := kindMap(doc)
 	reals := realInstances(doc)
 	captureReady := doc.CaptureReadyEnabled()
 
-	// Count bridged IOL endpoints first so pseudo-instances are allocated in one
-	// deterministic pass (ascending link id, endpoint order).
 	linksSorted := make([]lab.Link, len(doc.Links))
 	copy(linksSorted, doc.Links)
 	sort.Slice(linksSorted, func(i, j int) bool { return linksSorted[i].ID < linksSorted[j].ID })
 
-	nBridgedIOL := 0
+	// Pass 1 — decide which links keep their sticky assignment and how many NEW
+	// pseudo-instances the rest need. An incompatible assignment (link reshaped
+	// under the same id) is released now so its ports return to the pool before
+	// fresh allocation. New pseudos must avoid real instances AND every pseudo a
+	// kept assignment already owns.
+	avoid := make(map[int]bool, len(reals))
+	for r := range reals {
+		avoid[r] = true
+	}
+	nNewIOL := 0
 	for i := range linksSorted {
 		l := &linksSorted[i]
 		if wiringFor(l, isIOL, captureReady) != wiringBridged {
 			continue
 		}
+		la := assigns[l.ID]
+		if la != nil && !la.compatible(l, isIOL) {
+			la.release(udp)
+			delete(assigns, l.ID)
+			la = nil
+		}
+		if la != nil {
+			for _, ep := range la.eps {
+				if ep.pseudo != 0 {
+					avoid[ep.pseudo] = true
+				}
+			}
+			continue
+		}
 		for _, ep := range l.Endpoints {
 			if isIOL[ep.Node] {
-				nBridgedIOL++
+				nNewIOL++
 			}
 		}
 	}
 
-	pseudos, err := netmap.AllocPseudoInstances(reals, nBridgedIOL)
+	pseudos, err := netmap.AllocPseudoInstances(avoid, nNewIOL)
 	if err != nil {
 		return nil, err
 	}
 
 	plan := &bridgePlan{}
-	pi := 0 // next pseudo-instance index
+	pi := 0 // next NEW pseudo-instance index
 
 	for i := range linksSorted {
 		l := &linksSorted[i]
@@ -191,18 +259,34 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 			relayCfg: relay.Config{LinkID: l.ID, Kind: kind, CapturePort: captures[l.ID], CaptureBind: captureBind},
 		}
 
+		// Materialize (or mint) this link's sticky assignment.
+		la := assigns[l.ID]
+		if la == nil {
+			la = &linkAssign{}
+			for _, ep := range l.Endpoints {
+				local, aerr := udp.Next()
+				if aerr != nil {
+					return nil, aerr
+				}
+				remote, aerr := udp.Next()
+				if aerr != nil {
+					return nil, aerr
+				}
+				ea := epAssign{local: local, remote: remote}
+				if isIOL[ep.Node] {
+					ea.pseudo = pseudos[pi]
+					pi++
+				}
+				la.eps = append(la.eps, ea)
+			}
+			assigns[l.ID] = la
+		}
+
 		// VPCS PC index is 1-based per PC within a VPCS process; today one PC per
 		// VPCS node, so it is always 1.
 		for ri, ep := range l.Endpoints {
-			local, aerr := udp.Next()
-			if aerr != nil {
-				return nil, aerr
-			}
-			remote, aerr := udp.Next()
-			if aerr != nil {
-				return nil, aerr
-			}
-			relayEP := relay.UDPEndpoint{Host: "127.0.0.1", LocalPort: local, RemotePort: remote}
+			ea := la.eps[ri]
+			relayEP := relay.UDPEndpoint{Host: "127.0.0.1", LocalPort: ea.local, RemotePort: ea.remote}
 			bl.relayCfg.Endpoints = append(bl.relayCfg.Endpoints, relayEP)
 
 			be := bridgedEndpoint{
@@ -218,8 +302,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 				if perr != nil {
 					return nil, fmt.Errorf("link %d node %d: %w", l.ID, ep.Node, perr)
 				}
-				be.pseudo = pseudos[pi]
-				pi++
+				be.pseudo = ea.pseudo
 				be.netioPath = netioPathFor(uid, be.pseudo)
 				// iouyap sends IOL's outbound frames to the relay's receiving
 				// port (relayEP.LocalPort) and binds the relay's delivery port
@@ -333,23 +416,51 @@ func (p *bridgePlan) udpPorts() []int {
 }
 
 // rebuildBridgePlan (re)computes ll.bridge from the current lab doc + capture
-// intents, releasing the previous plan's UDP ports first so restarts don't leak.
-// It does NOT touch sockets or iouyap bridges — startBridges (Linux) does that,
-// consuming the plan this produces. Called under no lock; caller serialises.
+// intents. Assignments are STICKY (ll.assigns): links still in the doc keep
+// their exact ports/pseudos, so a rebuild never disturbs running endpoints;
+// only links that LEFT the doc (or turned native) release theirs — and their
+// now-orphaned iouyap bridges are closed so no stale pump keeps their old
+// ports half-alive. It does NOT create sockets or iouyap bridges —
+// startBridges (Linux) does that, consuming the plan this produces. Called
+// under no lock; caller serialises.
 func (s *Server) rebuildBridgePlan(ll *loadedLab) error {
-	if ll.bridge != nil {
-		for _, port := range ll.bridge.udpPorts() {
-			s.udpPorts.Release(port)
+	// Release assignments of links no longer bridged in the current doc.
+	isIOL := isIOLMap(ll.doc)
+	captureReady := ll.doc.CaptureReadyEnabled()
+	bridged := make(map[int]bool)
+	for i := range ll.doc.Links {
+		l := &ll.doc.Links[i]
+		if wiringFor(l, isIOL, captureReady) == wiringBridged {
+			bridged[l.ID] = true
 		}
-		ll.bridge = nil
 	}
+	for id, la := range ll.assigns {
+		if bridged[id] {
+			continue
+		}
+		la.release(s.udpPorts)
+		delete(ll.assigns, id)
+		// Close the departed link's iouyap bridges (keyed by pseudo netio path).
+		for _, ep := range la.eps {
+			if ep.pseudo == 0 {
+				continue
+			}
+			path := netioPathFor(currentUID(), ep.pseudo)
+			ll.mu.Lock()
+			b := ll.bridges[path]
+			delete(ll.bridges, path)
+			ll.mu.Unlock()
+			_ = b.close()
+		}
+	}
+
 	ll.mu.Lock()
 	captures := make(map[int]int, len(ll.captures))
 	for k, v := range ll.captures {
 		captures[k] = v
 	}
 	ll.mu.Unlock()
-	plan, err := buildBridgePlan(ll.doc, currentUID(), s.udpPorts, captures, s.cfg.CaptureBind)
+	plan, err := buildBridgePlan(ll.doc, currentUID(), s.udpPorts, captures, s.cfg.CaptureBind, ll.assigns)
 	if err != nil {
 		return err
 	}

@@ -703,6 +703,15 @@ class LabStore {
     }
   }
 
+  /** Close the whole console dock: every node console tab and every capture
+   *  tab (captures stop via the same per-tab close semantics). The dock hides
+   *  itself once no tabs remain (App.svelte's showConsole derivation). */
+  closeAllConsoles() {
+    this.openConsoleTabs = [];
+    this.activeConsoleTab = null;
+    for (const linkId of [...this.openCaptureTabs]) this.closeCapture(linkId);
+  }
+
   /** Add a node locally AND register it with the supervisor's loaded lab
    *  (node.add) so it can start without a page refresh — the supervisor only
    *  learns topology at lab.load otherwise, and a freshly dropped node was

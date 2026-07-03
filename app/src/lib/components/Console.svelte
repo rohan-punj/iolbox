@@ -229,6 +229,12 @@
         >
           {@html consoleUiStore.dockSide === "bottom" ? DOCK_RIGHT : DOCK_BOTTOM}
         </button>
+        <button
+          class="dock-icon"
+          title="Close console — closes every console and capture tab"
+          aria-label="Close console window"
+          onclick={() => labStore.closeAllConsoles()}
+        >✕</button>
       </div>
     {/if}
   </div>
