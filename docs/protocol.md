@@ -148,22 +148,44 @@ Full snapshot.
 - `node.console` `{node,consolePort}` — console became reachable
 - `link.up` / `link.down` `{link}`
 - `capture.started` / `capture.stopped` `{link,capturePort}`
-- `link.stats` `{link,fps,bps,protos?}` — per-link forwarded throughput over the
-  last 2s sampling interval: `fps` is frames/sec forwarded (float, one decimal),
-  `bps` is bytes/sec forwarded, both summed across directions (and hub fan-out).
-  `protos` is an optional `{label: fps}` map giving the per-protocol frames/sec
-  breakdown over the same interval — only non-zero entries, capped to the **top 6**
-  by fps, each rounded to one decimal like `fps`; the field is omitted entirely
-  when there is nothing to report. Labels come from a cheap byte-peek classifier
-  on the relay forward path: `ARP`, `IPv4`, `IPv6`, `TCP`, `UDP`, `ICMP`,
-  `ICMPv6`, `IGMP`, `GRE`, `OSPF`, `EIGRP`, `PIM`, `VRRP`, `MPLS`, `LLDP`, `LOOP`,
-  `STP`, `CDP`, `DTP`, `VTP`, `LLC`, `OTHER`, or `0xNNNN` for an unrecognised
-  ethertype. Emitted at most every 2s and ONLY for a link that forwarded traffic
-  during the interval (idle links stay silent), so the GUI can drive traffic-based
-  link glow directly off these events. Only **bridged** links (VPCS, segment,
-  captured, cross-host) have a relay and therefore stats; native same-host
-  IOL↔IOL links carry traffic via the whole-lab NETMAP with no relay and produce
-  no `link.stats` events.
+- `link.stats` `{link,fps,bps,protos?,protosDir?}` — per-link forwarded throughput
+  over the last 2s sampling interval: `fps` is frames/sec forwarded (float, one
+  decimal), `bps` is bytes/sec forwarded, both summed across directions (and hub
+  fan-out).
+  `protos` is an optional `{label: fps}` map giving the aggregate per-protocol
+  frames/sec breakdown over the same interval — only non-zero entries, capped to
+  the **top 6** by fps, each rounded to one decimal like `fps`; the field is
+  omitted entirely when there is nothing to report. It sums to `fps` (the
+  overlapping `DOT1Q` label — see below — is deliberately **excluded** from
+  `protos` so the sum still holds).
+  `protosDir` is an optional `{label: [fps0, fps1]}` map giving the **per-direction**
+  per-protocol frames/sec breakdown over the same interval. `fps0` is the rate of
+  frames **sourced from link endpoint 0** and `fps1` from **endpoint 1**, where
+  endpoint order matches the lab link document's `endpoints` array order (the
+  bridge planner preserves it, so endpoint 0 in the doc is direction index 0
+  here). A label appears when **either** direction is non-zero; values are
+  one-decimal rounded; the map is capped to ≤ 12 labels (a safety bound — the
+  directional label space is small) and omitted when empty. Only the two primary
+  endpoints are tracked directionally; on a hub, frames sourced from member
+  indexes > 1 still count toward `protos` but are absent from `protosDir`. Unlike
+  `protos`, `protosDir` includes the overlapping `DOT1Q` label (see below) and so
+  does **not** sum to `fps`.
+  Labels come from a cheap byte-peek classifier on the relay forward path: `ARP`,
+  `IPv4`, `IPv6`, `TCP`, `UDP`, `ICMP`, `PING`, `ICMPv6`, `IGMP`, `GRE`, `ESP`,
+  `AH`, `OSPF`, `EIGRP`, `PIM`, `VRRP`, `RIP`, `BGP`, `VXLAN`, `RADIUS`, `TACACS`,
+  `MPLS`, `LLDP`, `LOOP`, `STP`, `ISIS`, `CDP`, `DTP`, `VTP`, `LLC`, `OTHER`, or
+  `0xNNNN` for an unrecognised ethertype. `PING` is ICMPv4 echo request/reply
+  (other ICMPv4 stays `ICMP`); `BGP`/`TACACS` are matched on TCP src-or-dst port
+  179/49 and `RIP`/`VXLAN`/`RADIUS` on UDP port 520/4789/1812–1813,1645–1646;
+  ports are read only on non-fragmented frames long enough to hold the L4 header.
+  `DOT1Q` is an **overlapping** label: an 802.1Q-tagged frame is classified to its
+  inner protocol (e.g. `TCP`) *and* additionally counted as `DOT1Q` — but only in
+  `protosDir`, never in `protos`. Emitted at most every 2s and ONLY for a link
+  that forwarded traffic during the interval (idle links stay silent), so the GUI
+  can drive traffic-based link glow directly off these events. Only **bridged**
+  links (VPCS, segment, captured, cross-host) have a relay and therefore stats;
+  native same-host IOL↔IOL links carry traffic via the whole-lab NETMAP with no
+  relay and produce no `link.stats` events.
 - `log` `{level,message,node?}`
 
 ## WebSocket bridge endpoints (browser transport)

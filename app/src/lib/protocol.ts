@@ -66,10 +66,19 @@ export interface LogEvent {
  *  links only — native IOL↔IOL links never emit this (see docs/protocol.md).
  *  `protos` (Network Watcher) is a frames-per-second breakdown by protocol
  *  label (e.g. "STP", "CDP", "ICMP", "OSPF", "TCP"); non-zero entries only,
- *  capped at 6 by the sender — optional so older supervisors keep working. */
+ *  capped at 6 by the sender — optional so older supervisors keep working.
+ *  `protosDir` is the directional variant: per label, [fps of frames sourced
+ *  from the link's doc endpoints[0], fps sourced from endpoints[1]] — nonzero
+ *  labels only. Drives the watcher's directional dash overlays. */
 export interface LinkStatsEvent {
   event: "link.stats";
-  data: { link: number; fps: number; bps: number; protos?: Record<string, number> };
+  data: {
+    link: number;
+    fps: number;
+    bps: number;
+    protos?: Record<string, number>;
+    protosDir?: Record<string, [number, number]>;
+  };
 }
 /** Runtime VM resource utilisation, pushed every ~2s for the host monitor. */
 export interface HostStatsEvent {

@@ -54,12 +54,15 @@ type Relay interface {
 	// server polls these on a ticker to derive per-link throughput without the
 	// relay package importing server. Monotonic; safe for concurrent reads.
 	Stats() (frames, bytes uint64)
-	// ProtoStats returns cumulative per-protocol forwarded-frame counters keyed
-	// by protocol label (see Classify), a fresh copy safe to keep and diff. The
-	// server diffs two snapshots per interval to derive per-proto fps for the
-	// link.stats breakdown. Counts sum to the frames returned by Stats. May be
-	// nil/empty when no traffic has been forwarded yet.
-	ProtoStats() map[string]uint64
+	// ProtoStats returns cumulative per-protocol forwarded-frame counters as
+	// fresh copies safe to keep and diff. total is the aggregate keyed by
+	// protocol label (see Classify), excluding the overlapping "DOT1Q" so it
+	// sums to the frames returned by Stats. dir[i] is the subset sourced from
+	// link endpoint i (i in {0,1}, matching the lab link's doc endpoints order)
+	// and includes "DOT1Q" for 802.1Q-tagged frames. The server diffs two
+	// snapshots per interval to derive per-proto and per-direction fps for the
+	// link.stats breakdown. Maps may be empty when no traffic has forwarded yet.
+	ProtoStats() (total map[string]uint64, dir [2]map[string]uint64)
 	Close() error
 }
 
@@ -107,10 +110,15 @@ type LinkStats struct {
 	LinkID int
 	Frames uint64
 	Bytes  uint64
-	// Protos is the cumulative per-protocol forwarded-frame count keyed by
-	// protocol label (see Classify). nil/empty when no traffic yet. The server
-	// diffs consecutive snapshots to derive per-proto fps.
+	// Protos is the cumulative aggregate per-protocol forwarded-frame count
+	// keyed by protocol label (see Classify), excluding "DOT1Q". nil/empty when
+	// no traffic yet. The server diffs consecutive snapshots to derive per-proto
+	// fps.
 	Protos map[string]uint64
+	// ProtosDir[i] is the cumulative per-protocol count sourced from endpoint i
+	// (i in {0,1}), including "DOT1Q" for tagged frames. Diffed per interval to
+	// derive per-direction fps.
+	ProtosDir [2]map[string]uint64
 }
 
 // Stats snapshots the cumulative forwarded counters of every active relay,
@@ -127,7 +135,8 @@ func (m *Manager) Stats() map[int]LinkStats {
 	out := make(map[int]LinkStats, len(relays))
 	for _, r := range relays {
 		frames, bytes := r.Stats()
-		out[r.LinkID()] = LinkStats{LinkID: r.LinkID(), Frames: frames, Bytes: bytes, Protos: r.ProtoStats()}
+		protos, protosDir := r.ProtoStats()
+		out[r.LinkID()] = LinkStats{LinkID: r.LinkID(), Frames: frames, Bytes: bytes, Protos: protos, ProtosDir: protosDir}
 	}
 	return out
 }

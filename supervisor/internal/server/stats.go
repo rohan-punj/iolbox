@@ -15,6 +15,13 @@ import (
 // event ballooning when a link briefly touches many protocols.
 const maxProtos = 6
 
+// maxProtosDir caps how many per-direction entries a link.stats event carries.
+// The directional label space is small (transport/routing labels plus the
+// overlapping DOT1Q), so this is a generous safety cap rather than a top-N cut
+// the GUI depends on; unlike maxProtos the directional map is not required to
+// sum to FPS (DOT1Q overlaps), so no meaning is lost by keeping all labels.
+const maxProtosDir = 12
+
 // statsInterval is how often the server samples per-link relay counters and
 // emits link.stats events. 2s balances responsive traffic-driven link glow in
 // the GUI against event volume.
@@ -45,6 +52,7 @@ func (s *Server) statsLoop(ctx context.Context) {
 	type sample struct {
 		frames, bytes uint64
 		protos        map[string]uint64
+		protosDir     [2]map[string]uint64
 	}
 	last := make(map[int]sample)
 
@@ -81,15 +89,17 @@ func (s *Server) statsLoop(ctx context.Context) {
 			}
 			for id, st := range cur {
 				prev := last[id]
-				last[id] = sample{frames: st.Frames, bytes: st.Bytes, protos: st.Protos}
+				last[id] = sample{frames: st.Frames, bytes: st.Bytes, protos: st.Protos, protosDir: st.ProtosDir}
 				fps, bps, emit := linkRate(prev.frames, prev.bytes, st.Frames, st.Bytes, statsInterval)
 				if !emit {
 					continue
 				}
-				// Derive the per-proto breakdown over the same interval and
-				// baseline (a link-wide counter reset re-baselines protos too).
+				// Derive the per-proto and per-direction breakdowns over the same
+				// interval and baseline (a link-wide counter reset re-baselines
+				// both maps too).
 				protos := protoRates(prev.protos, st.Protos, statsInterval)
-				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos})
+				protosDir := protoDirRates(prev.protosDir, st.ProtosDir, statsInterval)
+				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos, ProtosDir: protosDir})
 			}
 		}
 	}
@@ -162,6 +172,73 @@ func protoRates(prev, cur map[string]uint64, interval time.Duration) map[string]
 	out := make(map[string]float64, len(entries))
 	for _, e := range entries {
 		out[e.label] = e.fps
+	}
+	return out
+}
+
+// protoDirRates diffs two cumulative per-direction per-protocol snapshots into
+// per-second rates over the interval, returning a map keyed by protocol label
+// whose value is [fps sourced from endpoint 0, fps from endpoint 1]. Endpoint
+// order matches the lab link's doc endpoints order. A label is emitted when
+// EITHER direction has a nonzero rate this tick; a direction whose counter went
+// backwards (relay restart) or didn't advance contributes 0 for that side.
+// Rates are rounded to one decimal like linkRate. The result is capped to
+// maxProtosDir labels by peak per-direction fps (ties broken by label) purely as
+// a safety bound. Returns nil when there's nothing to report so the field is
+// omitted from the event. Note DOT1Q overlaps the primary labels here, so this
+// map does not sum to FPS.
+func protoDirRates(prev, cur [2]map[string]uint64, interval time.Duration) map[string][2]float64 {
+	if len(cur[0]) == 0 && len(cur[1]) == 0 {
+		return nil
+	}
+	secs := interval.Seconds()
+	// rate diffs one direction's cumulative counter for a label into fps, or 0
+	// when idle or reset (re-baselined by the caller storing cur).
+	rate := func(p, c uint64) float64 {
+		if c < p || c == p {
+			return 0
+		}
+		return math.Round(float64(c-p)/secs*10) / 10
+	}
+	// Union of labels seen in either direction this tick.
+	seen := make(map[string]struct{}, len(cur[0])+len(cur[1]))
+	for label := range cur[0] {
+		seen[label] = struct{}{}
+	}
+	for label := range cur[1] {
+		seen[label] = struct{}{}
+	}
+	type entry struct {
+		label string
+		v     [2]float64
+	}
+	entries := make([]entry, 0, len(seen))
+	for label := range seen {
+		v0 := rate(prev[0][label], cur[0][label])
+		v1 := rate(prev[1][label], cur[1][label])
+		if v0 == 0 && v1 == 0 {
+			continue
+		}
+		entries = append(entries, entry{label, [2]float64{v0, v1}})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	// Sort by peak direction fps desc, then label asc, so the safety cap and
+	// map contents are deterministic across ticks with identical traffic.
+	sort.Slice(entries, func(i, j int) bool {
+		pi, pj := math.Max(entries[i].v[0], entries[i].v[1]), math.Max(entries[j].v[0], entries[j].v[1])
+		if pi != pj {
+			return pi > pj
+		}
+		return entries[i].label < entries[j].label
+	})
+	if len(entries) > maxProtosDir {
+		entries = entries[:maxProtosDir]
+	}
+	out := make(map[string][2]float64, len(entries))
+	for _, e := range entries {
+		out[e.label] = e.v
 	}
 	return out
 }

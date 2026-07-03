@@ -3,6 +3,7 @@
   import { consoleUiStore } from "../consoleUiStore.svelte";
   import { iconSvg } from "../icons.svelte";
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
+  import { watcherStore } from "../watcherStore.svelte";
 
   function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat" | "mgmt", imageId?: string) {
     if (!e.dataTransfer) return;
@@ -144,17 +145,11 @@
   </div>
 
   <div class="section-title">View</div>
-  <label
-    class="lab-opt"
-    title="Network Watcher — show a small per-link chip with live packets/sec and top protocols (PNetLab-style), read off link.stats"
-  >
-    <input
-      type="checkbox"
-      checked={consoleUiStore.watcher}
-      onchange={(e) => consoleUiStore.setWatcher((e.currentTarget as HTMLInputElement).checked)}
-    />
-    <span>Network watcher</span>
-  </label>
+  <button
+    class="btn lab-btn"
+    title="Network Watcher — pick protocols to highlight as animated directional overlays on the links (PNetLab-style), read off link.stats"
+    onclick={() => watcherStore.togglePanel()}
+  >Network watcher…</button>
 
   <div class="section-title">Nodes</div>
 

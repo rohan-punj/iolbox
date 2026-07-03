@@ -25,14 +25,25 @@ type udpRelay struct {
 	fwdFrames atomic.Uint64
 	fwdBytes  atomic.Uint64
 
-	// protoMu guards protoFrames, the cumulative per-protocol forwarded-frame
-	// counters that drive the per-proto fps breakdown in link.stats. It's a
-	// plain map under a mutex rather than atomics because the key set is
-	// discovered at runtime (one label per protocol seen). Kept in lockstep
+	// protoMu guards protoFrames and protoDir, the cumulative per-protocol
+	// forwarded-frame counters that drive the per-proto fps breakdown in
+	// link.stats. They're plain maps under a mutex rather than atomics because
+	// the key set is discovered at runtime (one label per protocol seen).
+	//
+	// protoFrames is the aggregate (all directions/members), kept in lockstep
 	// with fwdFrames: a datagram forwarded to N members counts N here too, so
-	// the per-proto counts sum to the total frame count.
+	// the per-proto counts sum to the total frame count. It excludes the
+	// overlapping "DOT1Q" label so it still sums to fwdFrames.
+	//
+	// protoDir[i] counts frames SOURCED from endpoint i (i in {0,1}) — the
+	// direction of travel across the link — so the server can render per-
+	// direction protocol rates. Endpoint order is the lab link's doc endpoints
+	// order (bridgeplan preserves it). Hub members with index >1 contribute to
+	// protoFrames but are omitted from protoDir. "DOT1Q" IS counted here (it
+	// overlaps the primary label rather than replacing it).
 	protoMu     sync.Mutex
 	protoFrames map[string]uint64
+	protoDir    [2]map[string]uint64
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -42,6 +53,8 @@ type udpRelay struct {
 // newRelay is the platform hook called by Manager.Start on Linux.
 func newRelay(cfg Config) (Relay, error) {
 	r := &udpRelay{cfg: cfg, done: make(chan struct{}), protoFrames: make(map[string]uint64)}
+	r.protoDir[0] = make(map[string]uint64)
+	r.protoDir[1] = make(map[string]uint64)
 
 	for _, ep := range cfg.Endpoints {
 		host := ep.Host
@@ -106,8 +119,9 @@ func (r *udpRelay) pump(src int) {
 		// the per-proto breakdown can be attributed on the forward path. Doing
 		// it here (not per destination) keeps the work off the fan-out inner
 		// loop; the count is then added once per successful forward so per-proto
-		// totals track fwdFrames exactly.
-		proto := Classify(datagram)
+		// totals track fwdFrames exactly. tagged marks an 802.1Q frame, counted
+		// under the overlapping "DOT1Q" label in the directional map only.
+		proto, tagged := Classify(datagram)
 		fwd := 0
 
 		// Forward per relay kind. Count each datagram actually forwarded (once
@@ -140,10 +154,21 @@ func (r *udpRelay) pump(src int) {
 
 		// Attribute the datagram to its protocol label once per forward that
 		// actually happened (fwd==0 when nothing was sent, e.g. a lone P2P
-		// endpoint), so the per-proto counts sum to fwdFrames.
+		// endpoint), so the aggregate per-proto counts sum to fwdFrames. The
+		// directional map is keyed by the SOURCE endpoint (the pump owns one
+		// src), so it's incremented once per received datagram that forwarded
+		// at all — a hub flood is one frame in one direction regardless of the
+		// number of members it reached. Only endpoints 0 and 1 are tracked
+		// directionally; higher hub members fold into the aggregate only.
 		if fwd > 0 {
 			r.protoMu.Lock()
 			r.protoFrames[proto] += uint64(fwd)
+			if src == 0 || src == 1 {
+				r.protoDir[src][proto]++
+				if tagged {
+					r.protoDir[src]["DOT1Q"]++
+				}
+			}
 			r.protoMu.Unlock()
 		}
 	}
@@ -162,18 +187,27 @@ func (r *udpRelay) Stats() (frames, bytes uint64) {
 	return r.fwdFrames.Load(), r.fwdBytes.Load()
 }
 
-// ProtoStats returns a fresh copy of the cumulative per-protocol forwarded-frame
-// counters, keyed by the label Classify assigns. The copy lets the server diff
-// two snapshots without holding the relay's lock; nil is fine to return (and is
-// returned implicitly as an empty map here) when no traffic has been seen.
-func (r *udpRelay) ProtoStats() map[string]uint64 {
+// ProtoStats returns fresh copies of the cumulative per-protocol forwarded-frame
+// counters: total is the aggregate (all members/directions, keyed by the label
+// Classify assigns, excluding the overlapping "DOT1Q"); dir[i] is the subset
+// sourced from endpoint i (i in {0,1}), and includes "DOT1Q" for tagged frames.
+// The copies let the server diff two snapshots without holding the relay's lock;
+// empty maps are fine when no traffic has been seen.
+func (r *udpRelay) ProtoStats() (total map[string]uint64, dir [2]map[string]uint64) {
 	r.protoMu.Lock()
 	defer r.protoMu.Unlock()
-	out := make(map[string]uint64, len(r.protoFrames))
+	total = make(map[string]uint64, len(r.protoFrames))
 	for k, v := range r.protoFrames {
-		out[k] = v
+		total[k] = v
 	}
-	return out
+	for i := range r.protoDir {
+		d := make(map[string]uint64, len(r.protoDir[i]))
+		for k, v := range r.protoDir[i] {
+			d[k] = v
+		}
+		dir[i] = d
+	}
+	return total, dir
 }
 
 func (r *udpRelay) Close() error {

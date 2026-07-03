@@ -485,6 +485,7 @@
 
   // --- context menus / popovers ---
   let nodeMenu = $state<{ x: number; y: number; nodeId: number } | null>(null);
+  let selectionMenu = $state<{ x: number; y: number; ids: number[] } | null>(null);
   let linkMenu = $state<{ x: number; y: number; linkId: number } | null>(null);
   let annoMenu = $state<{ x: number; y: number; annoId: string } | null>(null);
   let annoStyle = $state<{ x: number; y: number; annoId: string; focusText: boolean } | null>(null);
@@ -497,6 +498,14 @@
     editDialog = { nodeId: nid };
   }
 
+  // Device-node ids currently selected in the flow (multi-select via shift/box),
+  // mapped back to numeric lab node ids. Annotations never join the bulk menu.
+  function selectedDeviceIds(): number[] {
+    return nodes
+      .filter((n) => n.selected && !isAnnoId(n.id))
+      .map((n) => Number(n.id));
+  }
+
   function onNodeContextMenu({ node, event }: { node: Node; event: MouseEvent }) {
     event.preventDefault();
     if (isAnnoId(node.id)) {
@@ -507,8 +516,24 @@
       annoMenu = { x: event.clientX, y: event.clientY, annoId: aid };
       return;
     }
+    // Right-clicking a node that is part of a multi-node selection acts on the
+    // whole selection (bulk menu), matching how the selection rectangle behaves.
+    const selected = selectedDeviceIds();
+    if (selected.length > 1 && selected.includes(Number(node.id))) {
+      selectionMenu = { x: event.clientX, y: event.clientY, ids: selected };
+      return;
+    }
     labStore.selectedNodeId = Number(node.id);
     nodeMenu = { x: event.clientX, y: event.clientY, nodeId: Number(node.id) };
+  }
+
+  // Right-click on the selection rectangle (xyflow draws one around a
+  // multi-select) — same bulk menu as right-clicking a selected node.
+  function onSelectionContextMenu({ event }: { nodes: Node[]; event: MouseEvent }) {
+    event.preventDefault();
+    const selected = selectedDeviceIds();
+    if (selected.length === 0) return;
+    selectionMenu = { x: event.clientX, y: event.clientY, ids: selected };
   }
 
   function onEdgeContextMenu({ edge, event }: { edge: Edge; event: MouseEvent }) {
@@ -665,6 +690,13 @@
         disabled: nodeState !== "running",
         action: () => labStore.openConsoleByMode(nid),
       },
+      {
+        label: "Duplicate",
+        action: () => {
+          const newId = labStore.duplicateNode(nid);
+          if (newId !== null) labStore.selectedNodeId = newId;
+        },
+      },
       { separator: true, label: "sep1", action: () => {} },
       {
         label: "Edit…",
@@ -684,16 +716,76 @@
       },
       { separator: true, label: "sep2", action: () => {} },
       {
-        label: "Duplicate",
-        action: () => {
-          const newId = labStore.duplicateNode(nid);
-          if (newId !== null) labStore.selectedNodeId = newId;
-        },
-      },
-      {
         label: "Delete",
         danger: true,
         action: () => labStore.removeNode(nid),
+      },
+    ];
+  }
+
+  // Bulk menu for a multi-node selection. Each action fans out over the
+  // selected ids, respecting per-node state (only start what's stopped, only
+  // stop what's running, …) so a mixed selection never errors.
+  function buildSelectionMenuItems(menu: { ids: number[] }): MenuItem[] {
+    const ids = menu.ids;
+    const stateOf = (id: number) => labStore.nodeStates[id] ?? "stopped";
+    const startable = ids.filter((id) => stateOf(id) !== "running" && stateOf(id) !== "starting");
+    const stoppable = ids.filter((id) => stateOf(id) === "running" || stateOf(id) === "starting");
+    const running = ids.filter((id) => stateOf(id) === "running");
+    return [
+      // Header row — plain disabled item showing what the menu acts on.
+      { label: `${ids.length} nodes`, disabled: true, action: () => {} },
+      {
+        label: "Start",
+        disabled: startable.length === 0,
+        action: () => {
+          for (const id of startable) void labStore.startNode(id);
+        },
+      },
+      {
+        label: "Stop",
+        disabled: stoppable.length === 0,
+        action: () => {
+          for (const id of stoppable) void labStore.stopNode(id);
+        },
+      },
+      {
+        label: "Console",
+        disabled: running.length === 0,
+        action: () => {
+          // Same stagger as openAllConsoles: browsers throttle a burst of
+          // programmatic external-protocol (telnet://) launches from a single
+          // click handler, so the opens are spaced ~300ms apart.
+          running.forEach((id, i) => {
+            if (i === 0) labStore.openConsoleByMode(id);
+            else setTimeout(() => labStore.openConsoleByMode(id), i * 300);
+          });
+        },
+      },
+      { separator: true, label: "sep1", action: () => {} },
+      {
+        label: "Duplicate",
+        action: () => {
+          for (const id of ids) labStore.duplicateNode(id);
+        },
+      },
+      {
+        label: "Wipe",
+        // Wipe requires stopped nodes (mirrors the single-node quick-action gate).
+        disabled: stoppable.length > 0,
+        action: () => {
+          if (!confirm(`Wipe saved config/state for ${ids.length} nodes? This cannot be undone.`)) return;
+          for (const id of ids) void labStore.wipeNode(id);
+        },
+      },
+      { separator: true, label: "sep2", action: () => {} },
+      {
+        label: "Delete",
+        danger: true,
+        action: () => {
+          if (!confirm(`Delete ${ids.length} nodes and their links?`)) return;
+          for (const id of ids) labStore.removeNode(id);
+        },
       },
     ];
   }
@@ -779,6 +871,7 @@
     onnodedragstop={onNodeDragStop}
     onconnect={onConnect}
     onnodecontextmenu={onNodeContextMenu}
+    onselectioncontextmenu={onSelectionContextMenu}
     onedgecontextmenu={onEdgeContextMenu}
     onnodeclick={onNodeClick}
     onedgeclick={onEdgeClick}
@@ -838,6 +931,14 @@
       y={nodeMenu.y}
       items={buildNodeMenuItems(nodeMenu)}
       onClose={() => (nodeMenu = null)}
+    />
+  {/if}
+  {#if selectionMenu}
+    <ContextMenu
+      x={selectionMenu.x}
+      y={selectionMenu.y}
+      items={buildSelectionMenuItems(selectionMenu)}
+      onClose={() => (selectionMenu = null)}
     />
   {/if}
   {#if linkMenu}

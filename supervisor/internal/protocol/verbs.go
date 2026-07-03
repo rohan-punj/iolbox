@@ -275,8 +275,17 @@ type LinkStatsData struct {
 	// Protos is the per-protocol frames/sec breakdown over the same interval,
 	// keyed by protocol label (ARP, TCP, OSPF, STP, CDP, ...). Only non-zero
 	// entries, capped to the top 6 by fps; omitted entirely (nil) when there is
-	// nothing to report. Each value is rounded to one decimal like FPS.
+	// nothing to report. Each value is rounded to one decimal like FPS. The
+	// overlapping "DOT1Q" label is excluded here so Protos still sums to FPS.
 	Protos map[string]float64 `json:"protos,omitempty"`
+	// ProtosDir is the per-direction per-protocol frames/sec breakdown over the
+	// same interval, keyed by protocol label. Each value is [fps sourced from
+	// endpoint 0, fps sourced from endpoint 1], where endpoint order matches the
+	// lab link's doc endpoints order. Only labels with a nonzero rate in either
+	// direction; one-decimal rounding. "DOT1Q" appears here (counting 802.1Q-
+	// tagged frames) and overlaps the primary labels, so this map does NOT sum
+	// to FPS. Omitted (nil) when there's nothing to report.
+	ProtosDir map[string][2]float64 `json:"protosDir,omitempty"`
 }
 
 // HostStatsData is the host.stats event payload: the runtime VM's resource

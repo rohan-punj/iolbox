@@ -412,22 +412,37 @@ export class MockTransport implements Transport {
       );
       return kinds.some((k) => k === "vpcs" || k === "nat" || k === "mgmt");
     };
-    // Network Watcher demo (feature 3) — fixed small control-plane background
-    // (STP/CDP/ICMP) so the watcher chip has something stable to show,
-    // regardless of the random-walk headline fps below.
-    const DEMO_PROTOS: Record<string, number> = { STP: 0.5, CDP: 0.1, ICMP: 1.0 };
+    // Network Watcher demo — fixed control-plane mixes so the overlays are
+    // demo-able with predictable direction: link 0 shows one-way STP (from
+    // endpoints[0], i.e. R1) plus two-way CDP, link 1 two-way pings. Other
+    // bridged links get the two-way default. Aggregate `protos` mirrors the
+    // per-direction sums so both consumers stay consistent.
+    const DEMO_DIR: Record<number, Record<string, [number, number]>> = {
+      0: { STP: [0.5, 0], CDP: [0.1, 0.1] },
+      1: { PING: [1, 1] },
+    };
+    const DEMO_DIR_DEFAULT: Record<string, [number, number]> = { CDP: [0.1, 0.1], ICMP: [1, 1] };
     this.statsTimer = setInterval(() => {
       for (const l of this.lab?.links ?? []) {
-        if (!isBridged(l)) continue;
+        // Links with a scripted demo mix emit even when "native" (the seeded
+        // demo lab's link 0 is IOL↔IOL) — otherwise the watcher's one-way
+        // animation couldn't be exercised in dev at all. Other native links
+        // keep production semantics (silent).
+        if (!isBridged(l) && !(l.id in DEMO_DIR)) continue;
         // Random-walk-ish traffic so the glow visibly modulates.
         const fps = Math.round((5 + Math.random() * 400) * 10) / 10;
+        const protosDir = DEMO_DIR[l.id] ?? DEMO_DIR_DEFAULT;
+        const protos = Object.fromEntries(
+          Object.entries(protosDir).map(([k, [a, b]]) => [k, a + b])
+        );
         this.emit({
           event: "link.stats",
           data: {
             link: l.id,
             fps,
             bps: Math.round(fps * (64 + Math.random() * 1400)),
-            protos: DEMO_PROTOS,
+            protos,
+            protosDir,
           },
         } as SupervisorEvent);
       }

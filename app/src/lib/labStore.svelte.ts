@@ -56,8 +56,16 @@ class LabStore {
   features = $state<string[]>([]);
   /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
    *  these to drive the traffic glow; entries older than ~5s are treated stale.
-   *  `protos` (Network Watcher) is the optional per-protocol fps breakdown. */
-  linkStats = $state<Record<number, { fps: number; bps: number; ts: number; protos?: Record<string, number> }>>({});
+   *  `protos` (Network Watcher) is the optional per-protocol fps breakdown;
+   *  `protosDir` the directional one ([from endpoints[0], from endpoints[1]]
+   *  fps per label) that drives the watcher's animated dash overlays. */
+  linkStats = $state<Record<number, {
+    fps: number;
+    bps: number;
+    ts: number;
+    protos?: Record<string, number>;
+    protosDir?: Record<string, [number, number]>;
+  }>>({});
   /** Latest runtime-VM resource sample (host.stats), or null until the first
    *  event. Drives the left-pane host monitor. */
   hostStats = $state<{
@@ -263,6 +271,7 @@ class LabStore {
             bps: evt.data.bps,
             ts: Date.now(),
             protos: evt.data.protos,
+            protosDir: evt.data.protosDir,
           },
         };
         break;

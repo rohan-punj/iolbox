@@ -17,7 +17,7 @@
   } from "@xyflow/svelte";
   import { getEdgeParams } from "./floating";
   import { labStore } from "../labStore.svelte";
-  import { consoleUiStore } from "../consoleUiStore.svelte";
+  import { watcherStore, LABELS } from "../watcherStore.svelte";
 
   let { id, source, target, selected, data }: EdgeProps = $props();
 
@@ -58,34 +58,17 @@
   });
   const glowing = $derived(traffic !== null);
 
-  // Network Watcher (feature 3) — PNetLab-style per-link protocol chip. Reuses
-  // the same traffic sample + staleness window as the glow (a link with no
-  // recent link.stats has nothing to show), gated by the persisted view pref.
-  const watcherOn = $derived(consoleUiStore.watcher);
-  const WATCHER_COLORS: Record<string, string> = {
-    STP: "#d9a441",
-    CDP: "#4fb8a8",
-    LLDP: "#4fb8a8",
-    DTP: "#4fb8a8",
-    VTP: "#4fb8a8",
-    ARP: "#d9a441",
-    ICMP: "#c678dd",
-    ICMPv6: "#c678dd",
-    OSPF: "#56b6c2",
-    EIGRP: "#56b6c2",
-    TCP: "#61afef",
-    UDP: "#98c379",
-  };
-  function protoColor(name: string): string {
-    return WATCHER_COLORS[name] ?? "#9aa0aa";
-  }
-  // Top 3 protocols by fps, for the chip's dot+label list.
-  const topProtos = $derived.by(() => {
-    if (!traffic?.protos) return [];
-    return Object.entries(traffic.protos)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([name]) => name);
+  // Network Watcher — directional animated protocol overlays (PNetLab-style).
+  // Gated on the watcher actually running AND a FRESH traffic sample (same
+  // staleness window as the glow): a link that went quiet stops animating
+  // within ~5s without any explicit clear. Direction mapping: CanvasInner
+  // builds edges as source = link.endpoints[0].node / target =
+  // endpoints[1].node, and the path below runs source→target — so protosDir's
+  // [0] slot (frames sourced from endpoints[0]) animates ALONG the path and
+  // the [1] slot animates in reverse.
+  const watcherMatches = $derived.by(() => {
+    if (!watcherStore.running || !traffic) return [];
+    return watcherStore.matchFor(traffic);
   });
   // Intensity 0..1 scaled by log(fps), clamped. ~1 fps → dim, ~1000 fps → full.
   const glowIntensity = $derived.by(() => {
@@ -239,6 +222,30 @@
     role="presentation"
   />
 
+  <!-- Network Watcher overlays: one dashed animated path per matching row and
+       direction, riding this edge's own curve (so parallel-link fanout is
+       inherited for free). Forward = frames sourced from endpoints[0] (edge
+       source) marching source→target; reverse the opposite. When one row
+       matches BOTH directions the two paths get different dash patterns
+       (10 8 vs 4 14) so the counter-marching dashes stay readable instead of
+       strobing over each other. -->
+  {#each watcherMatches as m (m.row.id)}
+    {#if m.dir0}
+      <path
+        class="watcher-dash dash-fwd"
+        d={geom.path}
+        style={`stroke:${m.row.color};stroke-dasharray:10 8`}
+      />
+    {/if}
+    {#if m.dir1}
+      <path
+        class="watcher-dash dash-rev"
+        d={geom.path}
+        style={`stroke:${m.row.color};stroke-dasharray:${m.dir0 ? "4 14" : "10 8"}`}
+      />
+    {/if}
+  {/each}
+
   {#if info.source}
     <EdgeLabel x={geom.sChip.x} y={geom.sChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
       <span
@@ -269,18 +276,16 @@
     </EdgeLabel>
   {/if}
 
-  {#if watcherOn && traffic}
-    <EdgeLabel x={geom.watcherChip.x} y={geom.watcherChip.y} class="watcher-chip-slot">
-      <span class="watcher-chip">
-        <span class="watcher-fps">{Math.round(traffic.fps)} pps</span>
-        {#each topProtos as name (name)}
-          <span class="watcher-proto">
-            <span class="watcher-dot" style:background={protoColor(name)}></span>{name}
-          </span>
-        {/each}
+  <!-- Watcher label pills: one per matching row at the curve midpoint, stacked
+       with small vertical offsets so multiple rows on one link stay legible.
+       Border/text take the row colour so a pill visually pairs with its dashes. -->
+  {#each watcherMatches as m, i (m.row.id)}
+    <EdgeLabel x={geom.watcherChip.x} y={geom.watcherChip.y + i * 18} class="watcher-pill-slot">
+      <span class="watcher-pill" style={`border-color:${m.row.color};color:${m.row.color}`}>
+        {LABELS[m.row.proto].name}
       </span>
     </EdgeLabel>
-  {/if}
+  {/each}
 {/if}
 
 <style>
@@ -367,43 +372,61 @@
     padding: 0;
     overflow: visible;
   }
-  /* Network Watcher chip (feature 3) — small, non-interactive, sits at the
-     curve midpoint below the port chips visually (lower z, no hover pop). */
-  :global(.svelte-flow__edge-label.watcher-chip-slot) {
+  /* Network Watcher — dashed directional overlays. stroke + dasharray come
+     inline (per-row colour / per-direction pattern); the animation loops the
+     dashoffset over exactly two dash periods (both patterns sum to 18px, so a
+     36px offset per cycle keeps either pattern seamless). Forward = decreasing
+     offset = dashes march source→target (endpoints[0] → endpoints[1]). */
+  .watcher-dash {
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    opacity: 0.9;
+    pointer-events: none;
+  }
+  .dash-fwd {
+    animation: watcher-march-fwd 0.9s linear infinite;
+  }
+  .dash-rev {
+    animation: watcher-march-rev 0.9s linear infinite;
+  }
+  @keyframes watcher-march-fwd {
+    to {
+      stroke-dashoffset: -36;
+    }
+  }
+  @keyframes watcher-march-rev {
+    to {
+      stroke-dashoffset: 36;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dash-fwd,
+    .dash-rev {
+      animation: none;
+    }
+  }
+
+  /* Watcher label pill — midpoint marker naming the matched filter, tinted to
+     the row colour over a translucent theme-ground fill. Non-interactive. */
+  :global(.svelte-flow__edge-label.watcher-pill-slot) {
     background: transparent;
     padding: 0;
     overflow: visible;
     pointer-events: none;
   }
-  .watcher-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
+  .watcher-pill {
+    display: inline-block;
     font-family: var(--font-mono);
     font-size: 10px;
+    font-weight: 600;
     line-height: 1;
-    color: var(--ink-2);
-    background: var(--panel-2, var(--ground));
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    padding: 2px 5px;
+    border: 1px solid;
+    border-radius: 999px;
+    padding: 3px 7px;
     white-space: nowrap;
     pointer-events: none;
-  }
-  .watcher-fps {
-    color: var(--ink);
-    font-weight: 600;
-  }
-  .watcher-proto {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-  }
-  .watcher-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
+    background: color-mix(in oklab, var(--ground) 82%, transparent);
   }
   /* R2 — when this edge is hovered, raise BOTH its chips above every sibling
      edge's chips so an overlapping background link can't cover the hovered

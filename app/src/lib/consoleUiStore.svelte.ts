@@ -11,7 +11,6 @@ export type ConsoleMode = "web" | "native";
 const SIDE_KEY = "iolab.console.dockSide";
 const COLOR_KEY = "iolab.console.colorize";
 const MODE_KEY = "iolab.console.mode";
-const WATCHER_KEY = "iolab.watcher";
 
 function initialSide(): DockSide {
   try {
@@ -40,30 +39,16 @@ function initialMode(): ConsoleMode {
   }
 }
 
-function initialWatcher(): boolean {
-  try {
-    // Default OFF; only an explicit "1" enables it.
-    return localStorage.getItem(WATCHER_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 class ConsoleUiStore {
   dockSide = $state<DockSide>("bottom");
   colorize = $state(true);
   /** Global console-open mode (web tab vs native telnet client). Default web. */
   consoleMode = $state<ConsoleMode>("web");
-  /** Network Watcher overlay toggle (PNetLab-style per-link fps/protocol chip
-   *  on FloatingEdge). Persisted view pref, default off — it's an opt-in
-   *  diagnostic overlay, not part of the base canvas look. */
-  watcher = $state(false);
 
   constructor() {
     this.dockSide = initialSide();
     this.colorize = initialColorize();
     this.consoleMode = initialMode();
-    this.watcher = initialWatcher();
   }
 
   setConsoleMode(mode: ConsoleMode) {
@@ -103,19 +88,6 @@ class ConsoleUiStore {
 
   toggleColorize() {
     this.setColorize(!this.colorize);
-  }
-
-  setWatcher(on: boolean) {
-    this.watcher = on;
-    try {
-      localStorage.setItem(WATCHER_KEY, on ? "1" : "0");
-    } catch {
-      /* ignore persistence failure */
-    }
-  }
-
-  toggleWatcher() {
-    this.setWatcher(!this.watcher);
   }
 }
 

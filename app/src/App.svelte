@@ -11,6 +11,7 @@
   import ImageManager from "./lib/components/ImageManager.svelte";
   import LabBrowser from "./lib/components/LabBrowser.svelte";
   import SplitPane from "./lib/components/SplitPane.svelte";
+  import WatcherPanel from "./lib/components/WatcherPanel.svelte";
 
   let paletteWidth = $state(220);
   let inspectorWidth = $state(300);
@@ -55,6 +56,10 @@
     <div class="center-col">
       <div class="canvas-area">
         <Canvas />
+        <!-- Network Watcher — floating filter card over the canvas, top-right
+             (under the top bar). Rendered inside canvas-area so it never
+             overlaps the inspector/console panes. -->
+        <WatcherPanel />
       </div>
       {#if showConsole && !dockRight}
         <SplitPane
@@ -128,6 +133,8 @@
   .canvas-area {
     flex: 1;
     min-height: 0;
+    /* Anchor for the floating WatcherPanel (position:absolute). */
+    position: relative;
   }
   .inspector-pane {
     flex-shrink: 0;
