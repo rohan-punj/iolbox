@@ -703,10 +703,23 @@ class LabStore {
     }
   }
 
-  addNode(node: LabNode) {
+  /** Add a node locally AND register it with the supervisor's loaded lab
+   *  (node.add) so it can start without a page refresh — the supervisor only
+   *  learns topology at lab.load otherwise, and a freshly dropped node was
+   *  "unknown node" to node.start (NAT was the visible victim: it's the kind
+   *  you drop and start mid-session). The returned promise resolves once the
+   *  supervisor ack'd (with the console port recorded); callers that want to
+   *  auto-start the node await it first. */
+  async addNode(node: LabNode): Promise<void> {
     this.lab.nodes = [...this.lab.nodes, node];
     this.nodeStates = { ...this.nodeStates, [node.id]: "stopped" };
     this.scheduleAutosave();
+    await this.guarded(`add node ${node.name}`, async () => {
+      const res = await this.client.nodeAdd(this.lab.id, $state.snapshot(node) as LabNode);
+      if (res?.consolePort) {
+        this.consolePorts = { ...this.consolePorts, [node.id]: res.consolePort };
+      }
+    });
   }
 
   removeNode(nodeId: number) {
@@ -716,6 +729,9 @@ class LabStore {
     );
     if (this.selectedNodeId === nodeId) this.selectedNodeId = null;
     this.scheduleAutosave();
+    // Mirror into the loaded lab (stops the node + drops its links there too).
+    // Fire-and-forget: the local doc is authoritative for the GUI either way.
+    void this.client.nodeRemove(this.lab.id, nodeId).catch(() => {});
   }
 
   /** Clone a node: fresh id, same config, offset +40/+40, NO links. Names get a
@@ -732,7 +748,7 @@ class LabStore {
       x: src.x + 40,
       y: src.y + 40,
     };
-    this.addNode(clone);
+    void this.addNode(clone); // supervisor sync happens async; id is final now
     return id;
   }
 

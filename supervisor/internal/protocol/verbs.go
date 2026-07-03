@@ -134,6 +134,27 @@ type NodeArgs struct {
 	Node  int    `json:"node"`
 }
 
+// --- node.add / node.remove ---
+//
+// Incremental topology sync for nodes, the counterpart of link.add/link.remove:
+// the GUI edits its local doc live and mirrors each change here so the loaded
+// lab always knows every node — without these, a node dropped onto an
+// already-loaded lab was UNKNOWN to the supervisor until the next lab.load
+// (page refresh) and could never start.
+
+// NodeAddArgs carries the full doc node to register with the loaded lab.
+type NodeAddArgs struct {
+	LabID string   `json:"labId"`
+	Node  lab.Node `json:"node"`
+}
+
+// NodeAddResult echoes the node id with its allocated console port (same shape
+// as one lab.load NodeConsole entry).
+type NodeAddResult struct {
+	Node        int `json:"node"`
+	ConsolePort int `json:"consolePort"`
+}
+
 // --- lab.wipe ---
 
 // LabWipeArgs targets all nodes (Nodes nil) or a subset of a lab for a wipe:

@@ -570,6 +570,103 @@ func (s *Server) stopNode(ll *loadedLab, id int) {
 	}
 }
 
+// handleNodeAdd registers a node the GUI just dropped onto an already-loaded
+// lab: appends it to the loaded doc, allocates a console port, and creates its
+// runtime — exactly what lab.load does per node — so it can start WITHOUT a
+// page refresh. Without this a freshly dropped node was unknown to the
+// supervisor (node.start -> "unknown node") until the next lab.load; NAT nodes
+// were the visible victim since they're typically dropped and started
+// mid-session. Validation runs on a candidate copy of the whole doc so a bad
+// node (dup id, unknown kind, bad name) is rejected without side effects.
+func (s *Server) handleNodeAdd(raw json.RawMessage) (any, error) {
+	var args protocol.NodeAddArgs
+	if err := decode(raw, &args); err != nil {
+		return nil, err
+	}
+	ll, err := s.currentLab(args.LabID)
+	if err != nil {
+		return nil, err
+	}
+	if ll.get(args.Node.ID) != nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "node %d already exists", args.Node.ID)
+	}
+	candidate := *ll.doc
+	candidate.Nodes = append(append([]lab.Node{}, ll.doc.Nodes...), args.Node)
+	if err := candidate.Validate(); err != nil {
+		return nil, protocol.Errorf(protocol.CodeSchemaInvalid, "%v", err)
+	}
+
+	port, err := s.consolePorts.Next()
+	if err != nil {
+		return nil, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
+	}
+	n := args.Node
+	nr := &nodeRuntime{
+		id:          n.ID,
+		consolePort: port,
+		machine:     node.NewMachine(s.nodeStateCallback(n.ID)),
+		ram:         n.RAM,
+	}
+	if n.Kind == lab.KindIOL && n.Image != nil {
+		nr.imageID = n.Image.ID
+	}
+	ll.doc.Nodes = append(ll.doc.Nodes, n)
+	ll.nodes[n.ID] = nr
+	s.emit(protocol.EventNodeConsole, protocol.NodeConsoleData{Node: n.ID, ConsolePort: port})
+	return protocol.NodeAddResult{Node: n.ID, ConsolePort: port}, nil
+}
+
+// handleNodeRemove is node.add's inverse for GUI deletes: stop the node (full
+// runtime cleanup), drop it and every link touching it from the loaded doc,
+// stop those links' relays, release its console port, and rebuild the bridge
+// plan so the remaining wiring stays consistent.
+func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
+	var args protocol.NodeArgs
+	if err := decode(raw, &args); err != nil {
+		return nil, err
+	}
+	ll, err := s.currentLab(args.LabID)
+	if err != nil {
+		return nil, err
+	}
+	nr := ll.get(args.Node)
+	if nr == nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", args.Node)
+	}
+	s.stopNode(ll, args.Node)
+	s.consolePorts.Release(nr.consolePort)
+	delete(ll.nodes, args.Node)
+
+	kept := ll.doc.Links[:0]
+	for _, l := range ll.doc.Links {
+		touches := false
+		for _, ep := range l.Endpoints {
+			if ep.Node == args.Node {
+				touches = true
+				break
+			}
+		}
+		if touches {
+			_ = s.relays.Stop(l.ID)
+		} else {
+			kept = append(kept, l)
+		}
+	}
+	ll.doc.Links = kept
+	var nodes []lab.Node
+	for _, n := range ll.doc.Nodes {
+		if n.ID != args.Node {
+			nodes = append(nodes, n)
+		}
+	}
+	ll.doc.Nodes = nodes
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+	}
+	s.emit(protocol.EventNodeState, protocol.NodeStateData{Node: args.Node, State: "stopped"})
+	return protocol.NodeArgs{LabID: ll.doc.ID, Node: args.Node}, nil
+}
+
 func (s *Server) handleNodeSetImage(raw json.RawMessage) (any, error) {
 	var args protocol.NodeSetImageArgs
 	if err := decode(raw, &args); err != nil {
@@ -609,6 +706,22 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 
+	// Keep the LOADED doc in sync (upsert by link id): the bridge plan, NAT/VPCS
+	// port lookups and future rebuilds all derive from ll.doc.Links, so a link
+	// that only lived in the GUI's copy never got relay ports — a NAT or VPCS
+	// connected mid-session couldn't carry traffic until the next lab.load.
+	replaced := false
+	for i := range ll.doc.Links {
+		if ll.doc.Links[i].ID == args.Link.ID {
+			ll.doc.Links[i] = args.Link
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		ll.doc.Links = append(ll.doc.Links, args.Link)
+	}
+
 	// Native same-host IOL<->IOL links are realized through the whole-lab
 	// NETMAP, which IOL reads once at boot from the shared lab dir. There is no
 	// runtime relay to start for them: they come up when the NETMAP (written by
@@ -616,21 +729,23 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	// are running. A link.add for a native link that wasn't in the NETMAP at
 	// boot needs a restart to take effect; we still report link.up so the GUI
 	// reflects intent.
-	//
-	// Native same-host IOL<->IOL links carry traffic purely via the whole-lab
-	// NETMAP; there is no relay to start. (A native link added at runtime that
-	// wasn't in the boot NETMAP needs a node restart to take effect; we still
-	// report link.up so the GUI reflects intent.)
 	if wiringFor(&args.Link, isIOLMap(ll.doc), ll.doc.CaptureReadyEnabled()) == wiringNative {
 		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
 		return protocol.LinkData{Link: args.Link.ID}, nil
 	}
 
-	// Bridged link: start (or restart) its UDP relay from the whole-lab bridge
-	// plan so the relay's ports match the iouyap bridges started at node spawn.
-	// The iouyap netio<->UDP bridges for this link's IOL endpoints are created in
-	// prepareLabDir (startBridges) before the IOL nodes spawn; here we only bring
-	// up the UDP relay half.
+	// Bridged link: rebuild the plan so THIS link gets its relay ports/pseudo
+	// instances (deterministic link-id-ordered allocation — unchanged links get
+	// the same ports back, the same mid-session idiom capture.start uses), make
+	// sure iouyap sockets exist for any newly bridged IOL endpoint (no-op for
+	// ones already up; the IOL side still needs a node restart to re-read its
+	// NETMAP), then start (or restart) this link's UDP relay.
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+	}
+	if err := s.startBridges(ll); err != nil {
+		return nil, err
+	}
 	cfg, err := s.relayConfigFor(ll, args.Link.ID)
 	if err != nil {
 		return nil, err
@@ -648,10 +763,23 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	if err := decode(raw, &args); err != nil {
 		return nil, err
 	}
-	if _, err := s.currentLab(args.LabID); err != nil {
+	ll, err := s.currentLab(args.LabID)
+	if err != nil {
 		return nil, err
 	}
 	_ = s.relays.Stop(args.Link.ID)
+	// Mirror the removal into the loaded doc + plan (see handleLinkAdd's upsert)
+	// so the wiring a later start/rebuild derives never resurrects this link.
+	kept := ll.doc.Links[:0]
+	for _, l := range ll.doc.Links {
+		if l.ID != args.Link.ID {
+			kept = append(kept, l)
+		}
+	}
+	ll.doc.Links = kept
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+	}
 	s.emit(protocol.EventLinkDown, protocol.LinkData{Link: args.Link.ID})
 	return protocol.LinkData{Link: args.Link.ID}, nil
 }

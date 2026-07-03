@@ -314,6 +314,34 @@ export class MockTransport implements Transport {
         return;
       }
 
+      // Incremental node sync (mirrors the real supervisor's node.add/remove):
+      // register a dropped node's runtime so node.start finds it without a
+      // lab.load round-trip.
+      case "node.add": {
+        const n = args?.node as LabDocument["nodes"][number];
+        if (this.nodes.has(n.id)) {
+          this.err(id, "bad_request", `node ${n.id} already exists`);
+          return;
+        }
+        const rt: MockNodeRuntime = {
+          id: n.id,
+          state: "stopped",
+          consolePort: consolePortCounter++,
+          pid: 0,
+          imageId: n.image?.id,
+        };
+        this.nodes.set(n.id, rt);
+        this.ok(id, { node: n.id, consolePort: rt.consolePort });
+        return;
+      }
+
+      case "node.remove": {
+        const nid = args?.node as number;
+        this.nodes.delete(nid);
+        this.ok(id, {});
+        return;
+      }
+
       case "capture.start": {
         const linkId = args?.link as number;
         const port = this.captureCounter++;

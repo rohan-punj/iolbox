@@ -446,8 +446,14 @@
     const id = labStore.nextNodeId();
     const img = labStore.images.find((i) => i.id === imageId);
     const node: LabNode = buildDroppedNode(kind, id, pos, img);
-    labStore.addNode(node);
+    const registered = labStore.addNode(node);
     labStore.selectedNodeId = id;
+    // A NAT gateway has no boot/config step and only exists to provide egress —
+    // start it the moment it lands (after the supervisor ack'd node.add, so
+    // node.start can find it). Other kinds stay stopped for pre-start editing.
+    if (kind === "nat") {
+      void registered.then(() => labStore.startNode(id));
+    }
   }
 
   // Count existing nodes of a kind, for stable NAT1/MGMT1 naming.

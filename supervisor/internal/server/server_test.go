@@ -107,3 +107,56 @@ func TestAllVerbsRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestNodeAddRemove: incremental topology sync — a node dropped onto a loaded
+// lab registers with the supervisor (console port allocated, doc updated) so
+// it can start without a lab.load; duplicates are rejected; remove drops the
+// node AND its links from the loaded doc.
+func TestNodeAddRemove(t *testing.T) {
+	s := newTestServer()
+	load := json.RawMessage(`{"lab":{"version":1,"id":"l1","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":0,"y":0}],"links":[]}}`)
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "1", Op: "lab.load", Args: load}); !resp.OK {
+		t.Fatalf("lab.load: %+v", resp.Error)
+	}
+
+	// Add a NAT node mid-session (the exact user flow that used to fail).
+	add := json.RawMessage(`{"labId":"l1","node":{"id":1,"kind":"nat","name":"NAT1","x":10,"y":10}}`)
+	resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "2", Op: "node.add", Args: add})
+	if !resp.OK {
+		t.Fatalf("node.add: %+v", resp.Error)
+	}
+	var r protocol.NodeAddResult
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Node != 1 || r.ConsolePort < 9000 {
+		t.Fatalf("node.add result: %+v", r)
+	}
+	if s.lab.get(1) == nil || len(s.lab.doc.Nodes) != 2 {
+		t.Fatalf("node 1 not registered with the loaded lab")
+	}
+
+	// Duplicate id is rejected without side effects.
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "3", Op: "node.add", Args: add}); resp.OK {
+		t.Fatal("duplicate node.add must fail")
+	}
+
+	// A link to the new node lands in the LOADED doc too (link.add upsert).
+	// Off-linux the relay start itself fails (no UDP data plane in the stub)
+	// AFTER the upsert -- the doc sync is what this test pins, so the response
+	// status is deliberately not asserted here.
+	link := json.RawMessage(`{"labId":"l1","link":{"id":0,"type":"p2p","endpoints":[{"node":0,"interface":"eth0"},{"node":1,"interface":"eth0"}]}}`)
+	_ = s.Dispatcher().Dispatch(&protocol.Request{ID: "4", Op: "link.add", Args: link})
+	if len(s.lab.doc.Links) != 1 {
+		t.Fatalf("link.add must upsert into the loaded doc, links=%d", len(s.lab.doc.Links))
+	}
+
+	// node.remove drops the node AND its links from the doc.
+	rm := json.RawMessage(`{"labId":"l1","node":1}`)
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "5", Op: "node.remove", Args: rm}); !resp.OK {
+		t.Fatalf("node.remove: %+v", resp.Error)
+	}
+	if s.lab.get(1) != nil || len(s.lab.doc.Nodes) != 1 || len(s.lab.doc.Links) != 0 {
+		t.Fatalf("node.remove must drop node + its links: nodes=%d links=%d", len(s.lab.doc.Nodes), len(s.lab.doc.Links))
+	}
+}

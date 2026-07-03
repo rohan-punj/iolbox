@@ -15,7 +15,7 @@ import type {
   StatusResult,
   SupervisorEvent,
 } from "./protocol";
-import type { LabDocument, LabLink } from "./labTypes";
+import type { LabDocument, LabLink, LabNode } from "./labTypes";
 import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
 
@@ -128,6 +128,20 @@ export class SupervisorClient {
   // supervisor/internal/server/handlers.go, which literally return
   // protocol.StartResult) — NOT a bare NodeRuntimeStatus. Actual node state
   // is driven by the pushed node.state/node.console events, not this reply.
+  /** Register a node the GUI just added with the LOADED lab (incremental
+   *  topology sync, the node counterpart of link.add). Without this, a node
+   *  dropped after lab.load was unknown to the supervisor and could never
+   *  start until a refresh. Returns the node's allocated console port. */
+  nodeAdd(labId: string, node: LabNode) {
+    return this.call<{ node: number; consolePort: number }>("node.add", { labId, node });
+  }
+
+  /** node.add's inverse: stop + deregister a node (and its links) from the
+   *  loaded lab. */
+  nodeRemove(labId: string, node: number) {
+    return this.call<void>("node.remove", { labId, node });
+  }
+
   nodeStart(labId: string, node: number) {
     return this.call<LabStartResult>("node.start", { labId, node });
   }

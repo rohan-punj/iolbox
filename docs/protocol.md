@@ -103,13 +103,31 @@ startup-config again. Non-existent NVRAM is not an error.
 ### `node.start` / `node.stop` / `node.restart`
 Single-node lifecycle. Same shape as above for one node.
 
+### `node.add` / `node.remove`
+Incremental topology sync for nodes — the node counterpart of `link.add`. The
+GUI mirrors every canvas add/delete here so the LOADED lab always knows the
+node (without this, a node dropped after `lab.load` was "unknown node" to
+`node.start` until the next load). `node.add` appends the node to the loaded
+doc, allocates its console port (emitting `node.console`), and creates its
+runtime; a duplicate id or invalid node is rejected without side effects.
+`node.remove` stops the node, drops it and every link touching it from the
+loaded doc (stopping those links' relays), releases its console port, and
+rebuilds the bridge plan.
+- add args: `{ "labId","node": <node.json> }` → result `{ "node","consolePort" }`
+- remove args: `{ "labId","node":<id> }`
+
 ### `node.setImage`
 Hot-swap the image bound to a node (applied on next start).
 - args: `{ "labId","node","imageId" }`
 - result: `{ "node","imageId","class" }`
 
 ### `link.add` / `link.remove`
-Wire/unwire two endpoints at runtime (creates/destroys UDP relay or hub port).
+Wire/unwire two endpoints at runtime. The link is UPSERTED into (or removed
+from) the loaded doc, the bridge plan is rebuilt (deterministic — unchanged
+links keep their ports) and the link's UDP relay is started/stopped, so a
+link drawn mid-session carries traffic for relay-attached endpoints (VPCS,
+NAT) immediately. A native IOL↔IOL link (and the IOL side of a bridged one)
+still needs the node(s) restarted to re-read the boot NETMAP.
 - args: `{ "labId","link": <link.json> }`
 
 ### `capture.start` / `capture.stop`
