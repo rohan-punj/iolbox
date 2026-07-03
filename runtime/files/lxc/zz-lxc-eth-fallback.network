@@ -1,0 +1,36 @@
+# LAST-RESORT systemd-networkd fallback for the LXC/Proxmox artifact,
+# installed by pack-lxc.sh to /etc/systemd/network/zz-lxc-eth-fallback.network
+# (NOT installed into the shared rootfs by build-rootfs.sh — LXC-only).
+#
+# WHY THIS EXISTS (read pack-lxc.sh's header comment for the full decision):
+# Proxmox's `pct` normally detects that this template runs systemd-networkd
+# (no ifupdown package, /etc/systemd/network present + populated) and
+# injects its OWN per-interface .network file — typically
+# /etc/systemd/network/eth0.network — driven by the `pct set <vmid> -net0
+# ...` config. That injected file is authoritative: it carries whatever
+# static IP / VLAN / MTU the Proxmox admin configured for this CT, which
+# this fallback can never know at image-build time. Shipping a *competing*
+# eth0-matching file baked into the image would be actively wrong the
+# moment someone sets a static IP in the Proxmox UI, since networkd applies
+# whichever matching .network file sorts first by filename and a fight
+# between two enabled files is exactly the kind of bug that's invisible
+# until someone's static config silently loses to DHCP.
+#
+# So this file is named to sort LAST (zz-) among /etc/systemd/network/*,
+# and is a bare DHCP-on-eth0 catch-all that only ever fires if pct's own
+# injection didn't happen for some reason (e.g. the CT was created from
+# this template but hand-edited outside `pct set`, or a future Proxmox
+# version changes its detection heuristic). If pct's eth0.network (or
+# equivalent) is present, IT wins — this file is inert in the normal case.
+#
+# Matches eth0 specifically (not en* like files/80-ethernet-dhcp.network,
+# which targets the VMware/WSL artifacts) because Proxmox's default LXC
+# veth naming is eth0, eth1, ... — never the systemd predictable-names
+# en* scheme (that renaming happens via udev inside the guest, which does
+# not run meaningfully in an unprivileged container; see pack-lxc.sh's
+# masked-units section).
+[Match]
+Name=eth0
+
+[Network]
+DHCP=yes

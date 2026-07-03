@@ -1,0 +1,24 @@
+# LXC-only oneshot: defensive /etc/hosts fixup, installed by pack-lxc.sh.
+# See files/lxc/firstboot-lxc-hosts.sh's header for why this exists and why
+# it's a safety net rather than the primary mechanism (Proxmox manages
+# /etc/hosts for unprivileged Debian-family CTs by default).
+#
+# Ordered like iolab-firstboot-iourc.service: runs early, before the
+# supervisor, After=local-fs.target so /etc is writable. Deliberately NOT
+# wired into iolab-supervisor.service's Requires= (unlike the iourc unit) —
+# a missing /etc/hosts line degrades sudo latency, it doesn't invalidate
+# the license the way a missing iourc does, so the supervisor should still
+# start even if this unit somehow fails.
+[Unit]
+Description=iolab LXC first-boot /etc/hosts fixup
+Before=iolab-supervisor.service
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/iolab/firstboot-lxc-hosts.sh
+
+[Install]
+WantedBy=multi-user.target
