@@ -1,0 +1,25 @@
+# Drop-in for /etc/systemd/system/iolab-supervisor.service.d/10-bind.conf
+#
+# Installed by install.sh (never hand-edit the stock unit file shipped in
+# this tarball — see runtime/README.md's WSL/VMware equivalent for why the
+# base unit stays identical across every packaging target: one flag set,
+# audited once). This drop-in re-specifies ExecStart, substituting the
+# console/capture/ws bind addresses from an EnvironmentFile so `install.sh
+# --bind local|all` (and a later manual re-run with a different flag) is a
+# one-file edit instead of a sed against the unit itself.
+#
+# systemd requires clearing ExecStart= (empty RHS) before restating it —
+# the base unit's ExecStart= is NOT replaced automatically by a drop-in,
+# it would otherwise just append.
+[Service]
+EnvironmentFile=/etc/iolab/bind.env
+ExecStart=
+ExecStart=/opt/iolab/supervisor \
+    -control-addr 127.0.0.1:4000 \
+    -ws-addr ${IOLAB_WS_ADDR} \
+    -console-bind ${IOLAB_CONSOLE_BIND} \
+    -capture-bind ${IOLAB_CAPTURE_BIND} \
+    -image-dir /opt/iolab/images \
+    -run-dir /opt/iolab/run \
+    -labs-dir /opt/iolab/labs \
+    -iourc /opt/iolab/iourc
