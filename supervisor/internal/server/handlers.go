@@ -653,9 +653,20 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 	if link == nil {
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown link %d", args.Link)
 	}
-	port, err := s.capturePorts.Next()
-	if err != nil {
-		return nil, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
+	// Reuse an already-armed port (doc auto-arm at lab start, or a repeated
+	// capture.start): allocating a fresh one would orphan the old port without
+	// release AND leave GUI/native clients pointing at a dead tee. wasArmed
+	// gates the rollback paths below so a pre-existing port is never released
+	// by a failed re-request.
+	ll.mu.Lock()
+	port, wasArmed := ll.captures[link.ID]
+	ll.mu.Unlock()
+	if !wasArmed {
+		var err error
+		port, err = s.capturePorts.Next()
+		if err != nil {
+			return nil, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
+		}
 	}
 	// Record the capture intent, then rebuild the plan so this link becomes
 	// bridged with a pcapng tee on its relay. NOTE: an IOL<->IOL link that booted
@@ -667,10 +678,12 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 	ll.captures[link.ID] = port
 	ll.mu.Unlock()
 	if err := s.rebuildBridgePlan(ll); err != nil {
-		ll.mu.Lock()
-		delete(ll.captures, link.ID)
-		ll.mu.Unlock()
-		s.capturePorts.Release(port)
+		if !wasArmed {
+			ll.mu.Lock()
+			delete(ll.captures, link.ID)
+			ll.mu.Unlock()
+			s.capturePorts.Release(port)
+		}
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
 	}
 	// Restart iouyap bridges so a newly-bridged IOL endpoint's netio socket
@@ -687,7 +700,9 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 	}
 	r, err := s.relays.Start(cfg)
 	if err != nil {
-		s.capturePorts.Release(port)
+		if !wasArmed {
+			s.capturePorts.Release(port)
+		}
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
 	}
 	actual := port

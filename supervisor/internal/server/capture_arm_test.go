@@ -84,6 +84,44 @@ func TestDocCaptureAutoArmsOnStart(t *testing.T) {
 	}
 }
 
+// TestCaptureStartReusesAutoArmedPort: an explicit capture.start on a link the
+// doc already auto-armed must REUSE the armed port, not allocate a second one
+// (which orphaned the first without release and left clients pointing at a
+// dead tee).
+func TestCaptureStartReusesAutoArmedPort(t *testing.T) {
+	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: t.TempDir(), RunDir: t.TempDir(), Version: "test"})
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "1", Op: "lab.load", Args: json.RawMessage(captureLabJSON)}); !resp.OK {
+		t.Fatalf("lab.load failed: %+v", resp.Error)
+	}
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "2", Op: "lab.start",
+		Args: json.RawMessage(`{"labId":"cap-lab","nodes":[]}`)}); !resp.OK {
+		t.Fatalf("lab.start failed: %+v", resp.Error)
+	}
+	ll, err := s.currentLab("cap-lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ll.mu.Lock()
+	armed := ll.captures[4]
+	ll.mu.Unlock()
+	if armed == 0 {
+		t.Fatal("expected auto-armed port")
+	}
+
+	resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "3", Op: "capture.start",
+		Args: json.RawMessage(`{"labId":"cap-lab","link":4,"mode":"live"}`)})
+	if !resp.OK {
+		t.Fatalf("capture.start failed: %+v", resp.Error)
+	}
+	var res protocol.CaptureResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.CapturePort != armed {
+		t.Fatalf("capture.start allocated a second port: armed=%d got=%d", armed, res.CapturePort)
+	}
+}
+
 // TestLabStopReleasesCaptures pins the release path: a full lab.stop clears the
 // runtime captures and returns the port to the allocator, and the next start
 // re-arms from the doc (getting the released port back — proof of the release).
