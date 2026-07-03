@@ -64,11 +64,34 @@ type Negotiator struct {
 
 	out   bytes.Buffer // clean application data extracted from the last Feed
 	reply bytes.Buffer // bytes to send back to the node (option replies)
+
+	// Per-option negotiation state, keyed by option byte. RFC 1143's core
+	// insight (the "Q Method"): a telnet endpoint must reply to DO/DONT/WILL/
+	// WONT only when the request CHANGES its state. Answering an option that is
+	// already in the requested state turns a peer's acknowledgement into a fresh
+	// request, and two endpoints that both "answer everything" ping-pong the
+	// same DONT<->WONT (and DO<->WILL) pair forever — a 100%-CPU busy loop
+	// observed when the supervisor's console hub and the wsbridge negotiator
+	// (both instances of THIS type) were wired mouth-to-mouth over a loopback
+	// telnet socket. remoteOn tracks whether the PEER has enabled an option
+	// toward us (its WILL we agreed to); localOn tracks whether WE have enabled
+	// an option toward the peer (our WILL it agreed to). We only emit a reply on
+	// a genuine transition.
+	remoteOn map[byte]bool // peer->us option enabled (we answered its WILL with DO)
+	localOn  map[byte]bool // us->peer option enabled (we answered its DO with WILL)
+	// "refused" marks: options we've already sent a terminal WONT/DONT for, so a
+	// peer that re-requests a disabled option is answered exactly once. Lazily
+	// allocated.
+	localRef  map[byte]bool // we sent WONT for opt (refused peer's DO)
+	remoteRef map[byte]bool // we sent DONT for opt (refused peer's WILL)
 }
 
 // NewNegotiator returns a Negotiator ready to process a fresh telnet stream.
 func NewNegotiator() *Negotiator {
-	return &Negotiator{}
+	return &Negotiator{
+		remoteOn: make(map[byte]bool),
+		localOn:  make(map[byte]bool),
+	}
 }
 
 // Feed processes raw bytes received from the node's telnet socket. It returns
@@ -153,38 +176,95 @@ func (n *Negotiator) step(b byte) {
 	}
 }
 
-// handleOption answers a DO/DONT/WILL/WONT request for a single option byte.
-// Supported options (SGA, ECHO, NAWS, TTYPE) get an agreeing reply; anything
-// else is refused so the peer's negotiation always terminates.
+// handleOption answers a DO/DONT/WILL/WONT request for a single option byte
+// following RFC 1143's rule: reply ONLY when the request transitions our state.
+// Supported options (SGA, ECHO, NAWS) get an agreeing reply; anything else is
+// refused. Acknowledgements that don't change state are absorbed silently, so
+// two negotiators cannot ping-pong the same option forever (see the busy-loop
+// note on the Negotiator struct).
 func (n *Negotiator) handleOption(cmd, opt byte) {
 	switch cmd {
 	case DO:
-		// Peer wants US to enable `opt`. We don't perform terminal-type
-		// exchange or true remote echo (the client/xterm.js owns local
-		// rendering), so refuse everything asked of us except SGA, which is
-		// harmless and keeps line-mode chatty peers quiet.
-		if opt == OptSGA {
-			n.sendReply(WILL, opt)
+		// Peer wants US to enable `opt`. We agree only to SGA (harmless, quiets
+		// line-mode peers); everything else is refused. Reply only on a change:
+		// a repeated DO for an already-enabled option is the peer's ack of our
+		// WILL and must not be answered again.
+		want := opt == OptSGA
+		if want {
+			if !n.localOn[opt] {
+				n.localOn[opt] = true
+				n.sendReply(WILL, opt)
+			}
 		} else {
-			n.sendReply(WONT, opt)
+			if n.localOn[opt] {
+				n.localOn[opt] = false
+			}
+			// Only announce refusal the FIRST time; a peer re-asking after we
+			// already said WONT gets silence (it has our answer).
+			if !n.localRefused(opt) {
+				n.markLocalRefused(opt)
+				n.sendReply(WONT, opt)
+			}
 		}
 	case DONT:
-		// Peer wants us to stop `opt`; we were never doing anything the peer
-		// didn't ask for, so just acknowledge.
-		n.sendReply(WONT, opt)
+		// Peer wants us to stop `opt`. Acknowledge with WONT only if we were
+		// enabled or haven't answered yet; a DONT echoing our own WONT is
+		// absorbed to end the exchange.
+		if n.localOn[opt] {
+			n.localOn[opt] = false
+			n.sendReply(WONT, opt)
+		} else if !n.localRefused(opt) {
+			n.markLocalRefused(opt)
+			n.sendReply(WONT, opt)
+		}
 	case WILL:
-		// Peer offers to enable `opt` on its side. We accept SGA and ECHO
-		// (Cisco-style IOL consoles echo server-side) and NAWS capability
-		// acknowledgement; refuse the rest.
-		switch opt {
-		case OptSGA, OptEcho, OptNAWS:
-			n.sendReply(DO, opt)
-		default:
-			n.sendReply(DONT, opt)
+		// Peer offers to enable `opt` on its side. Accept SGA/ECHO/NAWS; refuse
+		// the rest. Reply only on a transition.
+		accept := opt == OptSGA || opt == OptEcho || opt == OptNAWS
+		if accept {
+			if !n.remoteOn[opt] {
+				n.remoteOn[opt] = true
+				n.sendReply(DO, opt)
+			}
+		} else {
+			if n.remoteOn[opt] {
+				n.remoteOn[opt] = false
+			}
+			if !n.remoteRefused(opt) {
+				n.markRemoteRefused(opt)
+				n.sendReply(DONT, opt)
+			}
 		}
 	case WONT:
-		n.sendReply(DONT, opt)
+		// Peer will not / no longer enable `opt`. Acknowledge with DONT only on
+		// a change; a WONT echoing our own DONT is absorbed.
+		if n.remoteOn[opt] {
+			n.remoteOn[opt] = false
+			n.sendReply(DONT, opt)
+		} else if !n.remoteRefused(opt) {
+			n.markRemoteRefused(opt)
+			n.sendReply(DONT, opt)
+		}
 	}
+}
+
+// The "refused" sets record that we have already sent a terminal WONT (local)
+// or DONT (remote) for an option, so a peer that keeps re-requesting the same
+// disabled option gets one answer, not one per request. Enabling an option
+// clears its refused mark implicitly via the On maps above.
+func (n *Negotiator) localRefused(opt byte) bool  { return n.localRef[opt] }
+func (n *Negotiator) remoteRefused(opt byte) bool { return n.remoteRef[opt] }
+func (n *Negotiator) markLocalRefused(opt byte) {
+	if n.localRef == nil {
+		n.localRef = make(map[byte]bool)
+	}
+	n.localRef[opt] = true
+}
+func (n *Negotiator) markRemoteRefused(opt byte) {
+	if n.remoteRef == nil {
+		n.remoteRef = make(map[byte]bool)
+	}
+	n.remoteRef[opt] = true
 }
 
 // handleSubnegotiation processes a completed IAC SB ... IAC SE payload. Only

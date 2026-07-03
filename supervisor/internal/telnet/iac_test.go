@@ -185,6 +185,79 @@ func TestNAWSEncodingLargeDimensions(t *testing.T) {
 	}
 }
 
+// TestNegotiationConvergesBetweenTwoNegotiators wires two Negotiators
+// mouth-to-mouth exactly as the supervisor does — consoleHub's reader
+// Negotiator and wsbridge's bridgeConsole Negotiator pump each other's Reply()
+// bytes over a loopback telnet socket. Before the RFC 1143 state fix this
+// exchange never terminated: DONT<->WONT (and DO<->WILL) ping-ponged forever,
+// pegging a CPU core. The exchange MUST reach a fixed point (both Replies
+// empty) within a small, bounded number of rounds.
+func TestNegotiationConvergesBetweenTwoNegotiators(t *testing.T) {
+	a := NewNegotiator()
+	b := NewNegotiator()
+
+	// Seed the way consoleHub.attach does: it volunteers WILL ECHO + WILL SGA
+	// toward the peer. Feed that to b as its first inbound bytes.
+	toB := []byte{IAC, WILL, OptEcho, IAC, WILL, OptSGA}
+	toA := []byte(nil)
+
+	const maxRounds = 20
+	for round := 0; round < maxRounds; round++ {
+		b.Feed(toB)
+		nextToA := b.Reply()
+		a.Feed(toA)
+		nextToB := a.Reply()
+
+		if len(nextToA) == 0 && len(nextToB) == 0 {
+			return // converged — no more bytes to exchange
+		}
+		toA, toB = nextToA, nextToB
+	}
+	t.Fatalf("negotiation did not converge within %d rounds (infinite ping-pong)", maxRounds)
+}
+
+// TestRepeatedDontAbsorbedAfterFirstAck proves the specific loop trigger is
+// gone: once we've answered a DONT with WONT, a peer echoing that WONT back as
+// another DONT (its acknowledgement) produces NO further reply.
+func TestRepeatedDontAbsorbedAfterFirstAck(t *testing.T) {
+	n := NewNegotiator()
+	n.Feed([]byte{IAC, DONT, OptEcho})
+	if r := n.Reply(); !bytes.Equal(r, []byte{IAC, WONT, OptEcho}) {
+		t.Fatalf("first DONT reply = %v, want WONT ECHO", r)
+	}
+	n.Feed([]byte{IAC, DONT, OptEcho})
+	if r := n.Reply(); r != nil {
+		t.Fatalf("repeated DONT should be silent, got %v", r)
+	}
+}
+
+// TestRepeatedWontAbsorbedAfterFirstAck is the WILL/WONT-side mirror.
+func TestRepeatedWontAbsorbedAfterFirstAck(t *testing.T) {
+	n := NewNegotiator()
+	n.Feed([]byte{IAC, WONT, OptEcho})
+	if r := n.Reply(); !bytes.Equal(r, []byte{IAC, DONT, OptEcho}) {
+		t.Fatalf("first WONT reply = %v, want DONT ECHO", r)
+	}
+	n.Feed([]byte{IAC, WONT, OptEcho})
+	if r := n.Reply(); r != nil {
+		t.Fatalf("repeated WONT should be silent, got %v", r)
+	}
+}
+
+// TestWillEchoAckNotReEchoed proves accepting a peer's WILL (reply DO) does not
+// re-fire when the peer repeats WILL: the option is already remoteOn.
+func TestWillEchoAckNotReEchoed(t *testing.T) {
+	n := NewNegotiator()
+	n.Feed([]byte{IAC, WILL, OptEcho})
+	if r := n.Reply(); !bytes.Equal(r, []byte{IAC, DO, OptEcho}) {
+		t.Fatalf("first WILL reply = %v, want DO ECHO", r)
+	}
+	n.Feed([]byte{IAC, WILL, OptEcho})
+	if r := n.Reply(); r != nil {
+		t.Fatalf("repeated WILL should be silent, got %v", r)
+	}
+}
+
 func TestWillNAWS(t *testing.T) {
 	got := WillNAWS()
 	want := []byte{IAC, WILL, OptNAWS}
