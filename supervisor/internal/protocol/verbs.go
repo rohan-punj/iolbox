@@ -267,6 +267,19 @@ type LinkStatsData struct {
 	BPS  uint64  `json:"bps"`
 }
 
+// HostStatsData is the host.stats event payload: the runtime VM's resource
+// utilisation, pushed every sampling interval so the GUI can show a live
+// CPU/RAM/disk monitor for the host actually executing the IOL processes.
+// CPUPct is aggregate 0-100 across all cores; memory/disk are bytes.
+type HostStatsData struct {
+	CPUPct   float64 `json:"cpuPct"`
+	MemUsed  uint64  `json:"memUsed"`
+	MemTotal uint64  `json:"memTotal"`
+	DiskUsed uint64  `json:"diskUsed"`
+	DiskTot  uint64  `json:"diskTotal"`
+	Cores    int     `json:"cores"`
+}
+
 // LogData is the log event payload.
 type LogData struct {
 	Level   string `json:"level"`

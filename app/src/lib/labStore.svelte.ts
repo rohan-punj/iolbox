@@ -50,6 +50,16 @@ class LabStore {
   /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
    *  these to drive the traffic glow; entries older than ~5s are treated stale. */
   linkStats = $state<Record<number, { fps: number; bps: number; ts: number }>>({});
+  /** Latest runtime-VM resource sample (host.stats), or null until the first
+   *  event. Drives the left-pane host monitor. */
+  hostStats = $state<{
+    cpuPct: number;
+    memUsed: number;
+    memTotal: number;
+    diskUsed: number;
+    diskTotal: number;
+    cores: number;
+  } | null>(null);
   /** Coarse ~1s wall clock so glow readers can decay stats to zero when the
    *  events stop arriving (link.stats is silent for idle links). */
   nowTick = $state(Date.now());
@@ -216,6 +226,9 @@ class LabStore {
           ...this.linkStats,
           [evt.data.link]: { fps: evt.data.fps, bps: evt.data.bps, ts: Date.now() },
         };
+        break;
+      case "host.stats":
+        this.hostStats = { ...evt.data };
         break;
       case "log":
         this.pushLog(evt.data.level, evt.data.message, evt.data.node);

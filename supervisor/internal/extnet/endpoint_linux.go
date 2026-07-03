@@ -4,6 +4,7 @@ package extnet
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -47,17 +48,31 @@ const (
 	frameMax  = 65536
 )
 
+// cmdTimeout bounds each privileged command so a wedged `sudo` (e.g. a ~10s
+// hostname-resolution stall when the runtime's hostname isn't in /etc/hosts —
+// see the firstboot note in docs) surfaces as a clean node failure instead of
+// blocking lab.start on the control loop. Setup issues a handful of commands,
+// so this is a generous ceiling, not a normal-case wait.
+const cmdTimeout = 20 * time.Second
+
 // runCmds executes each command via `sudo -n`, wrapping the first failure with
 // its combined stderr so the caller sees exactly which privileged step failed
-// and why. It stops at the first error.
+// and why. It stops at the first error. Each command is bounded by cmdTimeout.
 func runCmds(cmds []cmd) error {
 	for _, c := range cmds {
+		ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 		full := append([]string{"-n"}, c.args...)
 		out := &bytes.Buffer{}
-		cmd := exec.Command("sudo", full...)
+		cmd := exec.CommandContext(ctx, "sudo", full...)
 		cmd.Stderr = out
 		cmd.Stdout = out
-		if err := cmd.Run(); err != nil {
+		err := cmd.Run()
+		cancel()
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("extnet: `sudo -n %s` timed out after %s "+
+				"(is the runtime hostname in /etc/hosts?): %s", c.String(), cmdTimeout, strings.TrimSpace(out.String()))
+		}
+		if err != nil {
 			return fmt.Errorf("extnet: `sudo -n %s` failed: %v: %s", c.String(), err, strings.TrimSpace(out.String()))
 		}
 	}
@@ -70,13 +85,15 @@ func runCmds(cmds []cmd) error {
 func runCmdsBestEffort(cmds []cmd) error {
 	var errs error
 	for _, c := range cmds {
+		ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 		full := append([]string{"-n"}, c.args...)
 		out := &bytes.Buffer{}
-		cmd := exec.Command("sudo", full...)
+		cmd := exec.CommandContext(ctx, "sudo", full...)
 		cmd.Stderr = out
 		if err := cmd.Run(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("`sudo -n %s`: %v: %s", c.String(), err, strings.TrimSpace(out.String())))
 		}
+		cancel()
 	}
 	return errs
 }
@@ -114,7 +131,7 @@ func Start(cfg Config) (*Endpoint, error) {
 		if err := runCmds(mgmtSetupCmds(dev, cfg.MgmtIface)); err != nil {
 			return nil, err
 		}
-		tap, oerr := openMacvtap(dev)
+		tap, oerr := openMacvtap(dev, owner)
 		if oerr != nil {
 			_ = runCmdsBestEffort(mgmtTeardownCmds(dev))
 			return nil, oerr
@@ -152,10 +169,9 @@ func (e *Endpoint) bindRelay() error {
 	return nil
 }
 
-// pumpTapToRelay reads ethernet frames off the tap and forwards them to the
-// relay. For a nat endpoint it first offers each frame to the DHCP server; a
-// frame the server consumed (a DHCP request it replied to on the tap) is not
-// forwarded to the relay.
+// pumpTapToRelay reads ethernet frames off the tap (the kernel/NAT side —
+// un-NAT'd return traffic and ARP replies for the gateway IP) and forwards them
+// to the relay so the connected lab node sees them.
 func (e *Endpoint) pumpTapToRelay() {
 	buf := make([]byte, frameMax)
 	for {
@@ -175,11 +191,7 @@ func (e *Endpoint) pumpTapToRelay() {
 		if n == 0 {
 			continue
 		}
-		frame := buf[:n]
-		if e.dhcp != nil && e.dhcp.consume(frame, e.tap) {
-			continue // a DHCP request the server handled locally
-		}
-		if _, err := e.udpConn.WriteToUDP(frame, e.sendTo); err != nil {
+		if _, err := e.udpConn.WriteToUDP(buf[:n], e.sendTo); err != nil {
 			if e.isClosed() {
 				return
 			}
@@ -187,8 +199,12 @@ func (e *Endpoint) pumpTapToRelay() {
 	}
 }
 
-// pumpRelayToTap reads frames the relay delivers over UDP and writes them into
-// the tap so the connected lab node sees them.
+// pumpRelayToTap reads frames the lab node sent over the relay. A nat endpoint
+// first offers each frame to its DHCP server: a DHCP request is answered back
+// over the relay (toward the lab node) and NOT delivered to the tap, since the
+// exchange is between the lab node and our userspace server, not the kernel.
+// Every other frame (real IP traffic, ARP for the gateway) is written into the
+// tap so the kernel routes/NATs or answers it.
 func (e *Endpoint) pumpRelayToTap() {
 	buf := make([]byte, frameMax)
 	for {
@@ -208,7 +224,16 @@ func (e *Endpoint) pumpRelayToTap() {
 		if n == 0 {
 			continue
 		}
-		if _, err := e.tap.Write(buf[:n]); err != nil {
+		frame := buf[:n]
+		if e.dhcp != nil {
+			if reply, consumed := e.dhcp.consume(frame); consumed {
+				if reply != nil {
+					_, _ = e.udpConn.WriteToUDP(reply, e.sendTo)
+				}
+				continue // DHCP handled in userspace; never touches the kernel
+			}
+		}
+		if _, err := e.tap.Write(frame); err != nil {
 			if e.isClosed() {
 				return
 			}
@@ -297,7 +322,11 @@ func openTap(name string) (*os.File, error) {
 // device number N is the interface's ifindex, read from
 // /sys/class/net/<name>/ifindex, so the path is /dev/tap<ifindex>. Reads/writes
 // are bare ethernet frames (macvtap has no packet-info prefix).
-func openMacvtap(name string) (*os.File, error) {
+//
+// The kernel creates /dev/tapN root-owned mode 0600, so — unlike the nat tap,
+// which `ip tuntap add ... user <owner>` hands us directly — we must chown it
+// to owner first (via sudo) before this unprivileged process can open it.
+func openMacvtap(name, owner string) (*os.File, error) {
 	idxRaw, err := os.ReadFile("/sys/class/net/" + name + "/ifindex")
 	if err != nil {
 		return nil, fmt.Errorf("extnet: read ifindex for %s: %w", name, err)
@@ -307,6 +336,9 @@ func openMacvtap(name string) (*os.File, error) {
 		return nil, fmt.Errorf("extnet: bad ifindex %q for %s", idx, name)
 	}
 	dev := "/dev/tap" + idx
+	if err := runCmds([]cmd{{[]string{"chown", owner, dev}}}); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(dev, os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("extnet: open %s: %w", dev, err)

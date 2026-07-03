@@ -5,15 +5,18 @@ package extnet
 import (
 	"encoding/binary"
 	"net"
-	"os"
 )
 
-// dhcpServer answers DHCP requests that arrive as raw ethernet frames on a nat
-// node's tap. A lab node's `ip dhcp` broadcasts DISCOVER/REQUEST to UDP :67; the
-// server decodes the ethernet+IPv4+UDP envelope, runs the pure DHCP codec
-// (dhcp.go), and writes a fully-framed ethernet reply straight back to the tap.
-// It never touches the host's real network — the whole exchange lives on the
-// tap device — so no privileged sockets and no host DHCP conflicts.
+// dhcpServer answers DHCP requests a lab node broadcasts on the relay side of a
+// nat endpoint. A lab node's `ip dhcp` sends DISCOVER/REQUEST to UDP :67 as a
+// raw ethernet frame; that frame arrives over the relay (NOT off the tap — the
+// tap is the kernel/NAT side), so the server is consulted on the relay->node
+// pump, decodes the ethernet+IPv4+UDP envelope, runs the pure DHCP codec
+// (dhcp.go), and returns a fully-framed ethernet reply the pump sends straight
+// back toward the lab node over the relay. The exchange never reaches the
+// kernel, so there are no privileged sockets and no host DHCP conflicts; real
+// IP traffic and ARP (the kernel owns the gateway IP on the tap) still flow
+// through the tap normally.
 type dhcpServer struct {
 	serverIP net.IP // the gateway/server address (172.31.<n>.1)
 	mask     net.IP // 255.255.255.0
@@ -42,26 +45,24 @@ const (
 	dhcpClientPort = 68
 )
 
-// consume inspects an outbound tap frame: if it is a DHCP request (IPv4/UDP to
-// port 67), the server handles it, writes a reply frame to tap, and returns
-// true so the pump does NOT forward it to the relay. Any other frame returns
-// false and is forwarded normally.
-func (d *dhcpServer) consume(frame []byte, tap *os.File) bool {
+// consume inspects a frame arriving from the lab node (the relay side): if it
+// is a DHCP request (IPv4/UDP to port 67) it returns the fully-framed ethernet
+// reply to send back toward the lab node and consumed=true, so the pump does
+// NOT deliver the request into the tap/kernel. A consumed request with no reply
+// (e.g. RELEASE) returns (nil, true). Any other frame returns (nil, false) and
+// is delivered to the tap normally.
+func (d *dhcpServer) consume(frame []byte) (reply []byte, consumed bool) {
 	req, srcMAC, ok := parseDHCP(frame)
 	if !ok {
-		return false
+		return nil, false
 	}
 	offer := d.leaser.lease(srcMAC)
-	replyType, reply, ok := req.Handle(offer)
+	replyType, r, ok := req.Handle(offer)
 	if !ok {
-		return true // consumed (e.g. RELEASE) but no reply to send
+		return nil, true // consumed (e.g. RELEASE) but no reply to send
 	}
-	payload := reply.Encode(replyType, d.serverIP, d.mask)
-	out := d.buildFrame(srcMAC, reply.YIAddr, payload, req.Flags&flagBroadcast != 0)
-	if out != nil {
-		_, _ = tap.Write(out)
-	}
-	return true
+	payload := r.Encode(replyType, d.serverIP, d.mask)
+	return d.buildFrame(srcMAC, r.YIAddr, payload, req.Flags&flagBroadcast != 0), true
 }
 
 // parseDHCP validates that a frame is an IPv4/UDP:67 DHCP request and returns

@@ -67,6 +67,7 @@ const (
 	EventCaptureStarted = "capture.started"
 	EventCaptureStopped = "capture.stopped"
 	EventLinkStats      = "link.stats"
+	EventHostStats      = "host.stats"
 	EventLog            = "log"
 )
 

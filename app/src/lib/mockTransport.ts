@@ -71,12 +71,50 @@ export class MockTransport implements Transport {
   async connect(): Promise<void> {
     await delay(150);
     this.connected = true;
+    this.startHostStats();
   }
 
   disconnect(): void {
     this.connected = false;
     this.stopLinkStats();
+    this.stopHostStats();
     this.handlers.clear();
+  }
+
+  private hostStatsTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Dev-only synthetic host.stats so the left-pane monitor animates without a
+   *  real supervisor. Gentle random-walk around plausible values. */
+  private startHostStats() {
+    this.stopHostStats();
+    const total = 8 * 1024 * 1024 * 1024;
+    const disk = 40 * 1024 * 1024 * 1024;
+    let cpu = 12;
+    const tick = () => {
+      cpu = Math.max(2, Math.min(98, cpu + (Math.random() - 0.5) * 18));
+      const running = [...this.nodes.values()].filter((n) => n.state === "running").length;
+      const memUsed = Math.min(total, (1.2 + running * 0.9) * 1024 * 1024 * 1024);
+      this.emit({
+        event: "host.stats",
+        data: {
+          cpuPct: Math.round(cpu * 10) / 10,
+          memUsed: Math.round(memUsed),
+          memTotal: total,
+          diskUsed: Math.round(disk * 0.36),
+          diskTotal: disk,
+          cores: 8,
+        },
+      } as SupervisorEvent);
+    };
+    tick();
+    this.hostStatsTimer = setInterval(tick, 2000);
+  }
+
+  private stopHostStats() {
+    if (this.hostStatsTimer) {
+      clearInterval(this.hostStatsTimer);
+      this.hostStatsTimer = null;
+    }
   }
 
   onMessage(handler: (frame: IncomingFrame) => void): () => void {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"math"
+	"runtime"
 	"time"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
@@ -36,11 +37,29 @@ func (s *Server) statsLoop(ctx context.Context) {
 	type sample struct{ frames, bytes uint64 }
 	last := make(map[int]sample)
 
+	// Host resource monitor: sample the runtime VM's CPU/RAM/disk each tick and
+	// push a host.stats event so the GUI can show a live monitor of the host
+	// actually executing IOL. Disk is measured on the run-dir filesystem.
+	cores := runtime.NumCPU()
+	host := newHostReader(s.cfg.RunDir)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			cpuPct, memUsed, memTotal, diskUsed, diskTotal := host.read(cores)
+			if memTotal > 0 {
+				s.emit(protocol.EventHostStats, protocol.HostStatsData{
+					CPUPct:   math.Round(cpuPct*10) / 10,
+					MemUsed:  memUsed,
+					MemTotal: memTotal,
+					DiskUsed: diskUsed,
+					DiskTot:  diskTotal,
+					Cores:    cores,
+				})
+			}
+
 			cur := s.relays.Stats()
 			// Prune links whose relay went away, so a same-id relay started
 			// later begins from a fresh zero baseline.

@@ -46,6 +46,22 @@
   function pickColor(c: string) {
     annoTool.color = c;
   }
+
+  // Host monitor: live CPU/RAM/disk of the runtime VM (host.stats events).
+  const host = $derived(labStore.hostStats);
+  function fmtGB(bytes: number): string {
+    return (bytes / 1024 / 1024 / 1024).toFixed(1);
+  }
+  function pct(used: number, total: number): number {
+    return total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  }
+  // Amber >75%, red >90% — same thresholds a PNetLab operator watches.
+  function tone(p: number): string {
+    return p > 90 ? "var(--state-crashed)" : p > 75 ? "var(--state-starting)" : "var(--accent)";
+  }
+  const memPct = $derived(host ? pct(host.memUsed, host.memTotal) : 0);
+  const diskPct = $derived(host ? pct(host.diskUsed, host.diskTotal) : 0);
+  const cpuPct = $derived(host ? Math.min(100, Math.round(host.cpuPct)) : 0);
 </script>
 
 <div class="palette">
@@ -212,6 +228,31 @@
   {#if armed}
     <div class="draw-hint">Click the canvas to place the {armed}.</div>
   {/if}
+
+  <div class="host-spacer"></div>
+  <div class="section-title">Host</div>
+  {#if host}
+    <div class="host-mon" title="Runtime VM executing IOL — live CPU / RAM / disk">
+      <div class="host-row">
+        <span class="host-lbl">CPU</span>
+        <div class="host-bar"><span style:width={`${cpuPct}%`} style:background={tone(cpuPct)}></span></div>
+        <span class="host-val mono">{cpuPct}%</span>
+      </div>
+      <div class="host-row">
+        <span class="host-lbl">RAM</span>
+        <div class="host-bar"><span style:width={`${memPct}%`} style:background={tone(memPct)}></span></div>
+        <span class="host-val mono">{fmtGB(host.memUsed)}/{fmtGB(host.memTotal)}G</span>
+      </div>
+      <div class="host-row">
+        <span class="host-lbl">Disk</span>
+        <div class="host-bar"><span style:width={`${diskPct}%`} style:background={tone(diskPct)}></span></div>
+        <span class="host-val mono">{fmtGB(host.diskUsed)}/{fmtGB(host.diskTotal)}G</span>
+      </div>
+      <div class="host-cores mono">{host.cores} vCPU</div>
+    </div>
+  {:else}
+    <div class="host-idle">Waiting for host stats…</div>
+  {/if}
 </div>
 
 <style>
@@ -222,6 +263,60 @@
     padding: var(--sp-3);
     height: 100%;
     overflow-y: auto;
+  }
+  .host-spacer {
+    flex: 1;
+    min-height: var(--sp-2);
+  }
+  .host-mon {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+  }
+  .host-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .host-lbl {
+    font-size: var(--fs-xs);
+    color: var(--ink-2);
+    width: 30px;
+    flex-shrink: 0;
+  }
+  .host-bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: color-mix(in oklab, var(--ink-3) 30%, transparent);
+    overflow: hidden;
+  }
+  .host-bar span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.6s ease, background 0.6s ease;
+  }
+  .host-val {
+    font-size: 10px;
+    color: var(--ink-2);
+    width: 74px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .host-cores {
+    font-size: 10px;
+    color: var(--ink-3);
+    text-align: right;
+  }
+  .host-idle {
+    font-size: var(--fs-xs);
+    color: var(--ink-3);
+    padding: 6px 2px;
   }
   .section-title {
     font-size: var(--fs-xs);

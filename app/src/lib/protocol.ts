@@ -68,6 +68,18 @@ export interface LinkStatsEvent {
   event: "link.stats";
   data: { link: number; fps: number; bps: number };
 }
+/** Runtime VM resource utilisation, pushed every ~2s for the host monitor. */
+export interface HostStatsEvent {
+  event: "host.stats";
+  data: {
+    cpuPct: number;
+    memUsed: number;
+    memTotal: number;
+    diskUsed: number;
+    diskTotal: number;
+    cores: number;
+  };
+}
 
 export type SupervisorEvent =
   | NodeStateEvent
@@ -77,6 +89,7 @@ export type SupervisorEvent =
   | CaptureStartedEvent
   | CaptureStoppedEvent
   | LinkStatsEvent
+  | HostStatsEvent
   | LogEvent;
 
 // ---- Result shapes per verb ----
