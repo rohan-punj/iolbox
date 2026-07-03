@@ -174,7 +174,11 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 # ca-certificates is omitted on purpose: the runtime itself makes no
 # outbound TLS connections (the NAT node MASQUERADEs lab traffic at L3;
 # no TLS termination here).
-BASE_INCLUDE="systemd,systemd-sysv,udev,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables"
+# dbus: lets systemd-logind actually run, which handles the ACPI power
+# button — without it a hypervisor-initiated shutdown (qemu QMP
+# system_powerdown, vmrun soft stop, OVA guest shutdown) is never acted
+# on in-guest and hosts fall back to hard-kill after their grace period.
+BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
