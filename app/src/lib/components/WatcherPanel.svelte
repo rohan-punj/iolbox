@@ -24,13 +24,16 @@
     <div class="wp-body">
       {#each rows as row (row.id)}
         <div class="wp-row">
-          <button
+          <!-- Native colour picker disguised as the row swatch: clicking opens
+               the OS picker; the input's own value renders as the dot. -->
+          <input
+            type="color"
             class="wp-swatch"
-            style:background={row.color}
-            title="Cycle colour"
-            aria-label="Cycle row colour"
-            onclick={() => watcherStore.cycleColor(row.id)}
-          ></button>
+            value={row.color}
+            title="Pick flow colour"
+            aria-label="Row colour"
+            oninput={(e) => watcherStore.setColor(row.id, (e.currentTarget as HTMLInputElement).value)}
+          />
           <select
             class="wp-select"
             value={row.proto}
@@ -127,15 +130,29 @@
     align-items: center;
     gap: 6px;
   }
+  /* The swatch IS an <input type=color>: strip the native chrome down to a
+     round dot showing the picked colour; clicking opens the OS colour picker. */
   .wp-swatch {
     all: unset;
     box-sizing: border-box;
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
+    overflow: hidden;
     cursor: pointer;
     flex-shrink: 0;
     box-shadow: 0 0 0 1px var(--border-strong);
+  }
+  .wp-swatch::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  .wp-swatch::-webkit-color-swatch {
+    border: none;
+    border-radius: 50%;
+  }
+  .wp-swatch::-moz-color-swatch {
+    border: none;
+    border-radius: 50%;
   }
   .wp-swatch:hover {
     box-shadow: 0 0 0 2px var(--accent);

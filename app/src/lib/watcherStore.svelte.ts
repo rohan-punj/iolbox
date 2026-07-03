@@ -126,13 +126,12 @@ class WatcherStore {
     if (row) row.proto = proto;
   }
 
-  /** Cycle a row to the next palette colour (button click, not a picker —
-   *  matches the compact panel spec). */
-  cycleColor(id: string) {
+  /** Set a row's overlay colour (native colour-picker input in the panel).
+   *  New rows still auto-assign distinct PALETTE colours; this lets the user
+   *  override to anything. */
+  setColor(id: string, color: string) {
     const row = this.rows.find((r) => r.id === id);
-    if (!row) return;
-    const idx = PALETTE.indexOf(row.color);
-    row.color = PALETTE[(idx + 1) % PALETTE.length];
+    if (row) row.color = color;
   }
 
   start() {

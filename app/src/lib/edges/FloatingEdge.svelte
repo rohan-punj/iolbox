@@ -177,8 +177,27 @@
     // port chips — its own curve already separates it from parallel siblings,
     // so no extra perpendicular nudge is needed here either.
     const wPt = at(0.5);
+
+    // Watcher flow paths — the same quadratic shifted perpendicular by d px so
+    // the flow rides BESIDE the cable instead of on top of it (on-path dashes
+    // were unreadable over the stroke). Positive d = one side, negative = the
+    // other, so the two directions of one link never overlap each other.
+    // reversed=true swaps start/end: marching "forward" along the reversed
+    // path (and animateMotion with rotate="auto") then reads target→source,
+    // which is how the endpoints[1]-sourced direction is rendered — one
+    // animation direction serves both.
+    const offsetPath = (d: number, reversed: boolean) => {
+      const osx = sx + px * d, osy = sy + py * d;
+      const ocx = cx + px * d, ocy = cy + py * d;
+      const otx = tx + px * d, oty = ty + py * d;
+      return reversed
+        ? `M ${otx} ${oty} Q ${ocx} ${ocy} ${osx} ${osy}`
+        : `M ${osx} ${osy} Q ${ocx} ${ocy} ${otx} ${oty}`;
+    };
+
     return {
       path,
+      offsetPath,
       // Perpendicular offset 0 → chip centered over the path.
       sChip: { x: sPt.x, y: sPt.y },
       tChip: { x: tPt.x, y: tPt.y },
@@ -222,28 +241,39 @@
     role="presentation"
   />
 
-  <!-- Network Watcher overlays: one dashed animated path per matching row and
-       direction, riding this edge's own curve (so parallel-link fanout is
-       inherited for free). Forward = frames sourced from endpoints[0] (edge
-       source) marching source→target; reverse the opposite. When one row
-       matches BOTH directions the two paths get different dash patterns
-       (10 8 vs 4 14) so the counter-marching dashes stay readable instead of
-       strobing over each other. -->
-  {#each watcherMatches as m (m.row.id)}
-    {#if m.dir0}
+  <!-- Network Watcher overlays: one dashed flow per matching row and direction,
+       shifted PERPENDICULAR off the cable (offsetPath) so the flow is readable
+       beside the link instead of blending into its stroke. endpoints[0]-sourced
+       traffic rides one side (positive offset), endpoints[1]-sourced the other
+       (negative, path REVERSED so the same forward march + rotate="auto"
+       arrowheads read target→source). Additional rows stack further out.
+       Direction is made explicit by small arrowhead triangles carried along the
+       flow with SMIL animateMotion (rotate="auto" orients them to the curve
+       tangent in the direction of travel); negative begin values spread the
+       train so arrows are always visible mid-link. -->
+  {#each watcherMatches as m, mi (m.row.id)}
+    {@const mag = 8 + mi * 7}
+    {#each [
+      ...(m.dir0 ? [{ d: geom.offsetPath(mag, false), key: "fwd" }] : []),
+      ...(m.dir1 ? [{ d: geom.offsetPath(-mag, true), key: "rev" }] : []),
+    ] as flow (flow.key)}
       <path
-        class="watcher-dash dash-fwd"
-        d={geom.path}
+        class="watcher-dash"
+        d={flow.d}
         style={`stroke:${m.row.color};stroke-dasharray:10 8`}
       />
-    {/if}
-    {#if m.dir1}
-      <path
-        class="watcher-dash dash-rev"
-        d={geom.path}
-        style={`stroke:${m.row.color};stroke-dasharray:${m.dir0 ? "4 14" : "10 8"}`}
-      />
-    {/if}
+      {#each [0, -0.8, -1.6] as begin (begin)}
+        <polygon class="watcher-arrow" points="-1,-4.5 9,0 -1,4.5" fill={m.row.color}>
+          <animateMotion
+            dur="2.4s"
+            repeatCount="indefinite"
+            rotate="auto"
+            path={flow.d}
+            begin={`${begin}s`}
+          />
+        </polygon>
+      {/each}
+    {/each}
   {/each}
 
   {#if info.source}
@@ -256,7 +286,7 @@
         onpointerleave={() => (hot = false)}
         role="presentation"
       >
-        <span class="chip-detail">{info.source.name}</span><span class="chip-sep">&nbsp;</span>{info.source.iface}{#if glowing && traffic}<span class="chip-fps"> · {traffic.fps.toFixed(1)} fps</span>{/if}
+        <span class="chip-detail">{info.source.name}</span><span class="chip-sep">&nbsp;</span>{info.source.iface}
       </span>
     </EdgeLabel>
   {/if}
@@ -320,10 +350,6 @@
   :global(.svelte-flow__edge .floating-edge.is-traffic) {
     stroke: color-mix(in oklab, var(--accent) 80%, var(--cable));
   }
-  .chip-fps {
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-  }
 
   /* R2.3 — link hover glow. `is-hot` is set when the edge OR either chip is
      hovered. The whole cable glows in the accent and thickens slightly. */
@@ -372,38 +398,36 @@
     padding: 0;
     overflow: visible;
   }
-  /* Network Watcher — dashed directional overlays. stroke + dasharray come
-     inline (per-row colour / per-direction pattern); the animation loops the
-     dashoffset over exactly two dash periods (both patterns sum to 18px, so a
-     36px offset per cycle keeps either pattern seamless). Forward = decreasing
-     offset = dashes march source→target (endpoints[0] → endpoints[1]). */
+  /* Network Watcher — dashed directional flows, offset beside the cable
+     (offsetPath). stroke colour comes inline per row. One march animation
+     serves both directions: the reverse direction's PATH is reversed, so a
+     decreasing dashoffset always moves dashes in the direction of travel. The
+     loop covers exactly two 18px dash periods (36px) so it's seamless. */
   .watcher-dash {
     fill: none;
     stroke-width: 2.5;
     stroke-linecap: round;
-    opacity: 0.9;
+    opacity: 0.85;
     pointer-events: none;
+    animation: watcher-march 0.9s linear infinite;
   }
-  .dash-fwd {
-    animation: watcher-march-fwd 0.9s linear infinite;
-  }
-  .dash-rev {
-    animation: watcher-march-rev 0.9s linear infinite;
-  }
-  @keyframes watcher-march-fwd {
+  @keyframes watcher-march {
     to {
       stroke-dashoffset: -36;
     }
   }
-  @keyframes watcher-march-rev {
-    to {
-      stroke-dashoffset: 36;
-    }
+  /* Direction arrowheads carried by SMIL animateMotion along the flow path. */
+  .watcher-arrow {
+    pointer-events: none;
   }
   @media (prefers-reduced-motion: reduce) {
-    .dash-fwd,
-    .dash-rev {
+    .watcher-dash {
       animation: none;
+    }
+    /* SMIL ignores the media query, so hide the moving arrows entirely —
+       the static offset dashes still mark which links match. */
+    .watcher-arrow {
+      display: none;
     }
   }
 
