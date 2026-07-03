@@ -1,0 +1,107 @@
+# docker/compose.yml — run the iolab runtime as a container instead of the
+# WSL2/VMware appliance. Build context is the REPO ROOT (not docker/),
+# because the Dockerfile COPYs the prebuilt supervisor binary from
+# ../supervisor/bin/ — see docker/README.md for the full build+run sequence.
+#
+# Quick start (from the repo root):
+#   bash build-release.sh
+#   docker compose -f docker/compose.yml up -d --build
+#   # browse to http://localhost:4001
+#
+# SECURITY WARNING: the supervisor's :4001 GUI/WS bridge, telnet consoles
+# (9000-9999), and Wireshark capture tees (5500-6499) have NO
+# authentication whatsoever (see supervisor/README.md / docs/protocol.md —
+# this is a single-tenant, localhost-oriented control plane by design, the
+# same posture as the WSL2/VMware appliance it mirrors). Only publish these
+# ports on a trusted LAN or behind an SSH/WireGuard tunnel. NEVER expose
+# this compose file's ports directly to the public internet.
+services:
+  iolab:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: iolab:latest
+    container_name: iolab
+
+    # Pinned hostname: NOT load-bearing for hostid (see entrypoint.sh — the
+    # hostid/iourc pair is persisted in the state volume below, independent
+    # of hostname), but kept anyway because the iourc file's own content is
+    # keyed "iolab = <key>" and IOL's license check compares that name
+    # against the running hostname, same as the appliance
+    # (runtime/README.md "First boot: iourc" — three places the hostname
+    # 'iolab' has to stay in sync; this is the container's equivalent of
+    # that pin, done in one place instead of three).
+    hostname: iolab
+
+    # NET_ADMIN: required for the NAT node's `sudo -n ip/iptables/sysctl`
+    # calls (tap creation, MASQUERADE/FORWARD rules, ip_forward toggle) and
+    # for entrypoint.sh's own prestart tap/macvtap cleanup + sysctl calls.
+    # No other capabilities are added — this is not a privileged container.
+    cap_add:
+      - NET_ADMIN
+
+    # /dev/net/tun: required for tap device creation (the NAT node's
+    # extnet bridge), same device the appliance's kernel exposes natively.
+    devices:
+      - /dev/net/tun
+
+    ports:
+      # ws-addr: GUI (embedded Svelte bundle) + WS control/console bridge.
+      # supervisor/cmd/supervisor/main.go default -ws-addr flag; entrypoint.sh
+      # binds 0.0.0.0:4001 explicitly (mirrors iolab-supervisor.service).
+      - "4001:4001"
+      # Console range: telnet <host>:<port> per node. Verified against
+      # supervisor/internal/server/server.go:100 —
+      #   consolePorts: node.NewPortAllocator(9000, 1000)
+      # i.e. base 9000, count 1000 -> ports 9000-9999 inclusive-exclusive
+      # (allocator's `max = base + count`, loop is `port < max`, so the
+      # usable range is exactly 9000-9999).
+      - "9000-9999:9000-9999"
+      # Capture range: wireshark -k -i TCP@<host>:<port> per link. Verified
+      # against supervisor/internal/server/server.go:101 —
+      #   capturePorts: node.NewPortAllocator(5500, 1000)
+      # i.e. 5500-6499.
+      - "5500-6499:5500-6499"
+      # NOT published: the relay/UDP port range (server.go:102 —
+      # node.NewPortAllocator(10000, 20000), i.e. 10000-29999). Per
+      # docs/protocol.md, these are the inter-node UDP tunnel endpoints the
+      # supervisor's own relay process uses internally — loopback-only
+      # traffic between the supervisor and its spawned IOL/VPCS children,
+      # never dialed from the Windows/GUI side. Publishing 20000 host ports
+      # would be pointless and would blow past most Docker Desktop / OS
+      # ephemeral-port and iptables-rule budgets for no benefit.
+
+    volumes:
+      # Uploaded IOL/VPCS images (.bin/.iol) — durable across container
+      # recreates and image upgrades. Large; a named volume avoids bind-mount
+      # perf/permission quirks on Docker Desktop (Windows/Mac).
+      - iolab-images:/opt/iolab/images
+      # Durable lab-document store (-labs-dir). Seed labs materialize here
+      # on first connect when empty, same as the appliance.
+      - iolab-labs:/opt/iolab/labs
+      # hostid seed + generated iourc license, persisted here by
+      # entrypoint.sh so BOTH survive `docker compose down && up`, not just
+      # in-place restarts — see entrypoint.sh's Step 3 comment for why this
+      # matters (container IP changes across recreates, and gethostid(3)
+      # falls back to an IP-derived value when /etc/hostid is absent).
+      - iolab-state:/opt/iolab/state
+      # NOT a named volume: /opt/iolab/run. It's scratch state (sockets,
+      # NETMAPs, nvram scratch for in-progress labs) that entrypoint.sh
+      # sweeps on every start anyway — same non-durable treatment as the
+      # appliance's ExecStartPre cleanup.
+
+    # Sizing note: each running IOL node is roughly 1 GB of guest RAM (same
+    # figure the appliance docs use). Size this for the number of
+    # concurrent lab nodes you expect, e.g. a 6-node lab wants a good
+    # 6-8 GB budget. No default limit is set here — uncomment and tune:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 8g
+
+    restart: unless-stopped
+
+volumes:
+  iolab-images:
+  iolab-labs:
+  iolab-state:
