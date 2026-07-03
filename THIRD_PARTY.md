@@ -1,0 +1,101 @@
+# Third-party software distributed with iolab
+
+iolab bundles the following third-party components. Their licenses are their
+own; this file records what we ship, from where, pinned to an exact version and
+checksum, and how we comply with each license.
+
+---
+
+## QEMU (Windows build) — the `qemu` compatibility backend
+
+The Windows launcher (`tools/iolab-launcher`) ships a trimmed copy of QEMU so the
+`qemu` backend (software-emulated TCG, see `docs/providers.md` and
+`runtime/qemu-compat.md`) works on any Windows machine with zero prerequisites.
+
+### Pinned source
+
+| Field | Value |
+|---|---|
+| Upstream | Stefan Weil's official QEMU-for-Windows builds — <https://qemu.weilnetz.de/w64/> |
+| File | `qemu-w64-setup-20260501.exe` |
+| Full URL | <https://qemu.weilnetz.de/w64/qemu-w64-setup-20260501.exe> |
+| QEMU version | 11.0.0 release build (reports `11.0.50 (v11.0.0-12631-g54e84cdc7a)`) |
+| Installer size | 190 MB (198,760,632 bytes) |
+| **SHA-256 (installer, verified by download)** | `a8b29572afb4c6ad024b7de129c81033e9fd191b9e054e3a52ea0bed24ac19ef` |
+
+`qemu.weilnetz.de` is the canonical upstream-linked Windows build (referenced
+from qemu.org's download page). Note: recent installers are Authenticode-signed
+with an **expired certificate** — Windows SmartScreen may warn on the installer.
+This does not affect the extracted binaries we redistribute (we extract, we do
+not run the installer on user machines).
+
+### How the redistributable is produced (extraction, not install)
+
+The upstream `.exe` is an NSIS installer. We do **not** run it on user machines;
+we extract it once and ship a trimmed tree:
+
+```sh
+# 1. verify the pinned installer
+sha256sum qemu-w64-setup-20260501.exe
+#   -> a8b29572afb4c6ad024b7de129c81033e9fd191b9e054e3a52ea0bed24ac19ef
+
+# 2. extract with 7-Zip (NSIS archive)
+"C:\Program Files\7-Zip\7z.exe" x -oqemu-extract qemu-w64-setup-20260501.exe
+
+# 3. trim to the headless x86_64 target:
+#    - keep  qemu-system-x86_64.exe  + ALL *.dll (the runtime DLL set)
+#    - keep  share/keymaps/  and the x86/i386 firmware blobs
+#            (bios*.bin, vgabios*.bin, kvmvapic.bin, linuxboot*/multiboot*/pvh,
+#             *-virtio.rom + pxe-*.rom, edk2-i386/x86_64 *.fd)
+#    - drop  the other 55 qemu-system-*.exe targets, share/doc, and the
+#            non-x86 firmware (openbios-*, edk2-aarch64/arm, dtb, ...)
+```
+
+Result: a `qemu/` directory of ~175 MB. Verified standalone on a clean box:
+`qemu-system-x86_64.exe -version` and `-accel help` (lists `tcg` + `whpx`) both
+run, so the DLL set is complete.
+
+### Layout shipped next to the launcher exe
+
+```
+iolab-launcher.exe
+iolab-disk.qcow2            (the runtime disk — a separate release asset, see below)
+qemu/
+  qemu-system-x86_64.exe
+  *.dll                     (the runtime DLLs)
+  share/
+    keymaps/
+    bios*.bin, vgabios*.bin, kvmvapic.bin, linuxboot*.bin, ...
+```
+
+The launcher looks for `qemu/qemu-system-x86_64.exe` and `iolab-disk.qcow2`
+relative to its own exe (`--qemu` / `--disk` override for dev). QEMU resolves its
+BIOS/keymap data from the `share/` dir next to its exe automatically.
+
+The `qemu/` directory and `*.qcow2` are **git-ignored** (see
+`tools/iolab-launcher/.gitignore`) — they are release-time assets staged into the
+bundle, never committed to the repo.
+
+### License / GPL compliance
+
+QEMU is licensed under the **GNU GPL v2** (with some components under LGPL v2.1
+and other compatible licenses). We redistribute unmodified upstream binaries.
+
+- The upstream binaries carry their license texts (`COPYING`, `COPYING.LIB`) in
+  the installer; include a copy of `COPYING`/`COPYING.LIB` in the shipped `qemu/`
+  directory (or link to them from the release notes) when assembling a release.
+- **Written offer for source:** the corresponding source for this exact build is
+  published by the upstream packager at the QEMU source page,
+  <https://www.qemu.org/download/#source> (release 11.0.0), mirrored from
+  <https://qemu.weilnetz.de/>. iolab distributes QEMU **unmodified**; the source
+  offer therefore points at upstream. Include this URL in the release notes /
+  About page alongside the version above so the offer travels with the binary.
+
+### The iolab runtime disk (`iolab-disk.qcow2`)
+
+Not third-party — it is built from `runtime/` (Debian-slim rootfs + the iolab
+supervisor) by `runtime/pack-qemu.sh`. It contains **no Cisco software**; IOL
+images are supplied by the user at runtime via the GUI. Debian's own components
+inside the rootfs are under their respective licenses (Debian is DFSG-free);
+this is the same rootfs the WSL2 and VMware artifacts ship, already covered by
+the runtime build.

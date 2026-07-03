@@ -1,0 +1,7 @@
+# Bundled QEMU Windows build (staged for local smoke; distributed via release asset)
+qemu/
+# Disk images (release assets, never committed)
+*.qcow2
+# Built launcher exe
+iolab-launcher.exe
+*.exe
