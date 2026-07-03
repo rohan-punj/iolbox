@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  iolab-appliance.ovf.tmpl - hand-written OVF descriptor for the iolab runtime
+  appliance, templated by runtime/pack-ova.sh.
+
+  Substituted tokens (envsubst-style @@NAME@@):
+    @@VMDK_FILENAME@@   basename of the streamOptimized vmdk inside the OVA
+    @@VMDK_FILE_SIZE@@  ovf:size  - actual bytes of the compressed vmdk file
+    @@VMDK_CAPACITY@@   ovf:capacity - virtual disk size in BYTES (16 GiB)
+    @@VMDK_POPULATED@@  ovf:populatedSize - bytes actually in use (uncompressed)
+    @@PRODUCT_VERSION@@ human version string for the ProductSection
+    @@VSYS_ID@@         VirtualSystem id / displayName (e.g. iolab-appliance-1.2.3)
+
+  Design notes (see pack-ova.sh header + the OVA doc snippet for the full
+  rationale):
+    * virtualSystemType list carries vmx-14 FIRST, ladder capped at vmx-17. HW
+      version 14 (ESXi 6.7 / Workstation 14+) is the portability sweet spot:
+      VirtualBox, VMware Workstation, and modern ESXi all import it. The ladder
+      is capped at vmx-17 on purpose: ovftool picks the MAX advertised family
+      when converting to a bare .vmx, so listing vmx-19 made it emit
+      virtualhw.version="19"/"99" which older Workstation builds refuse to open.
+      vmx-17 (Workstation 16 / ESXi 7.0) is broadly accepted; File>Import in the
+      GUI re-maps down as needed regardless.
+    * lsilogic SCSI controller (ResourceType 6, subtype lsilogic) - the disk
+      controller every one of the three targets maps sensibly. The in-guest
+      Debian kernel ships the mptspi driver (MODULES=most), so root-on-scsi
+      works without an initramfs rebuild.
+    * Two E1000e NICs (ResourceSubType E1000e), on OVF Networks "control" and
+      "nat", so an importer's network-mapping UI shows meaningful names rather
+      than "Network 1 / Network 2". VMware maps "control"->host-only,
+      "nat"->NAT sensibly; VirtualBox lets the user pick per-adapter at import.
+    * NO .mf manifest ships in the OVA (pack-ova.sh omits it): a manifest whose
+      SHA digests do not match after any touch-up hard-fails import, and it buys
+      nothing here.
+    * NO ovf:vmw config extensions: ovftool emits a parse WARNING for vmw:Config
+      keys when converting to a bare .vmx, and VirtualBox ignores the vmw:
+      namespace entirely, so they buy nothing. Power-on niceties (autoAnswer)
+      belong in the consumer's .vmx, not the portable descriptor.
+-->
+<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
+          xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
+          xmlns:vmw="http://www.vmware.com/schema/ovf"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <References>
+    <File ovf:href="@@VMDK_FILENAME@@" ovf:id="file1" ovf:size="@@VMDK_FILE_SIZE@@"/>
+  </References>
+  <DiskSection>
+    <Info>Virtual disk information</Info>
+    <Disk ovf:capacity="@@VMDK_CAPACITY@@"
+          ovf:capacityAllocationUnits="byte"
+          ovf:diskId="vmdisk1"
+          ovf:fileRef="file1"
+          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
+          ovf:populatedSize="@@VMDK_POPULATED@@"/>
+  </DiskSection>
+  <NetworkSection>
+    <Info>The list of logical networks</Info>
+    <Network ovf:name="control">
+      <Description>Control/management plane - reach the iolab GUI at http://&lt;vm-ip&gt;:4001, native telnet consoles and Wireshark capture. Map to a host-only / internal network.</Description>
+    </Network>
+    <Network ovf:name="nat">
+      <Description>NAT node outbound path - lab traffic is MASQUERADEd out through the default route this NIC provides. Map to a NAT network.</Description>
+    </Network>
+  </NetworkSection>
+  <VirtualSystem ovf:id="@@VSYS_ID@@">
+    <Info>iolab runtime appliance</Info>
+    <Name>@@VSYS_ID@@</Name>
+    <OperatingSystemSection ovf:id="96" vmw:osType="debian12_64Guest">
+      <Info>The operating system installed</Info>
+      <Description>Debian GNU/Linux 12 (64-bit)</Description>
+    </OperatingSystemSection>
+    <ProductSection>
+      <Info>iolab runtime appliance product information</Info>
+      <Product>iolab runtime appliance</Product>
+      <Vendor>iolab</Vendor>
+      <Version>@@PRODUCT_VERSION@@</Version>
+      <ProductUrl>https://github.com/</ProductUrl>
+    </ProductSection>
+    <AnnotationSection>
+      <Info>Annotation</Info>
+      <Annotation>iolab runtime appliance - autostarts the iolab supervisor; GUI at http://&lt;vm-ip&gt;:4001 reached from the host over the "control" (host-only) NIC. No Cisco software included; users supply their own .iol/.bin via the GUI. WARNING: the GUI has no authentication - keep the control network host-only / LAN-only, never bridge it to an untrusted network. Minimum to run: 2 GB RAM / 1 vCPU (one small IOL node); defaults 4 GB / 2 vCPU.</Annotation>
+    </AnnotationSection>
+    <VirtualHardwareSection>
+      <Info>Virtual hardware requirements</Info>
+      <System>
+        <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
+        <vssd:InstanceID>0</vssd:InstanceID>
+        <vssd:VirtualSystemIdentifier>@@VSYS_ID@@</vssd:VirtualSystemIdentifier>
+        <vssd:VirtualSystemType>vmx-14 vmx-15 vmx-16 vmx-17 vmx-13 vmx-12 vmx-11</vssd:VirtualSystemType>
+      </System>
+      <Item>
+        <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
+        <rasd:Description>Number of Virtual CPUs</rasd:Description>
+        <rasd:ElementName>2 virtual CPU(s)</rasd:ElementName>
+        <rasd:InstanceID>1</rasd:InstanceID>
+        <rasd:ResourceType>3</rasd:ResourceType>
+        <rasd:VirtualQuantity>2</rasd:VirtualQuantity>
+      </Item>
+      <Item>
+        <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
+        <rasd:Description>Memory Size</rasd:Description>
+        <rasd:ElementName>4096 MB of memory</rasd:ElementName>
+        <rasd:InstanceID>2</rasd:InstanceID>
+        <rasd:ResourceType>4</rasd:ResourceType>
+        <rasd:VirtualQuantity>4096</rasd:VirtualQuantity>
+      </Item>
+      <Item>
+        <rasd:Address>0</rasd:Address>
+        <rasd:Description>SCSI Controller</rasd:Description>
+        <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
+        <rasd:InstanceID>3</rasd:InstanceID>
+        <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
+        <rasd:ResourceType>6</rasd:ResourceType>
+      </Item>
+      <Item>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:ElementName>Hard Disk 1</rasd:ElementName>
+        <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
+        <rasd:InstanceID>4</rasd:InstanceID>
+        <rasd:Parent>3</rasd:Parent>
+        <rasd:ResourceType>17</rasd:ResourceType>
+      </Item>
+      <Item>
+        <rasd:AddressOnParent>7</rasd:AddressOnParent>
+        <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
+        <rasd:Connection>control</rasd:Connection>
+        <rasd:Description>E1000e ethernet adapter on "control"</rasd:Description>
+        <rasd:ElementName>Ethernet 1</rasd:ElementName>
+        <rasd:InstanceID>5</rasd:InstanceID>
+        <rasd:ResourceSubType>E1000e</rasd:ResourceSubType>
+        <rasd:ResourceType>10</rasd:ResourceType>
+      </Item>
+      <Item>
+        <rasd:AddressOnParent>8</rasd:AddressOnParent>
+        <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
+        <rasd:Connection>nat</rasd:Connection>
+        <rasd:Description>E1000e ethernet adapter on "nat"</rasd:Description>
+        <rasd:ElementName>Ethernet 2</rasd:ElementName>
+        <rasd:InstanceID>6</rasd:InstanceID>
+        <rasd:ResourceSubType>E1000e</rasd:ResourceSubType>
+        <rasd:ResourceType>10</rasd:ResourceType>
+      </Item>
+    </VirtualHardwareSection>
+  </VirtualSystem>
+</Envelope>
