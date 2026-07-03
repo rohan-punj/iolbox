@@ -1,0 +1,39 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "iolab-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "app",
+        "dev"
+      ],
+      "port": 1420
+    },
+    {
+      "name": "iolab-prod-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "app",
+        "preview",
+        "--",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
+      "port": 4173
+    },
+    {
+      "name": "iolab-vm-proxy",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        ".claude/vm-proxy.mjs"
+      ],
+      "port": 4174
+    }
+  ]
+}
