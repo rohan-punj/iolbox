@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 )
 
 // fakePty is an in-memory stand-in for the pty master: the test writes node
@@ -331,5 +333,230 @@ func TestHubSendsTitleEscapeOnAttach(t *testing.T) {
 	// The title must come after the preamble and before any pty data.
 	if bytes.Index(got, wantTitle) < len(telnetPreamble) {
 		t.Fatalf("title escape must follow the telnet preamble: %q", got)
+	}
+}
+
+// --- v0.3.0 Phase 1/2: in-process Subscribe API + single-Negotiator tests ---
+
+// TestHubSubscribeReceivesBroadcast: an in-process subscriber (no socket) gets
+// the same decoded broadcast bytes a TCP client would, with no telnet preamble
+// (Subscribe never advertises WILL ECHO/WILL SGA — there's no telnet peer to
+// negotiate with).
+func TestHubSubscribeReceivesBroadcast(t *testing.T) {
+	pty, outW, _ := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	sub := h.Subscribe()
+	if sub == nil {
+		t.Fatal("Subscribe returned nil on a live hub")
+	}
+	defer sub.Unsubscribe()
+
+	if _, err := outW.Write([]byte("R1#")); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case chunk, ok := <-sub.Out:
+		if !ok {
+			t.Fatal("Out closed unexpectedly")
+		}
+		if bytes.Contains(chunk, []byte{telnet.IAC}) {
+			t.Fatalf("in-process subscriber must never see telnet preamble/IAC bytes: %q", chunk)
+		}
+		if !bytes.Contains(chunk, []byte("R1#")) {
+			t.Fatalf("expected pty output, got %q", chunk)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for broadcast on Subscription.Out")
+	}
+}
+
+// TestHubSubscribeReplaysRing: a subscriber attaching after output was already
+// produced gets the replay ring first, exactly like a TCP client.
+func TestHubSubscribeReplaysRing(t *testing.T) {
+	pty, outW, _ := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	if _, err := outW.Write([]byte("booted\r\nR1>")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "ring fill", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.ring) > 0
+	})
+
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+
+	select {
+	case chunk := <-sub.Out:
+		if !bytes.Contains(chunk, []byte("booted")) {
+			t.Fatalf("replay missing earlier output: %q", chunk)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for replay")
+	}
+}
+
+// TestHubSubscribeWriteReachesPty confirms a subscription's Write goes to the
+// pty exactly like a TCP client's decoded keystrokes, serialized through the
+// same write mutex.
+func TestHubSubscribeWriteReachesPty(t *testing.T) {
+	pty, _, inR := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+
+	// The fake pty's Write is a synchronous io.Pipe rendezvous (like the real
+	// pty writes exercised by the TCP-client tests above, where the write
+	// happens on the hub's OWN reader goroutine, not the test's) — so Write
+	// must run concurrently with the Read that unblocks it.
+	writeErr := make(chan error, 1)
+	go func() { writeErr <- sub.Write([]byte("show version\r")) }()
+
+	buf := make([]byte, 32)
+	n, err := inR.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "show version\r" {
+		t.Fatalf("pty received %q", buf[:n])
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatalf("sub.Write: %v", err)
+	}
+}
+
+// TestHubSubscribeUnsubscribeClosesOut confirms Unsubscribe closes Out so a
+// `for chunk := range sub.Out` consumer terminates instead of blocking
+// forever.
+func TestHubSubscribeUnsubscribeClosesOut(t *testing.T) {
+	pty, _, _ := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	sub := h.Subscribe()
+	sub.Unsubscribe()
+
+	select {
+	case _, ok := <-sub.Out:
+		if ok {
+			t.Fatal("expected Out to be closed, got a value")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Out did not close after Unsubscribe")
+	}
+}
+
+// TestHubSubscribeAfterShutdownReturnsNil: Subscribe on an already-shut-down
+// hub (mirrors attach's post-shutdown-connection-refused behavior) returns
+// nil rather than a subscription whose Out never fires.
+func TestHubSubscribeAfterShutdownReturnsNil(t *testing.T) {
+	pty, _, _ := newFakePty()
+	h := newConsoleHub(pty, "")
+	h.shutdown()
+
+	if sub := h.Subscribe(); sub != nil {
+		t.Fatal("expected nil Subscription from a shut-down hub")
+	}
+}
+
+// TestHubOneNegotiatorSharedAcrossTCPClients is the core Phase 1 regression
+// test: TWO TCP clients attach to the SAME hub, and the hub answers each
+// one's WILL/DO negotiation through the SAME underlying Negotiator instance
+// (h.neg) — not one each. We prove this indirectly (h.neg is unexported)
+// by exploiting RFC 1143's Q-method idempotency, the exact mechanism
+// documented in internal/telnet/iac.go: if two independent Negotiators were
+// in play, each client's own WILL/DO negotiation would be answered
+// independently and every client would see a full negotiation reply
+// sequence for ITS OWN option offers. With one shared Negotiator, a SECOND
+// client's WILL SGA (an option the hub already accepted from the FIRST
+// client) is recognized as already-on and produces NO further reply to that
+// second client on that option — the state transitioned once, globally, not
+// per-connection.
+func TestHubOneNegotiatorSharedAcrossTCPClients(t *testing.T) {
+	pty, _, inR := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	// Confirm there is exactly one Negotiator instance on the hub (not a
+	// per-client map or slice) — the structural invariant Phase 1 introduces.
+	if h.neg == nil {
+		t.Fatal("hub must own a Negotiator instance")
+	}
+
+	c1 := attachPipe(h)
+	defer c1.Close()
+	c2 := attachPipe(h)
+	defer c2.Close()
+
+	// Drain each client's preamble first.
+	_ = readWithDeadline(t, c1, 200*time.Millisecond)
+	_ = readWithDeadline(t, c2, 200*time.Millisecond)
+
+	// c1 offers WILL SGA — the hub's shared Negotiator has ALREADY set
+	// remoteOn[SGA]=true when it sent its own WILL SGA in the preamble... but
+	// preamble WILL is US offering, not the peer. To exercise the shared
+	// remoteOn/localOn transition tracked by the SAME instance across
+	// connections, send the identical WILL SGA from c1, then from c2: the
+	// first transitions the state (hub replies DO SGA), the second is a
+	// no-op replay of a state the hub already considers "on" and gets no
+	// reply — proving one shared state machine, not two independent ones.
+	willSGA := []byte{telnet.IAC, telnet.WILL, telnet.OptSGA}
+	if _, err := c1.Write(willSGA); err != nil {
+		t.Fatal(err)
+	}
+	reply1 := readWithDeadline(t, c1, 300*time.Millisecond)
+	if !bytes.Equal(reply1, []byte{telnet.IAC, telnet.DO, telnet.OptSGA}) {
+		t.Fatalf("c1's WILL SGA should get a fresh DO SGA reply, got %q", reply1)
+	}
+
+	if _, err := c2.Write(willSGA); err != nil {
+		t.Fatal(err)
+	}
+	reply2 := readWithDeadline(t, c2, 300*time.Millisecond)
+	if len(reply2) != 0 {
+		t.Fatalf("c2's WILL SGA replays an ALREADY-ON global state (shared Negotiator) — expected NO reply, got %q", reply2)
+	}
+
+	_ = inR // pty input side unused in this test; keeping the handle for symmetry with other hub tests
+}
+
+// TestHubMixedTCPAndInProcessSubscribers confirms a TCP client and an
+// in-process Subscription attached to the same node both receive the same
+// broadcast output concurrently (the fan-out property predates Phase 1/2;
+// this test pins it against the new mixed-subscriber-type hub).
+func TestHubMixedTCPAndInProcessSubscribers(t *testing.T) {
+	pty, outW, _ := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	tcp := attachPipe(h)
+	defer tcp.Close()
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+
+	if _, err := outW.Write([]byte("R1#")); err != nil {
+		t.Fatal(err)
+	}
+
+	gotTCP := collectUntil(t, tcp, []byte("R1#"))
+	if !bytes.Contains(gotTCP, []byte("R1#")) {
+		t.Fatalf("TCP client missing broadcast: %q", gotTCP)
+	}
+
+	select {
+	case chunk := <-sub.Out:
+		if !bytes.Contains(chunk, []byte("R1#")) {
+			t.Fatalf("in-process subscriber missing broadcast: %q", chunk)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-process subscriber never received broadcast")
 	}
 }
