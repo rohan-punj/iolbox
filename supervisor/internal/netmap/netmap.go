@@ -32,6 +32,14 @@ import (
 // PortsPerAdapter is the number of ports in one IOL adapter group.
 const PortsPerAdapter = 16
 
+// PortsPerGroup is the number of interfaces IOL actually exposes per adapter
+// group (confirmed on real IOL 17.18.02: launching with "-e 1" produced
+// exactly e0/0..e0/3, and the default serial group count produced s0/0..s0/3
+// and s1/0..s1/3 — 4 ports per group). This is distinct from PortsPerAdapter
+// (16), which is only the flat-index stride used by Iface.Index() for the
+// UDP/iouyap bridge path; IOL itself never populates ports 4..15 of a group.
+const PortsPerGroup = 4
+
 // MaxIOLInstance is IOL's highest valid instance id. IOL accepts instance ids
 // 1..1024 (it refuses 0), so a lab node.id (schema minimum 0) must be mapped to
 // this range before it is used as the IOL instance id.
@@ -235,6 +243,81 @@ func bridgedLine(be BridgedEndpoint) (string, bool) {
 	}
 	real := Entry{NodeID: be.NodeID, Iface: ifc}
 	return fmt.Sprintf("%s %d:0/0", real.String(), be.PseudoInstance), true
+}
+
+// IfacesForCounts returns every interface a node with ethGroups Ethernet
+// adapter groups and serialGroups Serial adapter groups exposes at boot, in
+// deterministic order: all Ethernet interfaces first (adapter-major,
+// port-minor), then all Serial interfaces (same order). Each group contributes
+// exactly PortsPerGroup (4) interfaces, ports 0..PortsPerGroup-1, matching
+// IOL's real boot-time behavior (see PortsPerGroup doc comment). A
+// non-positive count for either type yields no interfaces of that type.
+//
+// Examples: IfacesForCounts(1, 0) -> [e0/0, e0/1, e0/2, e0/3].
+// IfacesForCounts(2, 1) -> e0/0..e0/3, e1/0..e1/3, s0/0..s0/3.
+func IfacesForCounts(ethGroups, serialGroups int) []Iface {
+	var out []Iface
+	for a := 0; a < ethGroups; a++ {
+		for p := 0; p < PortsPerGroup; p++ {
+			out = append(out, Iface{Type: Ethernet, Adapter: a, Port: p})
+		}
+	}
+	for a := 0; a < serialGroups; a++ {
+		for p := 0; p < PortsPerGroup; p++ {
+			out = append(out, Iface{Type: Serial, Adapter: a, Port: p})
+		}
+	}
+	return out
+}
+
+// StaticEntry is one interface's static NETMAP wiring: a node's own interface
+// pointed at its own fixed pseudo-instance (its own tap), independent of
+// whether any link has been drawn to it. This is the fix for the
+// topology-dependent bug in Build: IOL reads NETMAP once at boot, so every
+// interface needs a line at boot time, not just the ones with a link already
+// drawn. "Drawing a link" later becomes a runtime bridge-attach between two
+// pseudo-instances' taps, handled outside this package.
+//
+// InstanceID is the IOL *instance* id (already InstanceID(nodeID), see the
+// InstanceID helper), NOT a raw lab node id — BuildStatic is a pure formatter
+// and does not perform that mapping itself, so callers must pass instance ids.
+type StaticEntry struct {
+	// InstanceID is the IOL instance id that owns Iface (InstanceID(nodeID)).
+	InstanceID int
+	// Iface is the node's own interface this line wires.
+	Iface Iface
+	// PseudoInstance is the reserved instance id that owns this interface's
+	// own tap (iouyap binds /tmp/netio<uid>/<PseudoInstance>).
+	PseudoInstance int
+}
+
+// staticLine renders one static NETMAP line:
+//
+//	<InstanceID>:<adapter>/<port> <PseudoInstance>:0/0
+//
+// This is the same wire format as bridgedLine; the difference is purely in
+// intent (every interface gets one, at boot, regardless of links) rather than
+// in the line's shape. Unlike bridgedLine/Entry.String, e.InstanceID is used
+// as-is (it is already an IOL instance id, not a raw node id needing the
+// InstanceID(nodeID) mapping), so this does not go through Entry at all.
+func staticLine(e StaticEntry) string {
+	return fmt.Sprintf("%d:%d/%d %d:0/0", e.InstanceID, e.Iface.Adapter, e.Iface.Port, e.PseudoInstance)
+}
+
+// BuildStatic produces the static NETMAP file content from a flat list of
+// StaticEntry: one line per entry, in the same
+// "<InstanceID>:<adapter>/<port> <PseudoInstance>:0/0" format Build's bridged
+// lines use, sorted for deterministic output. Returns "" for no entries.
+func BuildStatic(entries []StaticEntry) string {
+	lines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		lines = append(lines, staticLine(e))
+	}
+	sort.Strings(lines)
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // Build produces the NETMAP file content from native IOL-to-IOL p2p pairings and
