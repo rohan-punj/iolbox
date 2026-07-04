@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -903,6 +904,28 @@ func (s *Server) handleConfigExtract(raw json.RawMessage) (any, error) {
 		out.Configs = append(out.Configs, protocol.NodeConfig{Node: id, StartupConfig: cfg})
 	}
 	return out, nil
+}
+
+// handlePainterCollect scrapes live protocol-decision state (STP/OSPF/EIGRP/BGP)
+// from the running IOL nodes and returns a canvas-mappable result for the
+// Topology Painter overlay. The heavy lifting (console scrape + parse) is in the
+// platform-specific painterCollect (Linux does the real work; the Windows stub
+// reports not-running).
+func (s *Server) handlePainterCollect(raw json.RawMessage) (any, error) {
+	var args protocol.PainterArgs
+	if err := decode(raw, &args); err != nil {
+		return nil, err
+	}
+	switch args.Proto {
+	case "stp", "ospf", "eigrp", "bgp":
+	default:
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "painter.collect: unknown proto %q (want stp|ospf|eigrp|bgp)", args.Proto)
+	}
+	ll, err := s.currentLab(args.LabID)
+	if err != nil {
+		return nil, err
+	}
+	return s.painterCollect(context.Background(), ll, args)
 }
 
 func (s *Server) handleStatus(raw json.RawMessage) (any, error) {

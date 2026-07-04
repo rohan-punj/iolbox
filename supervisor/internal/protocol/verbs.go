@@ -239,6 +239,135 @@ type ConfigResult struct {
 	Configs []NodeConfig `json:"configs"`
 }
 
+// --- painter (topology-decision overlays) ---
+
+// PainterArgs targets the painter.collect verb: which protocol to scrape and,
+// for the routing protocols, the destination to trace toward.
+type PainterArgs struct {
+	LabID string `json:"labId"`
+	// Proto is one of "stp", "ospf", "eigrp", "bgp".
+	Proto string `json:"proto"`
+	// Dest is the routing destination (a prefix "10.0.0.0/24", a host
+	// "10.0.0.1", or a nodeId reference the caller has resolved to an address).
+	// Ignored for STP. Optional for OSPF/EIGRP (path highlight only when set).
+	Dest string `json:"dest,omitempty"`
+	// Nodes optionally restricts the scrape to these node ids; empty = all
+	// running IOL nodes in the lab.
+	Nodes []int `json:"nodes,omitempty"`
+}
+
+// PainterNode is one node's painter result. Exactly one of the protocol-shaped
+// fields is populated, matching the requested proto. A node that is not running,
+// has no data, or errored carries Running=false / an empty payload plus a
+// human-readable Hint (never fabricated data).
+type PainterNode struct {
+	Node    int    `json:"node"`
+	Running bool   `json:"running"`
+	Hint    string `json:"hint,omitempty"`
+
+	// STP result (proto == "stp").
+	STP *PainterSTP `json:"stp,omitempty"`
+	// OSPF result (proto == "ospf").
+	OSPF *PainterOSPF `json:"ospf,omitempty"`
+	// EIGRP result (proto == "eigrp").
+	EIGRP *PainterEIGRP `json:"eigrp,omitempty"`
+	// BGP result (proto == "bgp").
+	BGP *PainterBGP `json:"bgp,omitempty"`
+}
+
+// PainterResult is the painter.collect response: one entry per targeted node,
+// plus the echoed proto/dest so the frontend knows what snapshot it holds.
+type PainterResult struct {
+	Proto string        `json:"proto"`
+	Dest  string        `json:"dest,omitempty"`
+	Nodes []PainterNode `json:"nodes"`
+}
+
+// PainterSTPPort is one STP port's decision at a link endpoint.
+type PainterSTPPort struct {
+	Interface     string `json:"interface"`
+	InterfaceNorm string `json:"interfaceNorm"`
+	Role          string `json:"role"`  // Root|Desg|Altn|Back
+	State         string `json:"state"` // FWD|BLK|LRN|LIS|DIS
+	Cost          int    `json:"cost"`
+	Prio          int    `json:"prio,omitempty"`
+	Blocked       bool   `json:"blocked"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// PainterSTP is a node's spanning-tree decision.
+type PainterSTP struct {
+	RootID   string           `json:"rootId,omitempty"`
+	BridgeID string           `json:"bridgeId,omitempty"`
+	IsRoot   bool             `json:"isRoot"`
+	RootCost int              `json:"rootCost,omitempty"`
+	RootPort string           `json:"rootPort,omitempty"`
+	Ports    []PainterSTPPort `json:"ports"`
+}
+
+// PainterOSPFNeighbor is one OSPF adjacency.
+type PainterOSPFNeighbor struct {
+	NeighborID    string `json:"neighborId"`
+	State         string `json:"state"`
+	Role          string `json:"role,omitempty"` // DR|BDR|DROTHER
+	Address       string `json:"address,omitempty"`
+	Interface     string `json:"interface"`
+	InterfaceNorm string `json:"interfaceNorm"`
+}
+
+// PainterRoute is a winning route toward the requested destination (OSPF).
+type PainterRoute struct {
+	Prefix        string `json:"prefix,omitempty"`
+	NextHop       string `json:"nextHop,omitempty"`
+	Interface     string `json:"interface,omitempty"`
+	InterfaceNorm string `json:"interfaceNorm,omitempty"`
+	Cost          int    `json:"cost,omitempty"`
+}
+
+// PainterOSPF is a node's OSPF decision.
+type PainterOSPF struct {
+	Neighbors []PainterOSPFNeighbor `json:"neighbors"`
+	Route     *PainterRoute         `json:"route,omitempty"`
+}
+
+// PainterEIGRPPath is a successor / feasible-successor path.
+type PainterEIGRPPath struct {
+	NextHop           string `json:"nextHop"`
+	Interface         string `json:"interface,omitempty"`
+	InterfaceNorm     string `json:"interfaceNorm,omitempty"`
+	FD                int64  `json:"fd"`
+	RD                int64  `json:"rd"`
+	Successor         bool   `json:"successor"`
+	FeasibleSuccessor bool   `json:"feasibleSuccessor"`
+}
+
+// PainterEIGRP is a node's EIGRP topology decision toward the destination.
+type PainterEIGRP struct {
+	Prefix  string             `json:"prefix,omitempty"`
+	FD      int64              `json:"fd,omitempty"`
+	Paths   []PainterEIGRPPath `json:"paths"`
+	NextHop string             `json:"nextHop,omitempty"`
+}
+
+// PainterBGPPath is one BGP candidate path for the prefix.
+type PainterBGPPath struct {
+	NextHop   string `json:"nextHop"`
+	ASPath    string `json:"asPath,omitempty"`
+	Origin    string `json:"origin,omitempty"`
+	Weight    int    `json:"weight,omitempty"`
+	LocalPref int    `json:"localPref,omitempty"`
+	MED       int    `json:"med,omitempty"`
+	Best      bool   `json:"best"`
+}
+
+// PainterBGP is a node's BGP best-path decision for the prefix.
+type PainterBGP struct {
+	Prefix      string           `json:"prefix,omitempty"`
+	Paths       []PainterBGPPath `json:"paths"`
+	BestNextHop string           `json:"bestNextHop,omitempty"`
+	Reason      string           `json:"reason,omitempty"`
+}
+
 // --- status ---
 
 // StatusNode is a node entry in a status snapshot.
