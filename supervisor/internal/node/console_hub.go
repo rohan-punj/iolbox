@@ -211,8 +211,8 @@ type hubClient struct {
 }
 
 // Subscription is the in-process handle an attach-without-a-socket consumer
-// (wsbridge, and later programmatic RunExec/ClaimTurn) gets from
-// consoleHub.Subscribe. It mirrors hubClient's output/replay/backpressure
+// (wsbridge, and RunExec/ClaimTurn internally) gets from consoleHub.Subscribe.
+// It mirrors hubClient's output/replay/backpressure
 // behavior exactly, minus the TCP socket and minus telnet negotiation — the
 // hub already decoded the pty's byte stream once for every TCP peer that
 // needs it; an in-process subscriber just wants clean application bytes in
@@ -476,13 +476,14 @@ func (h *consoleHub) attach(conn net.Conn) {
 	}()
 }
 
-// Subscribe attaches an in-process consumer (wsbridge, and later programmatic
-// RunExec/ClaimTurn — v0.3.0 Phases 2/4) to the hub without any socket or
-// telnet negotiation: the returned Subscription's Out channel delivers the
-// SAME decoded application bytes a TCP client would receive (replay ring
-// first, then live broadcast), and Write sends raw bytes straight to the pty
-// under the hub's write mutex, exactly like a TCP client's already-decoded
-// keystrokes. Returns nil if the hub is already shut down.
+// Subscribe attaches an in-process consumer (wsbridge, and RunExec/ClaimTurn
+// internally) to the hub without any socket or telnet negotiation: the
+// returned Subscription's Out channel delivers the SAME decoded application
+// bytes a TCP client would receive (replay ring first, then live broadcast),
+// and Write sends raw bytes toward the pty through the same input-arbitration
+// gate a TCP client's decoded keystrokes go through (gatedWrite — queued
+// while a turn is active, direct otherwise). Returns nil if the hub is
+// already shut down.
 func (h *consoleHub) Subscribe() *Subscription {
 	c := h.registerLocked(nil, false)
 	if c == nil {

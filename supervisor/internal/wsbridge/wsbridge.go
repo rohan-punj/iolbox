@@ -62,14 +62,19 @@ type ControlServer interface {
 	// cancelled (see server.Server.ServeConn).
 	ServeConn(ctx context.Context, rwc io.ReadWriteCloser)
 	// ConsolePort returns the allocated telnet console port for nodeID in the
-	// currently loaded lab. Still used for the native/OS-telnet URL the
-	// frontend opens directly (v0.3.0 Phase 2 migrates ONLY the web console;
-	// native keeps dialing this port until Phase 3).
+	// currently loaded lab. Used for the native/OS-telnet URL the frontend
+	// opens directly (telnet://host:port) — that connection still terminates
+	// at a real TCP socket (the hub's own listener, see
+	// node.spawnIOL/serveConsole), which since v0.3.0 Phase 3 routes its
+	// decoded keystrokes through the SAME input-arbitration gate the web
+	// console's in-process Subscription uses, so native gets turn-arbitration
+	// protection too even though it still dials a socket at the OS level.
 	ConsolePort(nodeID int) (port int, ok bool)
 	// ConsoleSubscribe attaches an in-process subscriber to nodeID's console
-	// hub (v0.3.0 Phase 2 — see node.Process.Subscribe/consoleHub.Subscribe).
-	// Returns nil if the node has no running console hub (not started, no
-	// such node/lab, or a VPCS node with no hub at all).
+	// hub (see node.Process.Subscribe/consoleHub.Subscribe) so the web console
+	// consumes decoded output and writes keystrokes without dialing
+	// ConsolePort over TCP. Returns nil if the node has no running console hub
+	// (not started, no such node/lab, or a VPCS node with no hub at all).
 	ConsoleSubscribe(nodeID int) *node.Subscription
 	// CapturePort returns the local TCP port serving the live pcapng stream for
 	// linkID in the currently loaded lab, if that link has an active capture.
@@ -87,13 +92,17 @@ type Config struct {
 	// DialConsole dials a node's local telnet console port. Defaults to
 	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
 	//
-	// v0.3.0 Phase 2: the web console no longer uses this for IOL nodes (it
-	// subscribes in-process via ControlServer.ConsoleSubscribe instead — see
-	// handleConsole). It survives ONLY as the fallback for node kinds with no
-	// console hub at all: VPCS is its own telnet server (see
-	// node.Process's doc comment) and is explicitly out of scope for console
-	// unification (docs/v0.3.0-console-unification.md §5 non-goals), so its
-	// web console still dials ConsolePort exactly as before.
+	// PERMANENT fallback, not a transitional shim: the web console uses this
+	// only for node kinds with no console hub at all — VPCS is its own telnet
+	// server (see node.Process's doc comment) and is explicitly out of scope
+	// for console unification (docs/v0.3.0-console-unification.md §5
+	// non-goals: "VPCS nodes are out of scope... nothing here changes their
+	// console path"). Every hub-owned node kind (IOL) instead subscribes
+	// in-process via ControlServer.ConsoleSubscribe (see handleConsole) with
+	// zero TCP hop and zero Negotiator of its own. This field — and
+	// bridgeConsole's telnet.Negotiator below — are the one intentionally
+	// surviving external-telnet-dial path in the whole supervisor, required
+	// because VPCS has no hub to own a Negotiator on its behalf.
 	DialConsole func(port int) (net.Conn, error)
 	// DialCapture dials a link's local pcapng capture port. Defaults to
 	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
@@ -199,13 +208,14 @@ func nodeIDFromPath(path string) (int, error) {
 // is either a resize control message (text frame) or raw keystrokes (binary
 // frame).
 //
-// v0.3.0 Phase 2: for a node with a running console hub (IOL), this attaches
-// in-process via ControlServer.ConsoleSubscribe — no TCP dial, no
-// telnet.Negotiator of its own, since the hub already decoded the byte
-// stream once (see internal/node/console_hub.go). A node with no hub at all
+// For a node with a running console hub (IOL), this attaches in-process via
+// ControlServer.ConsoleSubscribe — no TCP dial, no telnet.Negotiator of its
+// own, since the hub already decoded the byte stream once (see
+// internal/node/console_hub.go) and arbitrates web keystrokes against any
+// concurrent programmatic turn (v0.3.0 Phase 3/4). A node with no hub at all
 // (VPCS, which is its own telnet server and explicitly out of scope for
 // console unification — docs/v0.3.0-console-unification.md §5) falls back to
-// the original dial-ConsolePort-directly path unchanged.
+// the permanent dial-ConsolePort-directly path (see Config.DialConsole).
 func (b *Bridge) handleConsole(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := nodeIDFromPath(r.URL.Path)
 	if err != nil {

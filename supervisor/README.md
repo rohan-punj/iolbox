@@ -99,40 +99,76 @@ Real IOL uses **stdin/stdout on a controlling pty** for its console and opens
    proved works.
 3. Keeps the pty **master** for the node's whole lifetime, owned by a
    per-node **console hub** (`internal/node/console_hub.go`) that multiplexes
-   it across **all connected telnet clients concurrently** — the webconsole
-   and any number of native telnet sessions at once. One hub goroutine owns
-   `ptmx.Read` and broadcasts each chunk to every client (clients never read
-   the pty themselves, so they can't steal bytes from each other);
-   client→pty writes are serialized. Because the master persists
-   independently of any console connection, **clients can attach, detach and
-   reconnect freely without disturbing IOL** — no console client is required
-   for the node to run.
+   it across **all connected consumers concurrently** — the webconsole, any
+   number of native telnet sessions, and any programmatic caller (the
+   Topology Painter's `show` scraping) at once. One hub goroutine owns
+   `ptmx.Read` and broadcasts each chunk to every subscriber (subscribers
+   never read the pty themselves, so they can't steal bytes from each other).
+   Because the master persists independently of any console connection,
+   **clients can attach, detach and reconnect freely without disturbing
+   IOL** — no console client is required for the node to run.
 
-Hub specifics:
+**Single-arbitrated-session model (v0.3.0).** The hub is the ONLY thing that
+ever speaks raw telnet or writes to the pty:
 
+- **One Negotiator per node, not one per connection.** Every TCP-attached
+  connection (native OS telnet is the only remaining one — see below) is fed
+  through the hub's single `internal/telnet.Negotiator` instance
+  (`consoleHub.neg`, serialized by `nmu`), instead of each connection getting
+  its own. This retired a real bug class: two independent supervisor-owned
+  Negotiators wired mouth-to-mouth over a loopback socket (the old
+  wsbridge-dials-hub shape) could ping-pong DO/WILL replies forever until
+  RFC 1143's Q-method made each side idempotent — the Q-method fix
+  (`internal/telnet/iac.go`) stays as defense-in-depth against a misbehaving
+  *external* peer, but the structural cause (two supervisor Negotiators
+  facing each other) cannot recur: there is exactly one Negotiator per node,
+  full stop.
+- **Three subscriber types, one write path.** The web console
+  (`internal/wsbridge`) and the Topology Painter's scripted `show` driver
+  attach in-process via `consoleHub.Subscribe()`/`ClaimTurn`/`RunExec` — no
+  socket, no Negotiator, just decoded application bytes in and out. Native OS
+  telnet clients still get a real TCP socket (`serveConsole` binds
+  `Spec.ConsolePort`), but its reader now feeds the SAME arbitrated write path
+  (`gatedWrite`) every other subscriber uses, instead of writing to the pty
+  unconditionally.
+- **Input arbitration (turn gate).** A programmatic caller (`runShow`) claims
+  an exclusive input "turn" via `ClaimTurn`/`RunExec`; while held, interactive
+  keystrokes from web AND native are queued (never dropped) and flushed
+  verbatim, in order, the instant the turn releases. This is what makes the
+  painter's `show version`-style scraping safe against a student typing in
+  their own open console at the same moment — before v0.3.0 the painter dialed
+  a competing raw socket with no session-level serialization, so concurrent
+  typing could interleave byte-for-byte with the painter's command into IOL's
+  line buffer. A turn is bounded by an 8s ctx (mirroring `runShowTimeout`); a
+  stuck turn is force-released with a **visible warning log line** (never
+  silently) so a wedged caller can't wedge the console forever.
 - **Replay ring**: the hub keeps the most recent 8 KiB of pty output and
-  replays it to every newly attached client, so a fresh session shows the
+  replays it to every newly attached subscriber, so a fresh session shows the
   current prompt/context instead of a blank screen.
-- **Backpressure policy — drop the client**: each client has a bounded output
-  queue (64 chunks of ≤4 KiB) pumped by its own writer goroutine; a client
-  whose queue is full when a broadcast arrives is disconnected. A console
-  stream is low-bandwidth — a client that far behind is dead or unrecoverably
-  slow, and dropping it beats stalling the pty reader or buffering unboundedly.
+- **Backpressure policy — drop the client**: each subscriber has a bounded
+  output queue (64 chunks of ≤4 KiB) pumped by its own writer goroutine (TCP)
+  or drained directly (in-process); one whose queue is full when a broadcast
+  arrives is dropped. A console stream is low-bandwidth — a subscriber that
+  far behind is dead or unrecoverably slow, and dropping it beats stalling the
+  pty reader or buffering unboundedly.
 - **Strictly non-blocking attach**: the telnet preamble and replay are queued
   through the client's writer, so a slow client can never stall the accept
-  loop (the previous one-client-at-a-time bridge serviced clients
+  loop (the pre-hub one-client-at-a-time bridge serviced clients
   sequentially — a webconsole holding the port left a native telnet connect
   stuck in the kernel backlog, "opens but does not work").
 
-Telnet handling is minimal and pass-through: on attach the hub volunteers
-`IAC WILL ECHO` + `IAC WILL SGA` (so a line-mode client goes char-at-a-time and
-lets IOL own echo), and inbound IAC from each client is consumed/answered by a
-per-client `internal/telnet.Negotiator` so it never leaks into the pty
-(negotiation replies are routed through the client's write queue so the writer
-goroutine remains the connection's single writer). pty→client is raw (IOL
-emits no IAC over a pty). There is **no** `IOL_CONSOLE_PORT` env var and no
-console argv flag — both were scaffold guesses P0 removed. `Environ()` still sets
-`IOURC`.
+Telnet handling at the native edge is minimal and pass-through: on attach the
+hub volunteers `IAC WILL ECHO` + `IAC WILL SGA` (so a line-mode client goes
+char-at-a-time and lets IOL own echo); pty→client is raw (IOL emits no IAC
+over a pty). There is **no** `IOL_CONSOLE_PORT` env var and no console argv
+flag — both were scaffold guesses P0 removed. `Environ()` still sets `IOURC`.
+
+**VPCS is explicitly out of scope for all of the above** — it is its own
+telnet server (opens `ConsolePort` itself), has no pty and no hub, so its web
+console still dials the port directly through `internal/wsbridge`'s permanent
+`DialConsole` fallback with its own (only) surviving external-dial
+Negotiator. See `docs/v0.3.0-console-unification.md` for the full design
+history and phased migration this section describes the end state of.
 
 The single dependency `github.com/creack/pty` (v1.1.24) is the standard, tiny,
 maintained pty library; it is the supervisor's only third-party dep besides the
@@ -299,40 +335,54 @@ is exactly one implementation of every verb handler.
 
 ### `GET /console/{nodeId}`
 
-Bridges to that node's telnet console port (the same port reported in
-`lab.load`/`status`/`node.console`). The bridge:
+Bridges to that node's console (the same node whose port is reported in
+`lab.load`/`status`/`node.console`, though for IOL this endpoint no longer
+dials that port itself — see below). The bridge:
 
-1. Looks up the node's console port via `Server.ConsolePort(nodeId)` (404 if
-   the lab isn't loaded or the node id is unknown).
-2. Dials `127.0.0.1:<consolePort>` (plain TCP, the node's telnet listener).
-3. Runs a bidirectional byte pump between the telnet socket and the WS
-   connection until either side closes.
+1. For a node with a running console hub (IOL): calls
+   `Server.ConsoleSubscribe(nodeId)` and attaches **in-process** — no TCP
+   dial, no `telnet.Negotiator` of its own, since the hub already decoded the
+   byte stream once (`internal/node/console_hub.go`) and arbitrates this
+   subscriber's keystrokes against any concurrent programmatic turn (the
+   Topology Painter's `show` scraping — see the console-hub section above).
+2. For a node with no hub at all (VPCS, permanently out of scope for console
+   unification): 404s if `Server.ConsolePort(nodeId)` has no answer, otherwise
+   falls back to dialing `127.0.0.1:<consolePort>` directly (plain TCP, VPCS's
+   own telnet listener) with its own `telnet.Negotiator` — the one
+   intentionally-surviving external-telnet-dial path in the bridge.
+3. Either way, runs a bidirectional byte pump between the console (in-process
+   channel+write-func, or the VPCS telnet socket) and the WS connection until
+   either side closes.
 
 **Framing chosen:**
-- **node → browser**: raw telnet bytes are fed through
-  `internal/telnet.Negotiator`, which consumes/answers all IAC (`0xFF`)
-  option-negotiation sequences server-side and emits only clean terminal
-  bytes. Those clean bytes are sent to the browser as **binary** WS frames —
-  xterm.js's `write()` accepts a `Uint8Array` directly, no decoding needed.
-- **browser → node (keystrokes)**: sent as **binary** WS frames, written
-  straight through to the telnet socket unmodified.
+- **node → browser**: clean (already telnet-IAC-free, for the IOL/hub path;
+  IAC-stripped by the bridge's own Negotiator for the VPCS fallback) terminal
+  bytes are sent to the browser as **binary** WS frames — xterm.js's
+  `write()` accepts a `Uint8Array` directly, no decoding needed.
+- **browser → node (keystrokes)**: sent as **binary** WS frames. For the
+  IOL/hub path these go through `Subscription.Write`, which is queued instead
+  of written straight through while a programmatic turn is active (v0.3.0
+  Phase 3), then flushed on release — never dropped. For the VPCS fallback
+  they're written straight to the telnet socket unmodified (VPCS has no turn
+  concept; out of scope).
 - **browser → node (resize)**: sent as a **text** WS frame containing a JSON
   object, `{"resize":{"cols":<int>,"rows":<int>}}`. This can be sent at any
-  point in the session (not just before the first binary frame); the bridge
-  translates it into an RFC 1073 NAWS subnegotiation
-  (`IAC SB NAWS <cols-hi> <cols-lo> <rows-hi> <rows-lo> IAC SE`) written to
-  the node's telnet socket. Text and binary frames are freely interleaved —
-  the opcode alone distinguishes control messages from terminal data, so no
-  in-band sentinel byte or length prefix is needed.
+  point in the session (not just before the first binary frame); for the
+  VPCS fallback path the bridge translates it into an RFC 1073 NAWS
+  subnegotiation (`IAC SB NAWS <cols-hi> <cols-lo> <rows-hi> <rows-lo> IAC SE`)
+  written to the node's telnet socket. Text and binary frames are freely
+  interleaved — the opcode alone distinguishes control messages from terminal
+  data, so no in-band sentinel byte or length prefix is needed.
 - **Reconnect**: the client simply opens a new WebSocket to
-  `/console/{nodeId}`; the bridge dials a fresh telnet connection and starts
-  a new `Negotiator` (telnet negotiation state is per-connection, not
-  persisted). Nothing server-side needs explicit teardown/cleanup beyond the
-  socket closes that already happen when a WS connection drops.
-- **Multiple concurrent consoles**: each `/console/{nodeId}` WebSocket is an
-  independent goroutine pair with its own telnet dial and its own
-  `Negotiator`; there is no shared per-node session state, so opening
-  consoles for several nodes (or the same node twice) at once just works.
+  `/console/{nodeId}`; for the IOL/hub path this is a fresh
+  `consoleHub.Subscribe()` call (cheap, no socket); nothing server-side needs
+  explicit teardown/cleanup beyond `Unsubscribe`/socket closes that already
+  happen when a WS connection drops.
+- **Multiple concurrent consoles**: each `/console/{nodeId}` WebSocket for an
+  IOL node is an independent in-process Subscription against the SAME
+  per-node hub (one Negotiator total, shared with any native telnet session
+  attached to the same node); opening consoles for several nodes (or the same
+  node twice) at once just works, exactly as before unification.
 
 ### `POST /api/upload/image?filename=<basename>`
 
@@ -503,13 +553,17 @@ exactly one place. None of it embeds Cisco code.
    size at all (Cisco IOS's `terminal width`/`length` are usually set
    in-band via CLI, not always wired to NAWS on IOL builds).
 
-10. **Console port readiness race** — `wsbridge.handleConsole`.
-    `/console/{nodeId}` dials the console port as soon as `ConsolePort`
-    returns one (i.e. once the lab is loaded), not once the node is actually
-    `running`. Today `node.start` flips to `running` optimistically as soon
-    as the process spawns (see `server.startNodes`); if a real IOL takes
-    noticeably long to open its telnet listener after process start, an
-    early console dial will fail with connection-refused. **Verify** the
-    real startup latency and consider gating the dial (or retrying briefly)
-    on the `node.console` event instead of dialing immediately on WS
-    connect.
+10. **Console readiness race** — `wsbridge.handleConsole`.
+    For an IOL node, `ConsoleSubscribe` returns nil until `nr.proc` (and its
+    hub) exists, which only happens once the process has actually spawned —
+    so the v0.3.0 in-process path can't hit the old connection-refused race.
+    The VPCS fallback still can: it dials `ConsolePort` as soon as
+    `Server.ConsolePort` returns one (i.e. once the lab is loaded), not once
+    vpcs has actually opened its telnet listener. Today `node.start` flips to
+    `running` optimistically as soon as the process spawns
+    (`spawnVPCS`/`waitConsoleReady` already retries internally before
+    reporting running, which mitigates most of this, but a WS connect that
+    races the very start of that window could still see connection-refused).
+    **Verify** the real startup latency and consider gating the VPCS dial (or
+    retrying briefly) on the `node.console` event instead of dialing
+    immediately on WS connect.

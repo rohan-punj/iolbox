@@ -1,17 +1,17 @@
 // Package consolescript holds the connection-agnostic console-scripting
-// primitives originally written as private helpers/methods on
+// primitives originally written as private helpers/methods on the now-deleted
 // server.consoleSession (supervisor/internal/server/painter_linux.go). They
 // are pure byte/string logic — prompt-suffix detection, prompt-sync polling,
 // and show-output cleaning — with no dependency on net.Conn or any particular
-// transport. This is what lets both today's per-dial consoleSession (which
-// still owns its own socket + telnet.Negotiator) and a future hub-based
-// "claim a turn, write, read-until-prompt" path (v0.3.0 Phase 4) share
-// exactly the same exec/prompt-sync semantics.
+// transport. This is what let the original per-dial consoleSession (which
+// owned its own socket + telnet.Negotiator) and, since v0.3.0 Phase 4, the
+// hub-based consoleHub.RunExec "claim a turn, write, read-until-prompt" path
+// share exactly the same exec/prompt-sync semantics with no logic duplicated.
 //
 // Extracted as part of v0.3.0 Phase 0 (docs/v0.3.0-console-unification.md
-// §4 "Phase 0"). Zero behavior change: the logic is unchanged from
-// painter_linux.go, only its shape (byte-accumulator + write func instead of
-// a struct wrapping a net.Conn) is generalized.
+// §4 "Phase 0"); consoleSession itself was retired in Phase 4/5 once
+// painter_linux.go's runShow moved onto node.Process.RunExec ->
+// consoleHub.RunExec, which is this package's only caller today.
 package consolescript
 
 import (
@@ -20,16 +20,16 @@ import (
 )
 
 // Writer is the minimal write capability a Session needs: send raw bytes
-// toward the console. Both a net.Conn and a future hub turn-write path
-// satisfy this trivially.
+// toward the console. Both a net.Conn-backed write and a hub turn's direct
+// pty write (consoleHub.writeDirect) satisfy this trivially.
 type Writer func(p []byte) error
 
 // Session accumulates clean (telnet-IAC-free) output bytes fed to it by the
 // caller and provides the prompt-sync / exec helpers on top of that buffer.
-// It does not read from anything itself — the caller (today: consoleSession
-// reading a telnet socket through a Negotiator; later: a hub subscriber
-// reading decoded broadcast output) is responsible for feeding bytes in via
-// Feed and performing the actual write via the Writer passed to New.
+// It does not read from anything itself — the caller (consoleHub.RunExec,
+// reading its own hub Subscription's decoded broadcast output) is
+// responsible for feeding bytes in via Feed and performing the actual write
+// via the Writer passed to New.
 type Session struct {
 	write Writer
 	buf   strings.Builder
@@ -135,10 +135,12 @@ func (s *Session) SyncPrompt(ctx context.Context, read ReadFunc) (priv bool, err
 // the Session's Writer/ReadFunc are wired to: sync the prompt, ensure enable
 // mode + `terminal length 0`, run cmd, and return its trimmed output.
 //
-// This is the exact sequence runShow performed inline in
-// painter_linux.go before the v0.3.0 Phase 0 extraction; behavior is
-// unchanged, only decoupled from a net.Conn-backed consoleSession so a future
-// hub-based turn (Phase 4) can call it identically.
+// This is the exact sequence runShow performed inline in painter_linux.go
+// before the v0.3.0 Phase 0 extraction; behavior is unchanged. Phase 0
+// decoupled it from a net.Conn-backed consoleSession so a connection-agnostic
+// caller could call it identically — consoleHub.RunExec (Phase 4) is that
+// caller today, feeding it a hub Subscription's decoded output instead of a
+// raw telnet socket.
 func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (string, error) {
 	priv, err := s.SyncPrompt(ctx, read)
 	if err != nil {
