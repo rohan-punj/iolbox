@@ -32,6 +32,14 @@ class LabStore {
    *  screenToFlowPosition). Used by the line-endpoint grips. */
   screenToFlow: ((clientX: number, clientY: number) => { x: number; y: number }) | null = null;
   nodeStates = $state<Record<number, NodeState>>({});
+  /** Per-node action lock (WS1): while an action is in flight on a node, sibling
+   *  actions on THAT node are no-ops and the UI shows a lock/progress state.
+   *  Set at the entry of start/stop/wipe/duplicate; cleared when the driving
+   *  event/promise settles (start/stop → node.state event; wipe/duplicate →
+   *  awaited RPC). A 60s safety timeout releases it so a lost event can't wedge
+   *  a node permanently. */
+  nodeLocks = $state<Record<number, { action: string; startedAt: number } | null>>({});
+  private nodeLockTimers: Record<number, ReturnType<typeof setTimeout>> = {};
   consolePorts = $state<Record<number, number>>({});
   images = $state<LibraryImage[]>([]);
   logs = $state<LogLine[]>([]);
@@ -295,6 +303,10 @@ class LabStore {
     switch (evt.event) {
       case "node.state":
         this.nodeStates = { ...this.nodeStates, [evt.data.node]: evt.data.state };
+        // Release a start/stop lock now that the node reached a real state
+        // (WS1). wipe/duplicate locks are released on their own RPC settle, not
+        // here — but they don't emit node.state, so this never fires for them.
+        this.releaseNodeLock(evt.data.node);
         break;
       case "node.console":
         this.consolePorts = { ...this.consolePorts, [evt.data.node]: evt.data.consolePort };
@@ -641,14 +653,25 @@ class LabStore {
    *  must confirm with the user first. Mirrors wipeLab: mock lab.wipe isn't
    *  implemented, so a rejection is logged + swallowed via guarded(). */
   async wipeNode(nodeId: number) {
-    await this.guarded(`wipe node ${nodeId}`, () => this.client.labWipe(this.lab.id, [nodeId]));
+    // RPC-ack only (no driving node.state) → release when the awaited call
+    // settles (guarded never rethrows, so the finally always runs).
+    if (!this.acquireNodeLock(nodeId, "wiping")) return;
+    try {
+      await this.guarded(`wipe node ${nodeId}`, () => this.client.labWipe(this.lab.id, [nodeId]));
+    } finally {
+      this.releaseNodeLock(nodeId);
+    }
   }
 
   async startNode(nodeId: number) {
+    // Lock the node until its next node.state event (released in handleEvent).
+    // Already-locked → no-op (that IS the lock).
+    if (!this.acquireNodeLock(nodeId, "starting")) return;
     await this.guarded(`start node ${nodeId}`, () => this.client.nodeStart(this.lab.id, nodeId));
   }
 
   async stopNode(nodeId: number) {
+    if (!this.acquireNodeLock(nodeId, "stopping")) return;
     await this.guarded(`stop node ${nodeId}`, async () => {
       await this.client.nodeStop(this.lab.id, nodeId);
       this.openConsoleTabs = this.openConsoleTabs.filter((id) => id !== nodeId);
@@ -656,6 +679,34 @@ class LabStore {
         this.activeConsoleTab = this.openConsoleTabs[0] ?? null;
       }
     });
+  }
+
+  // ---- per-node action lock (WS1) ----
+
+  /** Acquire the per-node action lock. Returns false if the node is already
+   *  locked (caller must no-op). Arms a 60s safety timeout so a lost driving
+   *  event can't wedge the node permanently. */
+  private acquireNodeLock(nodeId: number, action: string): boolean {
+    if (this.nodeLocks[nodeId]) return false;
+    this.nodeLocks = { ...this.nodeLocks, [nodeId]: { action, startedAt: Date.now() } };
+    if (this.nodeLockTimers[nodeId]) clearTimeout(this.nodeLockTimers[nodeId]);
+    this.nodeLockTimers[nodeId] = setTimeout(() => {
+      this.pushLog("warn", `node ${nodeId}: ${action} did not settle in 60s — releasing lock`, nodeId);
+      this.releaseNodeLock(nodeId);
+    }, 60_000);
+    return true;
+  }
+
+  /** Release the per-node action lock and clear its safety timeout. Idempotent. */
+  private releaseNodeLock(nodeId: number) {
+    if (this.nodeLockTimers[nodeId]) {
+      clearTimeout(this.nodeLockTimers[nodeId]);
+      delete this.nodeLockTimers[nodeId];
+    }
+    if (this.nodeLocks[nodeId]) {
+      const { [nodeId]: _drop, ...rest } = this.nodeLocks;
+      this.nodeLocks = rest;
+    }
   }
 
   /** Run a supervisor action; surface failure in the top bar + log instead of
@@ -777,6 +828,9 @@ class LabStore {
   duplicateNode(nodeId: number): number | null {
     const src = this.lab.nodes.find((n) => n.id === nodeId);
     if (!src) return null;
+    // Lock the SOURCE node until the async supervisor sync settles. Already
+    // locked → no-op.
+    if (!this.acquireNodeLock(nodeId, "duplicating")) return null;
     const id = this.nextNodeId();
     const clone: LabNode = {
       ...structuredClone($state.snapshot(src)),
@@ -785,7 +839,9 @@ class LabStore {
       x: src.x + 40,
       y: src.y + 40,
     };
-    void this.addNode(clone); // supervisor sync happens async; id is final now
+    // supervisor sync happens async; id is final now. addNode is guarded (never
+    // rethrows), so release the source lock once it settles either way.
+    void this.addNode(clone).finally(() => this.releaseNodeLock(nodeId));
     return id;
   }
 

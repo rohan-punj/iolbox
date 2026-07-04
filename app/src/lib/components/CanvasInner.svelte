@@ -678,15 +678,18 @@
   function buildNodeMenuItems(menu: { x: number; y: number; nodeId: number }): MenuItem[] {
     const nid = menu.nodeId;
     const nodeState = labStore.nodeStates[nid] ?? "stopped";
+    // WS1: while an action is in flight on this node, disable sibling actions
+    // (Console stays enabled — it's client-side, no WS).
+    const locked = labStore.nodeLocks[nid] != null;
     return [
       {
         label: "Start",
-        disabled: nodeState === "running" || nodeState === "starting",
+        disabled: locked || nodeState === "running" || nodeState === "starting",
         action: () => void labStore.startNode(nid),
       },
       {
         label: "Stop",
-        disabled: nodeState === "stopped",
+        disabled: locked || nodeState === "stopped",
         action: () => void labStore.stopNode(nid),
       },
       {
@@ -696,6 +699,7 @@
       },
       {
         label: "Duplicate",
+        disabled: locked,
         action: () => {
           const newId = labStore.duplicateNode(nid);
           if (newId !== null) labStore.selectedNodeId = newId;
@@ -736,19 +740,21 @@
     const startable = ids.filter((id) => stateOf(id) !== "running" && stateOf(id) !== "starting");
     const stoppable = ids.filter((id) => stateOf(id) === "running" || stateOf(id) === "starting");
     const running = ids.filter((id) => stateOf(id) === "running");
+    // WS1: a bulk action is disabled when ANY selected node is mid-action.
+    const anyLocked = ids.some((id) => labStore.nodeLocks[id] != null);
     return [
       // Header row — plain disabled item showing what the menu acts on.
       { label: `${ids.length} nodes`, disabled: true, action: () => {} },
       {
         label: "Start",
-        disabled: startable.length === 0,
+        disabled: anyLocked || startable.length === 0,
         action: () => {
           for (const id of startable) void labStore.startNode(id);
         },
       },
       {
         label: "Stop",
-        disabled: stoppable.length === 0,
+        disabled: anyLocked || stoppable.length === 0,
         action: () => {
           for (const id of stoppable) void labStore.stopNode(id);
         },
@@ -769,6 +775,7 @@
       { separator: true, label: "sep1", action: () => {} },
       {
         label: "Duplicate",
+        disabled: anyLocked,
         action: () => {
           for (const id of ids) labStore.duplicateNode(id);
         },
@@ -776,7 +783,7 @@
       {
         label: "Wipe",
         // Wipe requires stopped nodes (mirrors the single-node quick-action gate).
-        disabled: stoppable.length > 0,
+        disabled: anyLocked || stoppable.length > 0,
         action: () => {
           if (!confirm(`Wipe saved config/state for ${ids.length} nodes? This cannot be undone.`)) return;
           for (const id of ids) void labStore.wipeNode(id);

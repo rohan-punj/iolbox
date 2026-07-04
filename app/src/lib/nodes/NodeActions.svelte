@@ -16,6 +16,10 @@
 
   const isRunning = $derived(state === "running");
   const isBusy = $derived(state === "running" || state === "starting");
+  // WS1: while a per-node action is in flight, hide the action buttons and show
+  // a spinner + the pending action name so sibling actions aren't re-issued.
+  const lock = $derived(labStore.nodeLocks[nodeId]);
+  const isLocked = $derived(lock != null);
   // "Save config" (NVRAM extract) only applies to running IOL nodes.
   const isIol = $derived(
     labStore.lab.nodes.find((n) => n.id === nodeId)?.kind === "iol"
@@ -41,6 +45,12 @@
 </script>
 
 <div class="node-actions nodrag" role="toolbar" aria-label="Node quick actions">
+  {#if isLocked}
+    <span class="na-lock" aria-live="polite">
+      <span class="na-spinner" aria-hidden="true"></span>
+      <span class="na-lock-label">{lock?.action ?? "working"}…</span>
+    </span>
+  {:else}
   {#if !isBusy}
     <button class="na-btn" title="Start" aria-label="Start" onpointerdown={(e) => e.stopPropagation()} onclick={start}
       >{@html uiSvg("play", 12)}</button>
@@ -65,6 +75,7 @@
   {#if !isBusy}
     <button class="na-btn na-danger" title="Wipe" aria-label="Wipe" onpointerdown={(e) => e.stopPropagation()} onclick={wipe}
       >{@html uiSvg("wipe", 12)}</button>
+  {/if}
   {/if}
 </div>
 
@@ -139,5 +150,34 @@
     width: 12px;
     height: 12px;
     pointer-events: none;
+  }
+  /* WS1 — in-flight lock chip: spinner + pending action name, in place of the
+     action buttons. Uses --state-starting to read as "busy" in both themes. */
+  .na-lock {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 5px;
+    height: 22px;
+    color: var(--ink-2);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.02em;
+  }
+  .na-lock-label {
+    text-transform: capitalize;
+    white-space: nowrap;
+  }
+  .na-spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in oklab, var(--state-starting) 30%, transparent);
+    border-top-color: var(--state-starting);
+    animation: na-spin 0.7s linear infinite;
+  }
+  @keyframes na-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

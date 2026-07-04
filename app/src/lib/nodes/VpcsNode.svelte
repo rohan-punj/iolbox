@@ -10,6 +10,8 @@
 
   const nodeId = $derived(Number(id));
   const state = $derived(labStore.nodeStates[nodeId] ?? "stopped");
+  // WS1: per-node action lock drives a progress overlay on the face.
+  const isLocked = $derived(labStore.nodeLocks[nodeId] != null);
   const isDropTarget = $derived(linking.dropTargetId === nodeId);
   const isLinkSource = $derived(linking.sourceId === nodeId);
 
@@ -40,6 +42,7 @@
   class:artwork
   class:drop-target={isDropTarget}
   class:linking={isLinkSource}
+  class:locked={isLocked}
   data-state={state}
   ondblclick={onDblClick}
   role="button"
@@ -52,6 +55,9 @@
 
   <div class="face">
     <NodeActions {nodeId} {state} />
+    {#if isLocked}
+      <span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>
+    {/if}
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
     <button
       class="connector nodrag"
@@ -130,6 +136,32 @@
     display: grid;
     place-items: center;
     color: inherit;
+  }
+  /* WS1 — action-lock progress overlay (see IolNode for rationale). */
+  .lock-overlay {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    display: grid;
+    place-items: center;
+    background: color-mix(in oklab, var(--node-face) 55%, transparent);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+    z-index: 4;
+    pointer-events: none;
+  }
+  .lock-ring {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 3px solid color-mix(in oklab, var(--state-starting) 28%, transparent);
+    border-top-color: var(--state-starting);
+    animation: lock-spin 0.75s linear infinite;
+  }
+  @keyframes lock-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .glyph :global(svg),
   .glyph :global(img) {
