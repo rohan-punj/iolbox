@@ -409,7 +409,7 @@ func (p *bridgePlan) vpcsUDPFor(nodeID int) (sendPort, listenPort int, ok bool) 
 func (p *bridgePlan) extnetUDPFor(nodeID int) (sendPort, listenPort int, ok bool) {
 	for i := range p.links {
 		for _, be := range p.links[i].endpoints {
-			if (be.kind == lab.KindNAT || be.kind == lab.KindMgmt) && be.nodeID == nodeID {
+			if be.kind == lab.KindNAT && be.nodeID == nodeID {
 				return be.relayEP.LocalPort, be.relayEP.RemotePort, true
 			}
 		}

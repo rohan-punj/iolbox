@@ -5,7 +5,7 @@
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
   import { watcherStore } from "../watcherStore.svelte";
 
-  function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat" | "mgmt", imageId?: string) {
+  function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat", imageId?: string) {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(
@@ -23,7 +23,6 @@
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
   const hasNat = $derived(labStore.features.includes("natgw"));
-  const hasMgmt = $derived(labStore.features.includes("mgmt"));
   // "Save configs" only makes sense when running IOL nodes exist.
   const hasRunningIol = $derived(
     labStore.lab.nodes.some(
@@ -183,23 +182,6 @@
       <div class="item-text">
         <div class="item-name">NAT Gateway</div>
         <div class="item-sub">Internet egress</div>
-      </div>
-    </div>
-  {/if}
-
-  {#if hasMgmt}
-    <div
-      class="palette-item"
-      draggable="true"
-      role="button"
-      tabindex="0"
-      ondragstart={(e) => onDragStart(e, "mgmt")}
-      title="Out-of-band management bridge (single eth0)"
-    >
-      <span class="swatch mgmt" aria-hidden="true">{@html iconSvg("mgmt", 28)}</span>
-      <div class="item-text">
-        <div class="item-name">MGMT Bridge</div>
-        <div class="item-sub">Management net</div>
       </div>
     </div>
   {/if}
@@ -534,8 +516,7 @@
   .swatch.vpcs {
     color: var(--node-vpcs);
   }
-  .swatch.nat,
-  .swatch.mgmt {
+  .swatch.nat {
     color: var(--accent);
   }
   .swatch :global(svg) {

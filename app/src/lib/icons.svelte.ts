@@ -94,12 +94,6 @@ const BUILTIN: Record<string, { label: string; inner: string; viewBox?: string }
     inner:
       '<circle cx="10" cy="12" r="7"/><path d="M3 12h14M10 5c2 2 2 12 0 14M10 5c-2 2-2 12 0 14"/><path d="M17 6h4v4M21 6l-5 5"/>',
   },
-  // MGMT bridge — a wrench crossing a link, denoting an out-of-band mgmt bridge.
-  mgmt: {
-    label: "MGMT Bridge",
-    inner:
-      '<path d="M14.5 4.5a3.5 3.5 0 0 0-4.8 4.3L4 14.5 6.5 17l5.7-5.7a3.5 3.5 0 0 0 4.3-4.8l-2.2 2.2-2-2 2.2-2.2Z"/><circle cx="17.5" cy="17.5" r="2.5"/><path d="M15.7 15.7 13 13"/>',
-  },
 };
 
 // ---- UI (chrome) glyphs, not device icons ----
@@ -205,7 +199,6 @@ export function uiSvg(name: keyof typeof UI_GLYPHS | string, size = 15): string 
 export function defaultIconFor(kind: string, imageClass?: string): string {
   if (kind === "vpcs") return "pc";
   if (kind === "nat") return "nat";
-  if (kind === "mgmt") return "mgmt";
   if (imageClass === "l2") return "switch";
   return "router"; // l3 / unknown
 }

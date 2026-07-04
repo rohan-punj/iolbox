@@ -51,7 +51,7 @@ class LabStore {
   /** Tasks pane toggle (TopBar checklist). When on it takes precedence over the
    *  empty-selection auto-hide of the right pane. */
   showTasks = $state(false);
-  /** Supervisor feature flags from the hello handshake (e.g. "natgw","mgmt").
+  /** Supervisor feature flags from the hello handshake (e.g. "natgw").
    *  Drives feature-gated palette entries. */
   features = $state<string[]>([]);
   /** Supervisor build version from the hello handshake (git describe, baked in

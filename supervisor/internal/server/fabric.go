@@ -35,8 +35,7 @@ func isFabricLink(l *lab.Link, fabricOK map[int]bool) bool {
 }
 
 // fabricNodes returns the set of node ids whose kind is realised by the static-
-// tap fabric: IOL (P1), NAT (P2) and VPCS (P3). mgmt stays on the legacy relay
-// path (macvtap, not a bridge tap).
+// tap fabric: IOL, NAT and VPCS — i.e. every node kind (mgmt is retired).
 func fabricNodes(doc *lab.Lab) map[int]bool {
 	out := make(map[int]bool, len(doc.Nodes))
 	for i := range doc.Nodes {

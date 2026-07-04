@@ -62,10 +62,6 @@ const (
 	// that connects the lab to the outside world (see internal/extnet). Its one
 	// connectable interface is "eth0".
 	KindNAT Kind = "nat"
-	// KindMgmt is a management-network bridge: a supervisor-internal macvtap on
-	// the VM's management interface, putting connected lab nodes directly on that
-	// L2 network (see internal/extnet). Its one connectable interface is "eth0".
-	KindMgmt Kind = "mgmt"
 )
 
 // Node is a single lab device.

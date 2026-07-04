@@ -63,7 +63,6 @@
       case "vpcs":
         return "var(--node-vpcs)";
       case "nat":
-      case "mgmt":
         return "var(--accent)";
       default:
         return "var(--node-iol-l3)";

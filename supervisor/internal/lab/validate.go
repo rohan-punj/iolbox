@@ -58,11 +58,11 @@ func (l *Lab) Validate() error {
 			}
 		case KindVPCS:
 			// image is ignored for vpcs
-		case KindNAT, KindMgmt:
-			// nat/mgmt are supervisor-internal endpoints (no image); they have
-			// exactly one connectable interface, "eth0", enforced below.
+		case KindNAT:
+			// nat is a supervisor-internal endpoint (no image); it has exactly one
+			// connectable interface, "eth0", enforced below.
 		default:
-			return fmt.Errorf("node %d: kind must be iol, vpcs, nat or mgmt, got %q", n.ID, n.Kind)
+			return fmt.Errorf("node %d: kind must be iol, vpcs or nat, got %q", n.ID, n.Kind)
 		}
 		if n.Ethernet != nil && (*n.Ethernet < 0 || *n.Ethernet > 16) {
 			return fmt.Errorf("node %d: ethernet groups must be 0..16, got %d", n.ID, *n.Ethernet)
@@ -112,7 +112,7 @@ func (l *Lab) Validate() error {
 				if _, err := netmap.ParseIface(ep.Interface); err != nil {
 					return fmt.Errorf("link %d: %w", link.ID, err)
 				}
-			case KindNAT, KindMgmt:
+			case KindNAT:
 				// Exactly one connectable interface, "eth0".
 				if ep.Interface != "eth0" {
 					return fmt.Errorf("link %d: %s node %d has only interface eth0, got %q", link.ID, n.Kind, ep.Node, ep.Interface)

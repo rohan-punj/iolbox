@@ -34,15 +34,14 @@
   import { annoTool } from "../annoTool.svelte";
   import type { Annotation, LabNode } from "../labTypes";
 
-  // NAT gateway + MGMT bridge reuse the VPCS single-interface node chrome; the
-  // distinct glyph comes from their default icon (defaultIconFor). annoText /
+  // The NAT gateway reuses the VPCS single-interface node chrome; the
+  // distinct glyph comes from its default icon (defaultIconFor). annoText /
   // annoShape are the Excalidraw-style annotation layer — rendered as flow nodes
   // (so drag/pan/zoom come free) but derived from lab.annotations, never lab.nodes.
   const nodeTypes: NodeTypes = {
     iol: IolNode,
     vpcs: VpcsNode,
     nat: VpcsNode,
-    mgmt: VpcsNode,
     annoText: AnnoText,
     annoShape: AnnoShape,
     annoLine: AnnoLine,
@@ -439,7 +438,7 @@
     const raw = e.dataTransfer?.getData("application/iolab-node");
     if (!raw) return;
     const { kind, imageId } = JSON.parse(raw) as {
-      kind: "iol" | "vpcs" | "nat" | "mgmt";
+      kind: "iol" | "vpcs" | "nat";
       imageId?: string;
     };
     const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
@@ -456,15 +455,14 @@
     }
   }
 
-  // Count existing nodes of a kind, for stable NAT1/MGMT1 naming.
-  function nameForKind(kind: "nat" | "mgmt"): string {
-    const prefix = kind === "nat" ? "NAT" : "MGMT";
+  // Count existing nodes of a kind, for stable NAT1 naming.
+  function nameForKind(kind: "nat"): string {
     const n = labStore.lab.nodes.filter((x) => x.kind === kind).length + 1;
-    return `${prefix}${n}`;
+    return `NAT${n}`;
   }
 
   function buildDroppedNode(
-    kind: "iol" | "vpcs" | "nat" | "mgmt",
+    kind: "iol" | "vpcs" | "nat",
     id: number,
     pos: { x: number; y: number },
     img?: (typeof labStore.images)[number]
@@ -482,8 +480,8 @@
         image: img ? { id: img.id, filename: img.filename, class: img.class } : undefined,
       };
     }
-    if (kind === "nat" || kind === "mgmt") {
-      // Single-interface builtin nodes (eth0), doc shape mirrors a VPCS node.
+    if (kind === "nat") {
+      // Single-interface builtin node (eth0), doc shape mirrors a VPCS node.
       return { id, kind, name: nameForKind(kind), x: pos.x, y: pos.y };
     }
     return { id, kind: "vpcs", name: `PC${id}`, x: pos.x, y: pos.y };

@@ -53,8 +53,6 @@ func TestGateFeatures(t *testing.T) {
 	}{
 		{Capabilities{}, nil},
 		{Capabilities{NAT: true}, []string{"natgw"}},
-		{Capabilities{Mgmt: true}, []string{"mgmt"}},
-		{Capabilities{NAT: true, Mgmt: true}, []string{"natgw", "mgmt"}},
 	}
 	for _, c := range cases {
 		got := c.caps.GateFeatures()
@@ -74,9 +72,6 @@ func TestSupports(t *testing.T) {
 	caps := Capabilities{NAT: true}
 	if !caps.Supports(KindNAT) {
 		t.Fatal("NAT cap must support nat kind")
-	}
-	if caps.Supports(KindMgmt) {
-		t.Fatal("without Mgmt cap, mgmt kind must be unsupported")
 	}
 	if caps.Supports("bogus") {
 		t.Fatal("unknown kind must be unsupported")

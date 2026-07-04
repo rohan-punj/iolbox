@@ -49,10 +49,6 @@ type Config struct {
 	Runtime string
 	Arch    string
 	Version string
-	// MgmtIface is the management interface a "mgmt" node's macvtap attaches to.
-	// Empty auto-picks the first UP non-loopback ethernet iface that is not the
-	// default-route iface (see extnet.PickMgmtIface). Set via -mgmt-iface.
-	MgmtIface string
 }
 
 // Server is the supervisor control server.
@@ -111,13 +107,7 @@ func New(cfg Config) *Server {
 	// Detect nat support once: nat needs /dev/net/tun + passwordless sudo. Off
 	// Linux this is always false, so the dev box never advertises the feature.
 	// See extnet.Detect / handleHello.
-	s.caps = extnet.Detect(extnet.SudoOK(), cfg.MgmtIface)
-	// mgmt is PARKED and never advertised: macvlan bridge mode filters inbound
-	// unicast by the macvtap's own MAC, so a foreign-MAC lab node behind the
-	// endpoint never receives replies. NAT covers the outbound-connectivity
-	// need; revisit mgmt via MAC adoption (adopt the peer's MAC onto the
-	// macvtap) if direct L2 presence on the mgmt network is wanted later.
-	s.caps.Mgmt = false
+	s.caps = extnet.Detect(extnet.SudoOK())
 	s.register()
 	return s
 }

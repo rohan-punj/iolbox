@@ -10,17 +10,9 @@ func DefaultRouteIface() (string, error) {
 	return "", errors.New("extnet: default-route detection is only supported on linux")
 }
 
-// PickMgmtIface is unavailable off Linux.
-func PickMgmtIface(pref string) (string, error) {
-	if pref != "" {
-		return pref, nil
-	}
-	return "", errors.New("extnet: management-interface detection is only supported on linux")
-}
-
-// Detect reports no support off Linux: nat/mgmt need a Linux tap/macvtap data
-// plane, so the hello handshake never advertises them on the dev box.
-func Detect(sudoOK bool, mgmtPref string) Capabilities {
+// Detect reports no support off Linux: nat needs a Linux tap data plane, so the
+// hello handshake never advertises it on the dev box.
+func Detect(sudoOK bool) Capabilities {
 	return Capabilities{}
 }
 

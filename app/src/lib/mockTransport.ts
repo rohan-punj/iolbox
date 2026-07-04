@@ -165,8 +165,6 @@ export class MockTransport implements Transport {
           supervisor: "0.1.0-mock",
           runtime: "debian-slim-12",
           arch: "x86_64",
-          // mgmt is parked product-wide (macvlan MAC-filter limitation) and
-          // never advertised — mirror the real supervisor so dev matches.
           features: ["nvram", "capture", "i386", "natgw"],
         });
         return;
@@ -438,7 +436,7 @@ export class MockTransport implements Transport {
       const kinds = l.endpoints.map(
         (e) => this.lab?.nodes.find((n) => n.id === e.node)?.kind
       );
-      return kinds.some((k) => k === "vpcs" || k === "nat" || k === "mgmt");
+      return kinds.some((k) => k === "vpcs" || k === "nat");
     };
     // Network Watcher demo — fixed control-plane mixes so the overlays are
     // demo-able with predictable direction: link 0 shows one-way STP (from

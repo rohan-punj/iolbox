@@ -59,28 +59,10 @@ func TestNatTeardownMirrorsSetup(t *testing.T) {
 	}
 }
 
-// TestMgmtCommands pins the macvtap bridge create/up and its delete.
-func TestMgmtCommands(t *testing.T) {
-	setup := joinCmds(mgmtSetupCmds("iolmgmt5", "ens192"))
-	if !strings.Contains(setup, "ip link add link ens192 name iolmgmt5 type macvtap mode bridge") {
-		t.Fatalf("mgmt setup wrong:\n%s", setup)
-	}
-	if !strings.Contains(setup, "ip link set iolmgmt5 up") {
-		t.Fatalf("mgmt setup missing up:\n%s", setup)
-	}
-	teardown := joinCmds(mgmtTeardownCmds("iolmgmt5"))
-	if !strings.Contains(teardown, "ip link delete iolmgmt5 type macvtap") {
-		t.Fatalf("mgmt teardown wrong:\n%s", teardown)
-	}
-}
-
 // TestDevName pins the device names (bounded by IFNAMSIZ) per kind.
 func TestDevName(t *testing.T) {
 	if n, _ := devName(KindNAT, 3); n != "iolnat3" {
 		t.Fatalf("nat dev = %q", n)
-	}
-	if n, _ := devName(KindMgmt, 3); n != "iolmgmt3" {
-		t.Fatalf("mgmt dev = %q", n)
 	}
 	if _, err := devName("bogus", 1); err == nil {
 		t.Fatal("unknown kind must error")

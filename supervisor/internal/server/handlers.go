@@ -404,11 +404,11 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		}
 		docNode := ll.findNode(id)
 
-		// nat/mgmt nodes are supervisor-internal tap/macvtap endpoints, not
-		// spawned processes: start an extnet.Endpoint that owns an fd + pump
-		// goroutines instead of a node.Process. The node state machine still
-		// flips to running so the GUI treats them uniformly. They have no console.
-		if docNode.Kind == lab.KindNAT || docNode.Kind == lab.KindMgmt {
+		// A nat node is a supervisor-internal tap endpoint, not a spawned
+		// process: start an extnet.Endpoint that owns an fd instead of a
+		// node.Process. The node state machine still flips to running so the GUI
+		// treats it uniformly. It has no console.
+		if docNode.Kind == lab.KindNAT {
 			started, err := s.startExtnetNode(ll, docNode, nr)
 			if err != nil {
 				return nil, err
@@ -459,11 +459,11 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 	return out, nil
 }
 
-// startExtnetNode brings up a nat/mgmt node's tap/macvtap endpoint and flips its
-// state machine to running. It requires runtime capability support (gated at
-// startup via extnet.Detect) and resolves the default-route / management
-// interface plus, for nat, a subnet index. The endpoint is idempotent per node:
-// if one is already running it is left as-is. Returns the StartedNode summary.
+// startExtnetNode brings up a nat node's tap endpoint and flips its state
+// machine to running. It requires runtime capability support (gated at startup
+// via extnet.Detect) and resolves the default-route interface plus a subnet
+// index. The endpoint is idempotent per node: if one is already running it is
+// left as-is. Returns the StartedNode summary.
 func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (protocol.StartedNode, error) {
 	if !s.caps.Supports(extnet.Kind(n.Kind)) {
 		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeUnsupported,
@@ -512,13 +512,6 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 		cfg.SubnetIndex = idx
 		cfg.DefaultIface = def
 		nr.natSubnet = idx
-	case lab.KindMgmt:
-		iface, err := extnet.PickMgmtIface(s.cfg.MgmtIface)
-		if err != nil {
-			nr.machine.To(node.StateCrashed)
-			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed, "node %d: %v", n.ID, err)
-		}
-		cfg.MgmtIface = iface
 	}
 
 	ep, err := extnet.Start(cfg)

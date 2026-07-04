@@ -57,24 +57,22 @@ func TestValidateBad(t *testing.T) {
 	}
 }
 
-// TestValidateNatMgmtNodes confirms nat/mgmt are accepted kinds with an eth0
-// interface, and that their constraints (interface must be eth0; at most one
-// link endpoint) are enforced.
-func TestValidateNatMgmtNodes(t *testing.T) {
+// TestValidateNatNodes confirms nat is an accepted kind with an eth0 interface,
+// and that its constraints (interface must be eth0; at most one link endpoint)
+// are enforced.
+func TestValidateNatNodes(t *testing.T) {
 	good := &Lab{
 		Version: 1, ID: "lab-n", Name: "n",
 		Nodes: []Node{
 			{ID: 0, Kind: KindIOL, Name: "R1", Image: &ImageRef{ID: "abc"}},
 			{ID: 1, Kind: KindNAT, Name: "Internet"},
-			{ID: 2, Kind: KindMgmt, Name: "OOB"},
 		},
 		Links: []Link{
 			{ID: 0, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
-			{ID: 1, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
 		},
 	}
 	if err := good.Validate(); err != nil {
-		t.Fatalf("valid nat/mgmt lab rejected: %v", err)
+		t.Fatalf("valid nat lab rejected: %v", err)
 	}
 
 	bad := []struct {
@@ -82,7 +80,6 @@ func TestValidateNatMgmtNodes(t *testing.T) {
 		mutate func(*Lab)
 	}{
 		{"nat non-eth0 iface", func(l *Lab) { l.Links[0].Endpoints[1].Interface = "e0/0" }},
-		{"mgmt non-eth0 iface", func(l *Lab) { l.Links[1].Endpoints[1].Interface = "eth1" }},
 		{"nat two links", func(l *Lab) {
 			l.Links = append(l.Links, Link{ID: 2, Type: LinkP2P,
 				Endpoints: []Endpoint{{Node: 0, Interface: "e0/2"}, {Node: 1, Interface: "eth0"}}})
@@ -95,11 +92,9 @@ func TestValidateNatMgmtNodes(t *testing.T) {
 				Nodes: []Node{
 					{ID: 0, Kind: KindIOL, Name: "R1", Image: &ImageRef{ID: "abc"}},
 					{ID: 1, Kind: KindNAT, Name: "Internet"},
-					{ID: 2, Kind: KindMgmt, Name: "OOB"},
 				},
 				Links: []Link{
 					{ID: 0, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
-					{ID: 1, Type: LinkP2P, Endpoints: []Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
 				},
 			}
 			c.mutate(l)

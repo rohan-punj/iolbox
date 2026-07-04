@@ -2,7 +2,7 @@ package extnet
 
 import "fmt"
 
-// This file builds the privileged-command argv lists for nat/mgmt setup and
+// This file builds the privileged-command argv lists for nat setup and
 // teardown as pure data, so the exact commands are unit-testable on any OS
 // without invoking sudo. runCmds (Linux) executes them via `sudo -n`; the
 // stub platform never runs them.
@@ -146,31 +146,11 @@ func delRule(add []string) []string {
 	return out
 }
 
-// mgmtSetupCmds returns the ordered privileged commands to bring up a mgmt
-// node's macvtap in bridge mode on the management interface and set it up. No
-// IP/NAT is configured — the connected lab nodes provide their own L2 identity.
-func mgmtSetupCmds(iface, mgmtIface string) []cmd {
-	return []cmd{
-		{[]string{"ip", "link", "add", "link", mgmtIface, "name", iface, "type", "macvtap", "mode", "bridge"}},
-		{[]string{"ip", "link", "set", iface, "up"}},
-	}
-}
-
-// mgmtTeardownCmds deletes the macvtap; deleting the link removes its /dev/tapN
-// char device too.
-func mgmtTeardownCmds(iface string) []cmd {
-	return []cmd{
-		{[]string{"ip", "link", "delete", iface, "type", "macvtap"}},
-	}
-}
-
-// devName returns the tap/macvtap device name for a node of the given kind.
+// devName returns the tap device name for a node of the given kind.
 func devName(kind Kind, nodeID int) (string, error) {
 	switch kind {
 	case KindNAT:
 		return tapName(nodeID), nil
-	case KindMgmt:
-		return mvtapName(nodeID), nil
 	default:
 		return "", fmt.Errorf("extnet: unknown kind %q", kind)
 	}

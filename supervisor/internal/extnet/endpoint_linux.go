@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,15 +18,14 @@ import (
 	"unsafe"
 )
 
-// Endpoint is one running external-net endpoint: a tap/macvtap fd plus the two
-// pump goroutines that move raw ethernet frames between that fd and the link's
-// UDP relay. A nat endpoint additionally owns a DHCP server on its tap. It is
-// process-less — the server drives its lifecycle directly (Start/Close) rather
-// than through node.Process, but reports running/stopped the same way.
+// Endpoint is one running external-net endpoint: a nat node's tap fd plus a
+// DHCP server on that tap. It is process-less — the server drives its lifecycle
+// directly (Start/Close) rather than through node.Process, but reports
+// running/stopped the same way.
 type Endpoint struct {
-	dev string // tap/macvtap device name
+	dev string // tap device name
 
-	tap  *os.File    // /dev/net/tun (nat) or /dev/tapN (mgmt) fd
+	tap  *os.File    // /dev/net/tun (nat) fd
 	dhcp *dhcpServer // nat only
 
 	closeOnce sync.Once
@@ -180,16 +178,6 @@ func Start(cfg Config) (*Endpoint, error) {
 		}
 		e.tap = tap
 		e.dhcp = newDHCPServer(net.ParseIP(sub.GatewayIP()), sub)
-	case KindMgmt:
-		if err := setupWithRetry(mgmtSetupCmds(dev, cfg.MgmtIface)); err != nil {
-			return nil, err
-		}
-		tap, oerr := openMacvtap(dev, owner)
-		if oerr != nil {
-			_ = runCmdsBestEffort(mgmtTeardownCmds(dev))
-			return nil, oerr
-		}
-		e.tap = tap
 	default:
 		return nil, fmt.Errorf("extnet: unknown kind %q", cfg.Kind)
 	}
@@ -504,7 +492,7 @@ func (e *Endpoint) isClosed() bool {
 }
 
 // Close stops the pumps, closes the tap + relay socket, and runs the teardown
-// commands (delete tap/macvtap, remove iptables rules by exact -D). Idempotent.
+// commands (delete the tap, remove iptables rules by exact -D). Idempotent.
 func (e *Endpoint) Close() error {
 	e.closeOnce.Do(func() {
 		close(e.closed)
@@ -549,8 +537,6 @@ func (e *Endpoint) runTeardown() {
 		}
 		sub := Subnet{Index: e.cfg.SubnetIndex}
 		_ = runCmdsBestEffort(natTeardownCmds(e.dev, sub, e.cfg.DefaultIface))
-	case KindMgmt:
-		_ = runCmdsBestEffort(mgmtTeardownCmds(e.dev))
 	}
 }
 
@@ -572,48 +558,6 @@ func openTap(name string) (*os.File, error) {
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), tunSetIff, uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
 		_ = f.Close()
 		return nil, fmt.Errorf("extnet: TUNSETIFF %s: %v", name, errno)
-	}
-	return f, nil
-}
-
-// openMacvtap opens the /dev/tapN character device backing a macvtap link. The
-// device number N is the interface's ifindex, read from
-// /sys/class/net/<name>/ifindex, so the path is /dev/tap<ifindex>. Reads/writes
-// are bare ethernet frames (macvtap has no packet-info prefix).
-//
-// The kernel creates /dev/tapN root-owned mode 0600, so — unlike the nat tap,
-// which `ip tuntap add ... user <owner>` hands us directly — we must chown it
-// to owner first (via sudo) before this unprivileged process can open it.
-func openMacvtap(name, owner string) (*os.File, error) {
-	idxRaw, err := os.ReadFile("/sys/class/net/" + name + "/ifindex")
-	if err != nil {
-		return nil, fmt.Errorf("extnet: read ifindex for %s: %w", name, err)
-	}
-	idx := strings.TrimSpace(string(idxRaw))
-	if _, cerr := strconv.Atoi(idx); cerr != nil {
-		return nil, fmt.Errorf("extnet: bad ifindex %q for %s", idx, name)
-	}
-	dev := "/dev/tap" + idx
-	if err := runCmds([]cmd{{[]string{"chown", owner, dev}}}); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(dev, os.O_RDWR, 0)
-	if err != nil {
-		return nil, fmt.Errorf("extnet: open %s: %w", dev, err)
-	}
-	// macvtap queues default to IFF_VNET_HDR: every read/write is prefixed
-	// with a 10-byte virtio_net_hdr, so bare ethernet writes get parsed as a
-	// bogus virtio header and silently dropped (and reads arrive shifted).
-	// Clear it via the same TUNSETIFF ioctl the tap path uses — macvtap
-	// accepts IFF_TAP|IFF_NO_PI flag updates on an open queue (the name field
-	// is ignored) — so both directions carry bare frames like the nat tap.
-	var ifr [ifnamsiz + 24]byte
-	flags := uint16(iffTap | iffNoPI)
-	ifr[ifnamsiz] = byte(flags)
-	ifr[ifnamsiz+1] = byte(flags >> 8)
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), tunSetIff, uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
-		_ = f.Close()
-		return nil, fmt.Errorf("extnet: clear IFF_VNET_HDR on %s: %v", dev, errno)
 	}
 	return f, nil
 }

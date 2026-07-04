@@ -1,19 +1,14 @@
-// Package extnet implements the two "outside world" node kinds — nat and mgmt —
-// as supervisor-internal endpoints that pump raw ethernet frames between a
-// kernel tap/macvtap device and a link's UDP relay (the iolab mesh carries raw
-// ethernet, so a tap fd yields/accepts exactly those frames).
-//
-//   - A "nat" node owns a tap device with a private gateway address
-//     (172.31.<n>.1/24), runs a minimal DHCP server on it, and NATs the pool out
-//     the VM's default route so lab nodes can `ip dhcp` and reach the internet.
-//   - A "mgmt" node owns a macvtap in bridge mode on the VM's management
-//     interface, so connected lab nodes appear on the real management network
-//     with their own MACs. Pure L2; no IP/NAT on our side.
+// Package extnet implements the "outside world" node kind — nat — as a
+// supervisor-internal endpoint. A "nat" node owns a tap device with a private
+// gateway address (172.31.<n>.1/24), runs a minimal DHCP server on it, and NATs
+// the pool out the VM's default route so lab nodes can `ip dhcp` and reach the
+// internet. The tap joins the link's Linux bridge (br-<linkid>), so the kernel
+// switches lab frames to it directly.
 //
 // The pure logic here — subnet-index allocation and DHCP packet encode/decode —
 // is platform independent and unit-tested on any OS. The privileged data plane
-// (tap/macvtap fds, ip/iptables/sysctl via sudo) lives behind //go:build linux
-// with a stub elsewhere, mirroring internal/node and internal/relay.
+// (tap fds, ip/iptables/sysctl via sudo) lives behind //go:build linux with a
+// stub elsewhere, mirroring internal/node.
 package extnet
 
 import (
@@ -21,14 +16,12 @@ import (
 	"sync"
 )
 
-// Kind is one of the two external-net node kinds this package realises.
+// Kind is the external-net node kind this package realises.
 type Kind string
 
 const (
 	// KindNAT is a NAT gateway node (tap + DHCP + MASQUERADE).
 	KindNAT Kind = "nat"
-	// KindMgmt is a management-network node (macvtap bridge on the mgmt iface).
-	KindMgmt Kind = "mgmt"
 )
 
 // MaxSubnetIndex is the largest per-nat subnet index. The gateway address is
@@ -113,9 +106,6 @@ func (s Subnet) PoolEnd() string   { return fmt.Sprintf("172.31.%d.199", s.Index
 // 15-char IFNAMSIZ limit: "iolnat" + up to a few digits fits.
 func tapName(nodeID int) string { return fmt.Sprintf("iolnat%d", nodeID) }
 
-// mvtapName returns the kernel device name for a mgmt node's macvtap.
-func mvtapName(nodeID int) string { return fmt.Sprintf("iolmgmt%d", nodeID) }
-
 // Config describes one external-net endpoint to bring up. The server fills it
 // from the lab node + the node's relay endpoint (the same UDP port pairing VPCS
 // uses: the endpoint SENDS frames to SendPort — the relay's receiving LocalPort
@@ -139,9 +129,6 @@ type Config struct {
 	// DefaultIface is the VM's default-route interface, out which nat MASQUERADEs
 	// (nat only). Resolved by the server via DefaultRouteIface.
 	DefaultIface string
-	// MgmtIface is the management interface a mgmt node's macvtap attaches to
-	// (mgmt only). Resolved by the server via PickMgmtIface / the -mgmt-iface flag.
-	MgmtIface string
 
 	// Bridged selects the P2 static-tap bridge-fabric data plane (nat only): the
 	// tap is created unbridged at Start with NO relay/UDP pumps, the DHCP server
@@ -164,20 +151,16 @@ func (c Config) resolvedHost() string {
 // advertises the corresponding hello features and rejects lab.start of an
 // unsupported kind.
 type Capabilities struct {
-	NAT  bool // nat gateway nodes are supported
-	Mgmt bool // mgmt (macvtap) nodes are supported
+	NAT bool // nat gateway nodes are supported
 }
 
 // GateFeatures returns the hello feature strings to advertise for the supported
-// kinds ("natgw" for NAT, "mgmt" for Mgmt), in a stable order. Pure so feature
-// gating is unit-testable with an injected Capabilities value.
+// kinds ("natgw" for NAT), in a stable order. Pure so feature gating is
+// unit-testable with an injected Capabilities value.
 func (c Capabilities) GateFeatures() []string {
 	var out []string
 	if c.NAT {
 		out = append(out, "natgw")
-	}
-	if c.Mgmt {
-		out = append(out, "mgmt")
 	}
 	return out
 }
@@ -187,8 +170,6 @@ func (c Capabilities) Supports(kind Kind) bool {
 	switch kind {
 	case KindNAT:
 		return c.NAT
-	case KindMgmt:
-		return c.Mgmt
 	default:
 		return false
 	}
