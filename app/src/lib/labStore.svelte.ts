@@ -841,9 +841,11 @@ class LabStore {
   duplicateNode(nodeId: number): number | null {
     const src = this.lab.nodes.find((n) => n.id === nodeId);
     if (!src) return null;
-    // Lock the SOURCE node until the async supervisor sync settles. Already
-    // locked → no-op.
-    if (!this.acquireNodeLock(nodeId, "duplicating")) return null;
+    // Duplication does not touch the SOURCE node's runtime state at all (it
+    // stays whatever it was — running/stopped/etc.), so it must show no
+    // lock/progress effect on it. The clone is a brand-new node added via the
+    // normal addNode path (which itself does not lock), so no lock is needed
+    // on either node here.
     const id = this.nextNodeId();
     const clone: LabNode = {
       ...structuredClone($state.snapshot(src)),
@@ -852,9 +854,7 @@ class LabStore {
       x: src.x + 40,
       y: src.y + 40,
     };
-    // supervisor sync happens async; id is final now. addNode is guarded (never
-    // rethrows), so release the source lock once it settles either way.
-    void this.addNode(clone).finally(() => this.releaseNodeLock(nodeId));
+    void this.addNode(clone);
     return id;
   }
 
