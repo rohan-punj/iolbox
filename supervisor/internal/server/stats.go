@@ -55,6 +55,10 @@ func (s *Server) statsLoop(ctx context.Context) {
 		protosDir     [2]map[string]uint64
 	}
 	last := make(map[int]sample)
+	// flast is the separate baseline for FABRIC links (polled from tap netdev
+	// counters + active bridge captures, not the relay). Link ids are disjoint
+	// from relay ids (a link is fabric OR legacy-relay, never both).
+	flast := make(map[int]sample)
 
 	// Host resource monitor: sample the runtime VM's CPU/RAM/disk each tick and
 	// push a host.stats event so the GUI can show a live monitor of the host
@@ -100,6 +104,33 @@ func (s *Server) statsLoop(ctx context.Context) {
 				protos := protoRates(prev.protos, st.Protos, statsInterval)
 				protosDir := protoDirRates(prev.protosDir, st.ProtosDir, statsInterval)
 				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos, ProtosDir: protosDir})
+			}
+
+			// Fabric links (P4): no relay to poll — derive throughput from the
+			// endpoint taps' netdev counters (always-on link glow) plus per-proto
+			// from an active bridge capture. Directional breakdown isn't attributed
+			// (tcpdump-on-bridge doesn't split by source), so ProtosDir is omitted.
+			s.mu.Lock()
+			ll := s.lab
+			s.mu.Unlock()
+			if ll == nil {
+				continue
+			}
+			fcur := s.fabricStats(ll)
+			for id := range flast {
+				if _, ok := fcur[id]; !ok {
+					delete(flast, id)
+				}
+			}
+			for id, st := range fcur {
+				prev := flast[id]
+				flast[id] = sample{frames: st.frames, bytes: st.bytes, protos: st.protos}
+				fps, bps, emit := linkRate(prev.frames, prev.bytes, st.frames, st.bytes, statsInterval)
+				if !emit {
+					continue
+				}
+				protos := protoRates(prev.protos, st.protos, statsInterval)
+				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos})
 			}
 		}
 	}

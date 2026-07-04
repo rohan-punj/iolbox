@@ -959,6 +959,30 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 			return nil, protocol.Errorf(protocol.CodePortUnavailable, "%v", err)
 		}
 	}
+
+	// FABRIC link: there is no relay to tee. Capture the link's Linux bridge with
+	// tcpdump and serve it as pcapng on the same port model (the GUI /capture/<id>
+	// path reads ll.captures[link] unchanged). Every fabric link is capturable
+	// live with no node restart — including plain IOL<->IOL, which the relay model
+	// never could.
+	if isFabricLink(link, fabricNodes(ll.doc)) {
+		actual, err := s.startBridgeCapture(ll, link.ID, port)
+		if err != nil {
+			if !wasArmed {
+				s.capturePorts.Release(port)
+			}
+			return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+		}
+		ll.mu.Lock()
+		ll.captures[link.ID] = actual
+		ll.mu.Unlock()
+		s.emit(protocol.EventCaptureStarted, protocol.CaptureData{Link: link.ID, CapturePort: actual})
+		res := protocol.CaptureResult{Link: link.ID, CapturePort: actual}
+		if args.Mode == "file" {
+			res.File = args.File
+		}
+		return res, nil
+	}
 	// Record the capture intent, then rebuild the plan so this link becomes
 	// bridged with a pcapng tee on its relay. NOTE: an IOL<->IOL link that booted
 	// NATIVE (no bridging) only routes through the relay/tee after the affected
@@ -1026,6 +1050,13 @@ func (s *Server) handleCaptureStop(raw json.RawMessage) (any, error) {
 	ll.mu.Unlock()
 	if ok {
 		s.capturePorts.Release(port)
+	}
+	// FABRIC link: stop its tcpdump/pcapng bridge capture; nothing else to do (no
+	// relay to rebuild).
+	if link := ll.findLink(args.Link); link != nil && isFabricLink(link, fabricNodes(ll.doc)) {
+		s.stopBridgeCapture(ll, args.Link)
+		s.emit(protocol.EventCaptureStopped, protocol.CaptureData{Link: args.Link, CapturePort: port})
+		return protocol.CaptureResult{Link: args.Link, CapturePort: port}, nil
 	}
 	// Rebuild the plan without this link's tee. In capture-ready mode (the
 	// default) an IOL<->IOL link stays bridged, so it simply gets a fresh relay

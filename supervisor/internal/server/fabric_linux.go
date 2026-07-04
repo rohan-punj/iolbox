@@ -5,7 +5,10 @@ package server
 import (
 	"context"
 	"os"
+	"strconv"
+	"strings"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/bcap"
 	"github.com/rohanpunj/iolab/supervisor/internal/fabric"
 	"github.com/rohanpunj/iolab/supervisor/internal/iouyap"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
@@ -64,7 +67,10 @@ func (s *Server) startFabric(ll *loadedLab) error {
 		}
 	}
 
-	// Attach every fabric link's taps to its bridge.
+	// Attach every fabric link's taps to its bridge, and (re)start a bridge
+	// capture for any fabric link that already has an armed capture port (doc
+	// capture.enabled auto-armed at lab start, or a capture that survived a
+	// hot-connect). The bridge exists now, so tcpdump can attach.
 	fabricOK := fabricNodes(ll.doc)
 	for i := range ll.doc.Links {
 		l := &ll.doc.Links[i]
@@ -74,8 +80,54 @@ func (s *Server) startFabric(ll *loadedLab) error {
 		if err := s.attachFabricLink(ll, l); err != nil {
 			return err
 		}
+		ll.mu.Lock()
+		port, armed := ll.captures[l.ID]
+		_, capturing := ll.bcaps[l.ID]
+		ll.mu.Unlock()
+		if armed && port != 0 && !capturing {
+			if _, err := s.startBridgeCapture(ll, l.ID, port); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// startBridgeCapture starts (or reuses) a tcpdump-on-bridge pcapng capture for a
+// fabric link and returns the TCP port serving it. Idempotent: a link already
+// capturing returns its existing port.
+func (s *Server) startBridgeCapture(ll *loadedLab, linkID, port int) (int, error) {
+	ll.mu.Lock()
+	if c, ok := ll.bcaps[linkID]; ok {
+		p := c.Port()
+		ll.mu.Unlock()
+		return p, nil
+	}
+	ll.mu.Unlock()
+	br, err := fabric.BridgeName(linkID)
+	if err != nil {
+		return 0, protocol.Errorf(protocol.CodeBadRequest, "fabric bridge name link %d: %v", linkID, err)
+	}
+	c, err := bcap.Start(br, s.cfg.CaptureBind, port)
+	if err != nil {
+		return 0, protocol.Errorf(protocol.CodeNodeSpawnFailed, "capture bridge %s: %v", br, err)
+	}
+	ll.mu.Lock()
+	ll.bcaps[linkID] = c
+	ll.mu.Unlock()
+	return c.Port(), nil
+}
+
+// stopBridgeCapture stops a fabric link's bridge capture (kills tcpdump, closes
+// the pcapng server). Idempotent.
+func (s *Server) stopBridgeCapture(ll *loadedLab, linkID int) {
+	ll.mu.Lock()
+	c := ll.bcaps[linkID]
+	delete(ll.bcaps, linkID)
+	ll.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
 }
 
 // attachFabricLink ensures the br-<linkid> bridge exists and both endpoint taps
@@ -157,6 +209,8 @@ func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error {
 // taps themselves persist — the interfaces are simply unconnected again, still
 // fabric-eligible and ready to be reattached to a new link with no restart.
 func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
+	// Stop any bridge capture first (the bridge is about to go away).
+	s.stopBridgeCapture(ll, l.ID)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	for _, ep := range l.Endpoints {
@@ -225,6 +279,93 @@ func (s *Server) setupVPCSFabric(ll *loadedLab, nr *nodeRuntime, n *lab.Node) er
 	return nil
 }
 
+// fabStat is one fabric link's cumulative counters for the stats loop: frames +
+// bytes summed across its endpoint taps (each frame ingresses at one tap, so the
+// sum is the link's forwarded-frame count), plus the per-protocol counts from an
+// active bridge capture (nil when the link isn't being captured).
+type fabStat struct {
+	frames uint64
+	bytes  uint64
+	protos map[string]uint64
+}
+
+// fabricStats snapshots every fabric link's cumulative counters (see fabStat).
+// Frame/byte counts come from the endpoint taps' netdev statistics — always
+// available, so a fabric link drives link-glow whether or not it is captured;
+// per-protocol counts come from the link's live bridge capture when present.
+func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat {
+	ll.mu.Lock()
+	linkIDs := make([]int, 0, len(ll.fabricLinks))
+	for id := range ll.fabricLinks {
+		linkIDs = append(linkIDs, id)
+	}
+	bcaps := make(map[int]*bcap.Capture, len(ll.bcaps))
+	for id, c := range ll.bcaps {
+		bcaps[id] = c
+	}
+	ll.mu.Unlock()
+
+	out := make(map[int]fabStat, len(linkIDs))
+	for _, id := range linkIDs {
+		l := ll.findLink(id)
+		if l == nil {
+			continue
+		}
+		var frames, bytes uint64
+		for _, dev := range s.fabricLinkTapDevs(ll, l) {
+			p, b := readTapCounters(dev)
+			frames += p
+			bytes += b
+		}
+		fs := fabStat{frames: frames, bytes: bytes}
+		if c := bcaps[id]; c != nil {
+			_, _, protos := c.Stats()
+			fs.protos = protos
+		}
+		out[id] = fs
+	}
+	return out
+}
+
+// fabricLinkTapDevs returns the tap device names of a fabric link's endpoints:
+// an IOL interface's static tap, a VPCS node's shim tap, or a NAT node's tap.
+func (s *Server) fabricLinkTapDevs(ll *loadedLab, l *lab.Link) []string {
+	var devs []string
+	for _, ep := range l.Endpoints {
+		node := ll.findNode(ep.Node)
+		switch {
+		case node != nil && node.Kind == lab.KindVPCS:
+			if nr := ll.get(ep.Node); nr != nil && nr.vtapName != "" {
+				devs = append(devs, nr.vtapName)
+			}
+		case node != nil && node.Kind == lab.KindNAT:
+			devs = append(devs, "iolnat"+strconv.Itoa(ep.Node)) // matches extnet tapName
+		default:
+			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+				devs = append(devs, t.tapName)
+			}
+		}
+	}
+	return devs
+}
+
+// readTapCounters reads a netdev's cumulative rx packet + byte counters from
+// sysfs. rx on a tap counts frames the node sent into the bridge (the fabric's
+// forwarded-frame direction). Missing/unreadable counters read as 0.
+func readTapCounters(dev string) (packets, bytes uint64) {
+	base := "/sys/class/net/" + dev + "/statistics/"
+	return readUintFile(base + "rx_packets"), readUintFile(base + "rx_bytes")
+}
+
+func readUintFile(path string) uint64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	v, _ := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	return v
+}
+
 // teardownVPCS stops a fabric VPCS node's shim, deletes its tap and releases its
 // udp ports. Idempotent (nil/zero guards), so stopNode and teardownFabric can
 // both call it.
@@ -257,12 +398,17 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	links := ll.fabricLinks
 	ll.fabricLinks = make(map[int]bool)
 	taps := ll.staticTaps
+	caps := ll.bcaps
+	ll.bcaps = make(map[int]*bcap.Capture)
 	nodes := make([]*nodeRuntime, 0, len(ll.nodes))
 	for _, nr := range ll.nodes {
 		nodes = append(nodes, nr)
 	}
 	ll.mu.Unlock()
 
+	for _, c := range caps {
+		_ = c.Close()
+	}
 	for _, b := range tbs {
 		_ = b.close()
 	}

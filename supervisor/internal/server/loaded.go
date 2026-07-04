@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/bcap"
 	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
@@ -44,6 +45,10 @@ type loadedLab struct {
 	// fabricLinks records which link ids currently have a Linux bridge created +
 	// their endpoint taps attached (P1 IOL<->IOL fabric links). Guarded by mu.
 	fabricLinks map[int]bool
+	// bcaps holds the live bridge captures (tcpdump -i br-<linkid> -> pcapng TCP
+	// server) for fabric links that have an active capture, keyed by link id.
+	// Legacy links still capture via the relay tee. Guarded by mu.
+	bcaps map[int]*bcap.Capture
 	// assigns is each bridged link's STICKY data-plane identity (relay UDP port
 	// pair per endpoint + pseudo-instance per IOL endpoint), keyed by link id.
 	// Once assigned, a link keeps these values across every plan rebuild for the
@@ -99,6 +104,7 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		staticTaps:  make(map[int]map[string]ifaceTap),
 		tapBridges:  make(map[string]*labBridge),
 		fabricLinks: make(map[int]bool),
+		bcaps:       make(map[int]*bcap.Capture),
 	}
 }
 

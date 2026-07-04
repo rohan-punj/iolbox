@@ -16,3 +16,15 @@ func (s *Server) teardownFabric(ll *loadedLab)                        {}
 
 func (s *Server) setupVPCSFabric(ll *loadedLab, nr *nodeRuntime, n *lab.Node) error { return nil }
 func (s *Server) teardownVPCS(nr *nodeRuntime)                                      {}
+
+func (s *Server) startBridgeCapture(ll *loadedLab, linkID, port int) (int, error) { return port, nil }
+func (s *Server) stopBridgeCapture(ll *loadedLab, linkID int)                     {}
+
+// fabStat mirrors the linux type so statsLoop compiles on any OS.
+type fabStat struct {
+	frames uint64
+	bytes  uint64
+	protos map[string]uint64
+}
+
+func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat { return nil }
