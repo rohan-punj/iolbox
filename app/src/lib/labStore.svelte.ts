@@ -315,10 +315,18 @@ class LabStore {
     switch (evt.event) {
       case "node.state":
         this.nodeStates = { ...this.nodeStates, [evt.data.node]: evt.data.state };
-        // Release a start/stop lock now that the node reached a real state
-        // (WS1). wipe/duplicate locks are released on their own RPC settle, not
-        // here — but they don't emit node.state, so this never fires for them.
-        this.releaseNodeLock(evt.data.node);
+        // Release a start/stop lock once the node reaches a TERMINAL state
+        // (WS1). The state machine (supervisor/internal/node/state.go) always
+        // fires an intermediate node.state="starting" event the instant a
+        // start begins — releasing on ANY node.state (as before) cleared the
+        // lock within milliseconds of clicking Start, long before the node
+        // actually finished booting. A user re-clicking Start in that window
+        // re-acquired the lock, but the node was already in "starting" so the
+        // backend's second start is a no-op state-machine transition that
+        // never fires another event — wedging that lock until the real
+        // running/crashed event (or the 60s safety timeout). Only "running",
+        // "stopped", and "crashed" are terminal; "starting" must NOT release.
+        if (evt.data.state !== "starting") this.releaseNodeLock(evt.data.node);
         break;
       case "node.console":
         this.consolePorts = { ...this.consolePorts, [evt.data.node]: evt.data.consolePort };
