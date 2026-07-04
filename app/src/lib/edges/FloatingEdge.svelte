@@ -100,6 +100,13 @@
   const stpBlocked = $derived(
     (stpSourceBadge?.blocked ?? false) || (stpTargetBadge?.blocked ?? false)
   );
+  // A link is still CONVERGING (amber dashed) when either end is LRN/LIS and
+  // neither end is (yet) blocked — blocked takes visual priority since it's
+  // the more actionable state (click for why).
+  const stpTransitional = $derived(
+    !stpBlocked &&
+      ((stpSourceBadge?.transitional ?? false) || (stpTargetBadge?.transitional ?? false))
+  );
   // The blocking reason to show in the popover (source end preferred).
   const stpBlockReason = $derived(
     stpSourceBadge?.blocked ? stpSourceBadge.reason
@@ -277,6 +284,11 @@
        the click for the reason popover). -->
   {#if stpBlocked}
     <path class="stp-blocked" d={geom.path} />
+  {:else if stpTransitional}
+    <!-- STP still converging (LRN/LIS): a distinct amber dashed overlay, so it
+         reads as neither settled-forwarding (green glow) nor settled-blocked
+         (red dashed) — the user should Re-paint once it settles. -->
+    <path class="stp-converging" d={geom.path} />
   {/if}
 
   <!-- WS5b — routing best-path highlight: a bright accent underlay along the
@@ -359,7 +371,12 @@
         <button
           class="stp-badge"
           class:blocked={stpSourceBadge.blocked}
-          title={stpSourceBadge.blocked ? "Blocked port — click for why" : `${stpSourceBadge.role} · ${stpSourceBadge.state}`}
+          class:transitional={stpSourceBadge.transitional}
+          title={stpSourceBadge.blocked
+            ? "Blocked port — click for why"
+            : stpSourceBadge.transitional
+            ? `${stpSourceBadge.role} · ${stpSourceBadge.state} — still converging, Re-paint to refresh`
+            : `${stpSourceBadge.role} · ${stpSourceBadge.state}`}
           onclick={() => stpSourceBadge?.blocked && (reasonOpen = !reasonOpen)}
         >{stpSourceBadge.role} {stpSourceBadge.state}</button>
       {/if}
@@ -382,7 +399,12 @@
         <button
           class="stp-badge"
           class:blocked={stpTargetBadge.blocked}
-          title={stpTargetBadge.blocked ? "Blocked port — click for why" : `${stpTargetBadge.role} · ${stpTargetBadge.state}`}
+          class:transitional={stpTargetBadge.transitional}
+          title={stpTargetBadge.blocked
+            ? "Blocked port — click for why"
+            : stpTargetBadge.transitional
+            ? `${stpTargetBadge.role} · ${stpTargetBadge.state} — still converging, Re-paint to refresh`
+            : `${stpTargetBadge.role} · ${stpTargetBadge.state}`}
           onclick={() => stpTargetBadge?.blocked && (reasonOpen = !reasonOpen)}
         >{stpTargetBadge.role} {stpTargetBadge.state}</button>
       {/if}
@@ -636,6 +658,30 @@
     filter: drop-shadow(0 0 4px color-mix(in oklab, #e5484d 55%, transparent));
   }
 
+  /* STP still-converging link (LRN/LIS): amber dashed, visually distinct from
+     both the red-dashed BLK and the plain green-glow FWD cable — a cue to
+     Re-paint once the tree settles. */
+  .stp-converging {
+    fill: none;
+    stroke: #f5a623;
+    stroke-width: 2.5;
+    stroke-dasharray: 3 5;
+    stroke-linecap: round;
+    pointer-events: none;
+    filter: drop-shadow(0 0 4px color-mix(in oklab, #f5a623 55%, transparent));
+    animation: stp-converging-march 0.9s linear infinite;
+  }
+  @keyframes stp-converging-march {
+    to {
+      stroke-dashoffset: -16;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stp-converging {
+      animation: none;
+    }
+  }
+
   /* Routing best-path: a bright accent underlay + moving direction arrows. */
   :global(.svelte-flow__edge .floating-edge.is-bestpath) {
     stroke: var(--accent);
@@ -694,6 +740,14 @@
   }
   .stp-badge.blocked:hover {
     background: #e5484d;
+  }
+  /* STP still-converging (LRN/LIS) badge: amber, distinct from both the
+     accent-tinted settled FWD badge and the red BLK badge. Not clickable —
+     there's no "reason" to show, just Re-paint. */
+  .stp-badge.transitional {
+    color: #1a1200;
+    background: color-mix(in oklab, #f5a623 78%, var(--ground));
+    border-color: #f5a623;
   }
 
   /* Blocked-port reason popover. */

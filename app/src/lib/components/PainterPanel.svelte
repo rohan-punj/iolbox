@@ -24,6 +24,7 @@
   const proto = $derived(painterStore.proto);
   const result = $derived(painterStore.result);
   const busy = $derived(painterStore.busy);
+  const isStp = $derived(proto === "stp");
 
   // IOL nodes offered as destination picks (routing protocols). A pick just
   // fills the prefix box with a placeholder the user can refine — the frontend
@@ -41,6 +42,14 @@
   const hintNodes = $derived(
     (result?.nodes ?? []).filter((n) => !n.running && n.hint)
   );
+
+  // STP node -> VLAN flow state (painterStore).
+  const stpNodeId = $derived(painterStore.stpNodeId);
+  const stpVlans = $derived(painterStore.stpVlans);
+  const stpVlanId = $derived(painterStore.stpVlanId);
+  const stpVlansBusy = $derived(painterStore.stpVlansBusy);
+  const stpVlansHint = $derived(painterStore.stpVlansHint);
+  const canPaintStp = $derived(painterStore.canPaintStp);
 
   function fmtAgo(ts: number | null): string {
     if (ts == null) return "";
@@ -75,6 +84,60 @@
           >{PAINTER_PROTO_NAMES[p]}</button>
         {/each}
       </div>
+
+      <!-- STP node -> VLAN flow: pick the probe node, Detect VLANs, then pick
+           the VLAN to paint. STP is per-VLAN (backend redesign) — there is no
+           destination for STP, just this three-step chain, and Paint stays
+           disabled until a VLAN is chosen. -->
+      {#if isStp}
+        <div class="pp-stp">
+          <label class="pp-dest-label" for="pp-stp-node">Node to probe</label>
+          <div class="pp-dest-row">
+            <select
+              id="pp-stp-node"
+              class="pp-stp-node"
+              aria-label="Pick the node to probe for VLANs"
+              value={stpNodeId ?? ""}
+              onchange={(e) => {
+                const v = (e.currentTarget as HTMLSelectElement).value;
+                painterStore.setStpNode(v === "" ? null : Number(v));
+              }}
+            >
+              <option value="">— node —</option>
+              {#each iolNodes as n (n.id)}
+                <option value={n.id}>{n.name}</option>
+              {/each}
+            </select>
+            <button
+              class="pp-detect"
+              disabled={stpNodeId == null || stpVlansBusy}
+              onclick={() => painterStore.detectVlans()}
+            >{stpVlansBusy ? "Detecting…" : "Detect VLANs"}</button>
+          </div>
+
+          {#if stpVlans.length}
+            <label class="pp-dest-label" for="pp-stp-vlan">VLAN</label>
+            <select
+              id="pp-stp-vlan"
+              class="pp-stp-vlan"
+              aria-label="Pick the VLAN to paint"
+              value={stpVlanId ?? ""}
+              onchange={(e) => {
+                const v = (e.currentTarget as HTMLSelectElement).value;
+                painterStore.stpVlanId = v === "" ? null : Number(v);
+              }}
+            >
+              {#each stpVlans as v (v.id)}
+                <option value={v.id}>{v.id} — {v.name}</option>
+              {/each}
+            </select>
+          {/if}
+
+          {#if stpVlansHint}
+            <div class="pp-note pp-warn">{stpVlansHint}</div>
+          {/if}
+        </div>
+      {/if}
 
       <!-- Destination selector — only for routing protocols. A node picker
            (fills the prefix box) plus a free-text prefix/host input. -->
@@ -137,7 +200,11 @@
         <div class="pp-snapshot">
           <div class="pp-snap-line">
             <span class="pp-snap-proto">{PAINTER_PROTO_NAMES[result.proto]}</span>
-            {#if result.dest}<span class="pp-snap-dest">→ {result.dest}</span>{/if}
+            {#if result.proto === "stp" && result.vlan}
+              <span class="pp-snap-dest">VLAN {result.vlan}</span>
+            {:else if result.dest}
+              <span class="pp-snap-dest">→ {result.dest}</span>
+            {/if}
             <span class="pp-snap-age">{fmtAgo(painterStore.paintedAt)}</span>
           </div>
           {#if painterStore.bgpReason}
@@ -158,7 +225,8 @@
     <div class="pp-footer">
       <button
         class="pp-run"
-        disabled={busy}
+        disabled={busy || (isStp && !canPaintStp)}
+        title={isStp && !canPaintStp ? "Pick a node and detect a VLAN first" : undefined}
         onclick={() => painterStore.paint()}
       >
         {#if busy}Painting…{:else if result}Re-paint{:else}Paint{/if}
@@ -249,10 +317,52 @@
     background: color-mix(in oklab, var(--accent) 88%, var(--bg-2));
     border-color: var(--accent);
   }
-  .pp-dest {
+  .pp-dest,
+  .pp-stp {
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+  .pp-stp-node {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-xs);
+    color: var(--ink);
+    background: var(--bg-1);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+  }
+  .pp-detect {
+    all: unset;
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    text-align: center;
+    cursor: pointer;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--bg-1);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    white-space: nowrap;
+  }
+  .pp-detect:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .pp-detect:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .pp-stp-vlan {
+    font-size: var(--fs-xs);
+    color: var(--ink);
+    background: var(--bg-1);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
   }
   .pp-dest-label {
     font-size: var(--fs-xs);

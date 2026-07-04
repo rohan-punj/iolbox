@@ -6,6 +6,11 @@
 // array; each node has at most ONE per-proto payload (matching `proto`), or
 // `running:false` + `hint` when it has no live data. `omitempty` on the backend
 // means absent fields arrive as `undefined` here.
+//
+// STP is VLAN-scoped (backend redesign): `painter.collect` for proto "stp"
+// REQUIRES `vlan > 0` and the result echoes it back on `vlan`; `isRoot` is
+// authoritative and AT MOST ONE node per collect carries `isRoot:true`. The
+// node→VLAN discovery step is a separate verb, `painter.stpVlans`.
 
 export type PainterProto = "stp" | "ospf" | "eigrp" | "bgp";
 
@@ -24,12 +29,27 @@ export interface StpPort {
   reason?: string;
 }
 export interface StpData {
+  /** The VLAN this snapshot's spanning-tree instance runs on. */
+  vlan: number;
   rootId: string;
   bridgeId: string;
   isRoot: boolean;
   rootCost: number;
   rootPort: string;
   ports: StpPort[];
+}
+
+// ---- STP VLAN discovery (`painter.stpVlans`) ----
+export interface StpVlan {
+  id: number;
+  name: string;
+}
+export interface StpVlansResult {
+  node: number;
+  running: boolean;
+  vlans: StpVlan[];
+  /** Non-empty when the node isn't running / has no STP / VLAN data. */
+  hint: string;
 }
 
 // ---- OSPF ----
@@ -105,6 +125,9 @@ export interface PainterNode {
 export interface PainterResult {
   proto: PainterProto;
   dest: string;
+  /** Echoed back for proto "stp" — the VLAN this snapshot was collected for.
+   *  Absent/0 for the routing protocols. */
+  vlan?: number;
   nodes: PainterNode[];
 }
 

@@ -16,7 +16,7 @@ import type {
   SupervisorEvent,
 } from "./protocol";
 import type { LabDocument, LabLink, LabNode } from "./labTypes";
-import type { PainterProto, PainterResult } from "./painterTypes";
+import type { PainterProto, PainterResult, StpVlansResult } from "./painterTypes";
 import { labToYaml, labFromText } from "./yaml";
 import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
@@ -222,14 +222,23 @@ export class SupervisorClient {
   /** Topology Painter (WS5): one-shot live scrape + parse of a protocol's
    *  decision state across the running IOL nodes. `dest` is a prefix/host
    *  STRING (required for eigrp/bgp, optional for ospf, ignored for stp);
-   *  `nodes` defaults to all running IOL nodes when omitted. */
+   *  `nodes` defaults to all running IOL nodes when omitted. `vlan` is
+   *  REQUIRED (>0) when proto is "stp" — the backend rejects vlan<=0 for STP
+   *  since spanning-tree is per-VLAN; ignored for the routing protocols. */
   painterCollect(
     labId: string,
     proto: PainterProto,
     dest?: string,
-    nodes?: number[]
+    nodes?: number[],
+    vlan?: number
   ) {
-    return this.call<PainterResult>("painter.collect", { labId, proto, dest, nodes });
+    return this.call<PainterResult>("painter.collect", { labId, proto, dest, nodes, vlan });
+  }
+
+  /** STP VLAN discovery: which VLANs a given node currently runs spanning-tree
+   *  on, so the painter panel can offer a VLAN picker before collecting. */
+  painterStpVlans(labId: string, nodeId: number) {
+    return this.call<StpVlansResult>("painter.stpVlans", { labId, nodeId });
   }
 
   status() {

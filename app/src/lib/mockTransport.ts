@@ -375,7 +375,22 @@ export class MockTransport implements Transport {
         const proto = String(args?.proto ?? "stp") as
           | "stp" | "ospf" | "eigrp" | "bgp";
         const dest = typeof args?.dest === "string" ? args.dest : "";
+        if (proto === "stp") {
+          const vlan = Number(args?.vlan ?? 0);
+          if (!(vlan > 0)) {
+            this.err(id, "bad_request", "vlan must be > 0 for proto=stp");
+            return;
+          }
+          this.ok(id, this.mockPainterStp(vlan));
+          return;
+        }
         this.ok(id, this.mockPainter(proto, dest));
+        return;
+      }
+
+      case "painter.stpVlans": {
+        const nodeId = Number(args?.nodeId ?? 0);
+        this.ok(id, this.mockStpVlans(nodeId));
         return;
       }
 
@@ -441,63 +456,107 @@ export class MockTransport implements Transport {
     }
   }
 
-  /** Dev-only synthetic painter.collect snapshot so the Topology Painter panel
-   *  + overlays are exercisable with no backend. Keyed off whatever lab is
-   *  loaded: only RUNNING IOL nodes get data; everything else returns a
-   *  running:false hint (never faked), matching the real contract. The
-   *  interface names use the painter's `Et0/0` form (interfaceNorm `et0/0`) so
-   *  the frontend canonicalizer is genuinely exercised against the lab doc's
-   *  short `e0/0` endpoints. */
-  private mockPainter(
-    proto: "stp" | "ospf" | "eigrp" | "bgp",
-    dest: string
-  ): unknown {
-    const iolIds = (this.lab?.nodes ?? [])
-      .filter((n) => n.kind === "iol")
-      .map((n) => n.id);
-    // Painter-style names from the lab doc's short endpoint names on THIS node.
-    const portsOf = (nodeId: number): { iface: string; norm: string }[] => {
-      const seen = new Set<string>();
-      const out: { iface: string; norm: string }[] = [];
-      for (const l of this.lab?.links ?? []) {
-        for (const e of l.endpoints) {
-          if (e.node !== nodeId) continue;
-          if (seen.has(e.interface)) continue;
-          seen.add(e.interface);
-          // e0/0 -> Et0/0 / et0/0 (only ethernet ports carry STP/OSPF here).
-          const mm = e.interface.match(/^e(\d+\/\d+)$/i);
-          if (!mm) continue;
-          out.push({ iface: `Et${mm[1]}`, norm: `et${mm[1]}` });
-        }
-      }
-      return out;
-    };
-    const running = (nodeId: number) => this.nodes.get(nodeId)?.state === "running";
+  /** IOL node ids in the currently loaded lab, in doc order. Shared by every
+   *  mock painter helper below. */
+  private iolIds(): number[] {
+    return (this.lab?.nodes ?? []).filter((n) => n.kind === "iol").map((n) => n.id);
+  }
 
-    const nodes = iolIds.map((nid, i) => {
-      if (!running(nid)) {
+  /** Painter-style ethernet ports on a node, from the lab doc's short endpoint
+   *  names (`e0/0` -> `Et0/0` / `et0/0`), matching the real backend's naming. */
+  private mockPortsOf(nodeId: number): { iface: string; norm: string }[] {
+    const seen = new Set<string>();
+    const out: { iface: string; norm: string }[] = [];
+    for (const l of this.lab?.links ?? []) {
+      for (const e of l.endpoints) {
+        if (e.node !== nodeId) continue;
+        if (seen.has(e.interface)) continue;
+        seen.add(e.interface);
+        // e0/0 -> Et0/0 / et0/0 (only ethernet ports carry STP/OSPF here).
+        const mm = e.interface.match(/^e(\d+\/\d+)$/i);
+        if (!mm) continue;
+        out.push({ iface: `Et${mm[1]}`, norm: `et${mm[1]}` });
+      }
+    }
+    return out;
+  }
+
+  private mockRunning(nodeId: number): boolean {
+    return this.nodes.get(nodeId)?.state === "running";
+  }
+
+  /** Dev-only synthetic painter.stpVlans: every running IOL node with at least
+   *  one ethernet link reports two fake VLANs (default + Engineering, mirroring
+   *  the backend contract example). A node with no ethernet neighbours reports
+   *  an empty list + hint, matching "no VLANs found" honestly. */
+  private mockStpVlans(nodeId: number): unknown {
+    if (!this.mockRunning(nodeId)) {
+      return { node: nodeId, running: false, vlans: [], hint: "node is not running" };
+    }
+    const ports = this.mockPortsOf(nodeId);
+    if (!ports.length) {
+      return {
+        node: nodeId,
+        running: true,
+        vlans: [],
+        hint: "no spanning-tree VLANs found on this node",
+      };
+    }
+    return {
+      node: nodeId,
+      running: true,
+      vlans: [
+        { id: 1, name: "default" },
+        { id: 10, name: "Engineering" },
+      ],
+      hint: "",
+    };
+  }
+
+  /** Dev-only synthetic painter.collect(proto:"stp", vlan) snapshot. Crowns
+   *  EXACTLY ONE root (the lowest-id running IOL node with ethernet ports),
+   *  matching the VLAN-scoped, one-root backend contract. A third running node
+   *  (if present) gets an LRN port so the transitional/converging styling is
+   *  exercisable without a real backend. */
+  private mockPainterStp(vlan: number): unknown {
+    const iolIds = this.iolIds();
+    const candidates = iolIds.filter(
+      (nid) => this.mockRunning(nid) && this.mockPortsOf(nid).length > 0
+    );
+    const rootId = `24586.aabb.cc00.0${vlan}00`;
+
+    const nodes = iolIds.map((nid) => {
+      if (!this.mockRunning(nid)) {
         return { node: nid, running: false, hint: "start the lab — node is not running" };
       }
-      const ports = portsOf(nid);
-      const base: Record<string, unknown> = { node: nid, running: true, hint: "" };
-      if (proto === "stp") {
-        const isRoot = i === 0; // lowest-index IOL node plays the root bridge.
-        const rootId = `32768.aabb.cc00.0100`;
-        base.stp = {
+      const ports = this.mockPortsOf(nid);
+      if (!ports.length) {
+        return { node: nid, running: true, hint: `no spanning-tree data for VLAN ${vlan} on this node` };
+      }
+      const rank = candidates.indexOf(nid); // 0 = root, 1 = next, 2 = converging demo, ...
+      const isRoot = rank === 0;
+      return {
+        node: nid,
+        running: true,
+        hint: "",
+        stp: {
+          vlan,
           rootId,
-          bridgeId: isRoot ? rootId : `${32768 + nid}.aabb.cc00.0${nid}00`,
+          bridgeId: isRoot ? rootId : `${24586 + nid}.aabb.cc00.0${nid}00`,
           isRoot,
-          rootCost: isRoot ? 0 : 100,
+          rootCost: isRoot ? 0 : 19 * rank,
           rootPort: isRoot || ports.length === 0 ? "" : ports[0].iface,
           ports: ports.map((p, pi) => {
-            // First port toward root = Root/FWD; a redundant 2nd port blocks.
-            const blocked = !isRoot && pi === 1;
+            // rank 2's second port demonstrates LRN (still converging); a
+            // redundant port past that blocks (loop-breaking).
+            const learning = rank === 2 && pi === 1;
+            const blocked = !isRoot && rank !== 2 && pi === 1;
             const role = isRoot ? "Desg" : pi === 0 ? "Root" : blocked ? "Altn" : "Desg";
             return {
               interface: p.iface,
               interfaceNorm: p.norm,
               role,
-              state: blocked ? "BLK" : "FWD",
+              state: blocked ? "BLK" : learning ? "LRN" : "FWD",
               cost: 100,
               prio: 128,
               blocked,
@@ -511,8 +570,36 @@ export class MockTransport implements Transport {
                 : {}),
             };
           }),
-        };
-      } else if (proto === "ospf") {
+        },
+      };
+    });
+
+    return { proto: "stp", dest: "", vlan, nodes };
+  }
+
+  /** Dev-only synthetic painter.collect snapshot so the Topology Painter panel
+   *  + overlays are exercisable with no backend. Keyed off whatever lab is
+   *  loaded: only RUNNING IOL nodes get data; everything else returns a
+   *  running:false hint (never faked), matching the real contract. The
+   *  interface names use the painter's `Et0/0` form (interfaceNorm `et0/0`) so
+   *  the frontend canonicalizer is genuinely exercised against the lab doc's
+   *  short `e0/0` endpoints. Routing protocols only (STP has its own
+   *  VLAN-scoped `mockPainterStp` above). */
+  private mockPainter(
+    proto: "ospf" | "eigrp" | "bgp",
+    dest: string
+  ): unknown {
+    const iolIds = this.iolIds();
+    const portsOf = (nodeId: number) => this.mockPortsOf(nodeId);
+    const running = (nodeId: number) => this.mockRunning(nodeId);
+
+    const nodes = iolIds.map((nid, i) => {
+      if (!running(nid)) {
+        return { node: nid, running: false, hint: "start the lab — node is not running" };
+      }
+      const ports = portsOf(nid);
+      const base: Record<string, unknown> = { node: nid, running: true, hint: "" };
+      if (proto === "ospf") {
         // Neighbour on each ethernet port; a route toward dest via the first.
         base.ospf = {
           neighbors: ports.map((p, pi) => ({

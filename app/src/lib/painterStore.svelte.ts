@@ -9,7 +9,7 @@
 // Session-only: a snapshot never survives a reload (a stale topology overlay
 // would mislead). panelOpen defaults closed — opt-in like the watcher.
 
-import type { PainterProto, PainterResult, PainterNode } from "./painterTypes";
+import type { PainterProto, PainterResult, PainterNode, StpVlan } from "./painterTypes";
 import { canonIface } from "./painterTypes";
 import { labStore } from "./labStore.svelte";
 
@@ -39,9 +39,14 @@ export function destUsed(proto: PainterProto): boolean {
 export interface StpEndpointBadge {
   /** Compact role token: R (Root) / D (Desg) / ALT (Altn) / BAK (Back). */
   role: string;
-  /** Port state token: FWD / BLK / LRN / LIS / DIS. */
+  /** Port state token: FWD / BLK / LRN / LIS / DIS, preserved verbatim. */
   state: string;
   blocked: boolean;
+  /** LRN (learning) / LIS (listening) — mid-convergence states that are
+   *  neither settled-forwarding nor settled-blocked. FloatingEdge renders
+   *  these amber/dashed so the user sees the tree is still converging and
+   *  knows to Re-paint rather than reading them as a final FWD or BLK. */
+  transitional: boolean;
   /** Populated only for blocked ports — the student-readable "why". */
   reason?: string;
 }
@@ -71,6 +76,24 @@ class PainterStore {
   destText = $state("");
   destNodeId = $state<number | null>(null);
 
+  // ---- STP node → VLAN flow ----
+  // STP is per-VLAN (backend redesign): the user picks the IOL node to probe,
+  // hits "Detect VLANs" (painter.stpVlans), then picks one of the VLANs it
+  // returned before Paint is enabled. This is deliberately separate from the
+  // routing `destText`/`destNodeId` pair above — different protocol shape.
+
+  /** Node chosen for VLAN discovery / as the probe target. */
+  stpNodeId = $state<number | null>(null);
+  /** VLANs returned by the last `painter.stpVlans` call for `stpNodeId`. */
+  stpVlans = $state<StpVlan[]>([]);
+  /** VLAN id chosen to paint. Null until a Detect VLANs result is picked. */
+  stpVlanId = $state<number | null>(null);
+  /** In-flight VLAN detection (separate spinner from `busy`/paint). */
+  stpVlansBusy = $state(false);
+  /** Hint from the last stpVlans call (e.g. "node not running", "no VLANs
+   *  with active STP"). Cleared on the next detect. */
+  stpVlansHint = $state<string | null>(null);
+
   /** The displayed snapshot, or null when nothing is painted. */
   result = $state<PainterResult | null>(null);
   /** Wall-clock ms when `result` was captured — shown in the panel so the user
@@ -91,6 +114,40 @@ class PainterStore {
     // so it is intentionally NOT reset here.
   }
 
+  setStpNode(nodeId: number | null) {
+    this.stpNodeId = nodeId;
+    // A new node invalidates any previously-detected VLAN list/choice.
+    this.stpVlans = [];
+    this.stpVlanId = null;
+    this.stpVlansHint = null;
+  }
+
+  /** Run `painter.stpVlans` for the chosen node and populate the VLAN picker.
+   *  Guards no-node-picked; surfaces the backend's hint honestly on an empty
+   *  list rather than leaving the dropdown blank with no explanation. */
+  async detectVlans(): Promise<void> {
+    if (this.stpVlansBusy || this.stpNodeId == null) return;
+    this.stpVlansBusy = true;
+    this.stpVlansHint = null;
+    this.error = null;
+    try {
+      const res = await labStore.client.painterStpVlans(labStore.lab.id, this.stpNodeId);
+      this.stpVlans = res.vlans;
+      this.stpVlanId = res.vlans.length ? res.vlans[0].id : null;
+      if (!res.vlans.length) {
+        this.stpVlansHint = res.hint || "no VLANs found on this node";
+      } else if (res.hint) {
+        this.stpVlansHint = res.hint;
+      }
+    } catch (e) {
+      this.stpVlans = [];
+      this.stpVlanId = null;
+      this.stpVlansHint = (e as Error).message || "VLAN detection failed";
+    } finally {
+      this.stpVlansBusy = false;
+    }
+  }
+
   /** Resolve the chosen destination to the STRING the backend expects. When the
    *  user picked a node, prefer that node's first configured interface/loopback
    *  address if we can infer one; otherwise fall back to the typed text. The
@@ -103,11 +160,42 @@ class PainterStore {
     return "";
   }
 
-  /** Run one snapshot. Guards non-running lab + missing-dest. Populates
+  /** True once a VLAN has been chosen — gates the Paint button for STP (the
+   *  backend rejects vlan<=0). */
+  get canPaintStp(): boolean {
+    return this.stpVlanId != null && this.stpVlanId > 0;
+  }
+
+  /** Run one snapshot. Guards non-running lab + missing-dest/-vlan. Populates
    *  `result`/`paintedAt` on success, `error` on failure. */
   async paint(): Promise<void> {
     if (this.busy) return;
     const proto = this.proto;
+    if (proto === "stp") {
+      if (!this.canPaintStp) {
+        this.error = "Pick a node and detect a VLAN before painting STP.";
+        return;
+      }
+      this.error = null;
+      this.busy = true;
+      try {
+        const res = await labStore.client.painterCollect(
+          labStore.lab.id,
+          proto,
+          undefined,
+          undefined,
+          this.stpVlanId!
+        );
+        this.result = res;
+        this.paintedAt = Date.now();
+      } catch (e) {
+        this.error = (e as Error).message || "paint failed";
+      } finally {
+        this.busy = false;
+      }
+      return;
+    }
+
     const dest = destUsed(proto) ? this.resolveDest() : "";
     if (destRequired(proto) && !dest) {
       this.error = `${PAINTER_PROTO_NAMES[proto]} needs a destination prefix or host.`;
@@ -153,8 +241,11 @@ class PainterStore {
     return m;
   });
 
-  /** The node ids that are the root bridge in the current STP snapshot (for the
-   *  crown badge on the node face). */
+  /** The node id that is the root bridge in the current STP snapshot (for the
+   *  crown badge on the node face), or empty. The backend's `isRoot` is
+   *  authoritative — AT MOST ONE node per collect carries it — so this array
+   *  holds 0 or 1 entries; kept as an array so IolNode's `.includes()` check
+   *  doesn't need to change shape. */
   get stpRootNodeIds(): number[] {
     if (!this.isStp) return [];
     const out: number[] = [];
@@ -179,6 +270,7 @@ class PainterStore {
           role: STP_ROLE_TOKEN[p.role] ?? p.role,
           state: p.state,
           blocked: p.blocked,
+          transitional: p.state === "LRN" || p.state === "LIS",
           reason: p.reason,
         };
       }
