@@ -4,7 +4,9 @@ package node
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -435,6 +437,19 @@ func (p *Process) teardown() {
 	}
 }
 
+// NewProcessForTest wraps pty in a fresh consoleHub and returns a *Process
+// exposing only the console surface (Subscribe/RunExec) — no real cmd/ptmx/
+// listener/pgid. For exercising a Process-shaped consumer (e.g.
+// internal/server's painter_linux_test.go, which needs a *node.Process to call
+// runShow's Process.RunExec through) without spawning a real IOL binary.
+// Exported ONLY for cross-package tests, mirroring NewSubscriptionForTest.
+func NewProcessForTest(pty io.ReadWriter, name string) *Process {
+	return &Process{
+		hub:  newConsoleHub(pty, name),
+		done: make(chan struct{}),
+	}
+}
+
 // Subscribe attaches an in-process console subscriber to this node's hub (see
 // consoleHub.Subscribe) so a caller in another package (internal/wsbridge,
 // and later a programmatic exec caller — v0.3.0 Phases 2/4) can consume
@@ -450,6 +465,22 @@ func (p *Process) Subscribe() *Subscription {
 		return nil
 	}
 	return hub.Subscribe()
+}
+
+// RunExec drives one scripted exec command against this node's console hub
+// (v0.3.0 Phase 4 — see consoleHub.RunExec), claiming the hub's input-turn
+// gate for the duration so concurrent interactive typing (web/native) is
+// queued rather than interleaved into the command's write/read cycle. Returns
+// an error if the node has no console hub — VPCS (its own telnet server) or
+// an IOL node that hasn't started/has already torn down.
+func (p *Process) RunExec(ctx context.Context, holder, cmd string) (string, error) {
+	p.mu.Lock()
+	hub := p.hub
+	p.mu.Unlock()
+	if hub == nil {
+		return "", ErrNoConsoleHub
+	}
+	return hub.RunExec(ctx, holder, cmd)
 }
 
 // PID returns the OS process id, or 0 if not started.

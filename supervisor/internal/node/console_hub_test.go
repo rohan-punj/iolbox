@@ -2,8 +2,11 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -680,6 +683,252 @@ func TestHubTurnClaimIsExclusive(t *testing.T) {
 	if !h.turn.claim("second") {
 		t.Fatal("claim should succeed after release")
 	}
+}
+
+// --- v0.3.0 Phase 4: ClaimTurn/RunExec (public API) tests ---
+
+// iosPty is a fake pty that behaves enough like a live IOS/IOL console to
+// drive consoleHub.RunExec end-to-end: it echoes every line it receives back
+// with CRLF, and after a bare CR (SyncPrompt's kick) or after "enable\r"/
+// "terminal length 0\r"/any other command line, it emits a trailing prompt.
+// State: unprivileged until "enable\r" is seen, then always privileged
+// (matches consolescript's assumption that labs boot with no enable secret).
+// Every write is recorded in order in the writes log for the test to assert
+// ordering against.
+type iosPty struct {
+	name string // prompt token, e.g. "R1"
+
+	mu     sync.Mutex
+	priv   bool
+	writes [][]byte // every byte slice ever written to this pty, in order
+
+	r *io.PipeReader
+	w *io.PipeWriter
+}
+
+func newIOSPty(name string) *iosPty {
+	r, w := io.Pipe()
+	return &iosPty{name: name, r: r, w: w}
+}
+
+func (p *iosPty) Read(b []byte) (int, error) { return p.r.Read(b) }
+
+// Write implements the pty side: record the bytes, then (asynchronously, so
+// Write itself never blocks on the reply reaching the hub's reader) emit the
+// scripted echo+prompt response into the read side.
+func (p *iosPty) Write(b []byte) (int, error) {
+	cp := append([]byte(nil), b...)
+	p.mu.Lock()
+	p.writes = append(p.writes, cp)
+	line := strings.TrimRight(string(cp), "\r\n")
+	if line == "enable" {
+		p.priv = true
+	}
+	priv := p.priv
+	p.mu.Unlock()
+
+	prompt := p.name + ">"
+	if priv {
+		prompt = p.name + "#"
+	}
+	go func() {
+		if line == "" {
+			// Bare CR (SyncPrompt's kick): just the prompt, no echo.
+			_, _ = p.w.Write([]byte("\r\n" + prompt))
+			return
+		}
+		_, _ = p.w.Write([]byte(line + "\r\n" + prompt))
+	}()
+	return len(b), nil
+}
+
+func (p *iosPty) writeCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.writes)
+}
+
+// TestHubRunExecReturnsCleanOutput confirms RunExec drives the full
+// enable/terminal-length-0/show sequence against the hub (no TCP dial, no
+// separate Negotiator) and returns clean parsed output — the painter
+// migration's core contract.
+func TestHubRunExecReturnsCleanOutput(t *testing.T) {
+	pty := newIOSPty("R1")
+	h := newConsoleHub(pty, "R1")
+	defer h.shutdown()
+
+	out, err := h.RunExec(context.Background(), "test:show", "show version")
+	if err != nil {
+		t.Fatalf("RunExec: %v", err)
+	}
+	if strings.Contains(out, "show version") {
+		t.Fatalf("output should have the echoed command stripped: %q", out)
+	}
+	if strings.Contains(out, "R1#") {
+		t.Fatalf("output should have the trailing prompt stripped: %q", out)
+	}
+}
+
+// TestHubClaimTurnQueuesAndFlushesInteractiveInput is the end-to-end Phase 4
+// regression test using the PUBLIC ClaimTurn API (Phase 3 pinned the same
+// behavior against the internal inputTurn directly): an in-process
+// Subscription's Write during an active turn is queued, and flushed in order
+// after the turn holder's own writes once release() runs.
+func TestHubClaimTurnQueuesAndFlushesInteractiveInput(t *testing.T) {
+	pty := newIOSPty("R1")
+	h := newConsoleHub(pty, "R1")
+	defer h.shutdown()
+
+	release, err := h.ClaimTurn(context.Background(), "test:turn")
+	if err != nil {
+		t.Fatalf("ClaimTurn: %v", err)
+	}
+
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+
+	if err := sub.Write([]byte("x")); err != nil {
+		t.Fatalf("queued Write returned error: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := pty.writeCount(); n != 0 {
+		t.Fatalf("interactive write reached the pty while turn was active: %d writes logged", n)
+	}
+
+	if err := h.writeDirect([]byte("enable\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "turn holder's write to land", func() bool { return pty.writeCount() == 1 })
+
+	release()
+
+	waitFor(t, "queued interactive write to flush", func() bool { return pty.writeCount() == 2 })
+	pty.mu.Lock()
+	defer pty.mu.Unlock()
+	if string(pty.writes[0]) != "enable\r" {
+		t.Fatalf("write[0] = %q, want the turn holder's own write first", pty.writes[0])
+	}
+	if string(pty.writes[1]) != "x" {
+		t.Fatalf("write[1] = %q, want the flushed interactive byte second", pty.writes[1])
+	}
+}
+
+// TestHubRunExecUnderConcurrentInteractiveWrite is the capture-correctness
+// regression test from docs/v0.3.0-console-unification.md §5: a concurrent
+// "interactive" writer firing mid-turn must not corrupt RunExec's captured
+// output, and its bytes must land on the pty only after RunExec's turn
+// releases.
+func TestHubRunExecUnderConcurrentInteractiveWrite(t *testing.T) {
+	pty := newIOSPty("R1")
+	h := newConsoleHub(pty, "R1")
+	defer h.shutdown()
+
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+
+	// Fire the interactive write as soon as SOME turn-holder write has landed,
+	// proving it's deferred rather than winning a race by pure luck.
+	interactiveSent := make(chan struct{})
+	go func() {
+		waitFor(t, "RunExec's first write", func() bool { return pty.writeCount() >= 1 })
+		_ = sub.Write([]byte("Z"))
+		close(interactiveSent)
+	}()
+
+	out, err := h.RunExec(context.Background(), "test:show", "show version")
+	if err != nil {
+		t.Fatalf("RunExec: %v", err)
+	}
+	<-interactiveSent
+	if strings.Contains(out, "Z") {
+		t.Fatalf("interactive byte leaked into RunExec's captured output: %q", out)
+	}
+
+	// The interactive "Z" must show up on the pty AFTER RunExec's own writes,
+	// once the turn released — not interleaved mid-sequence.
+	waitFor(t, "interactive write to flush post-release", func() bool {
+		pty.mu.Lock()
+		defer pty.mu.Unlock()
+		return len(pty.writes) > 0 && string(pty.writes[len(pty.writes)-1]) == "Z"
+	})
+}
+
+// TestHubSecondRunExecWaitsForFirst confirms two concurrent programmatic
+// callers are serialized by the turn gate — the second visibly waits rather
+// than interleaving its command with the first's, the exact hazard in §1.4.
+func TestHubSecondRunExecWaitsForFirst(t *testing.T) {
+	pty := newIOSPty("R1")
+	h := newConsoleHub(pty, "R1")
+	defer h.shutdown()
+
+	release1, err := h.ClaimTurn(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("ClaimTurn: %v", err)
+	}
+
+	secondClaimed := make(chan struct{})
+	go func() {
+		release2, err := h.ClaimTurn(context.Background(), "second")
+		if err != nil {
+			t.Errorf("second ClaimTurn: %v", err)
+			return
+		}
+		close(secondClaimed)
+		release2()
+	}()
+
+	// The second claim must NOT succeed while the first holds the turn.
+	select {
+	case <-secondClaimed:
+		t.Fatal("second ClaimTurn succeeded while first still held the turn")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release1()
+
+	select {
+	case <-secondClaimed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second ClaimTurn never succeeded after first released")
+	}
+}
+
+// TestHubClaimTurnForceReleasesOnCtxTimeout confirms a caller that never
+// releases (simulating a wedged painter call) is force-released once its ctx
+// expires, and that the force-release is logged (v0.3.0 §7 decision 4: no
+// silent recovery) — verified here via the queued-write-flushes-anyway
+// behavior, which only happens if the watchdog actually fired.
+func TestHubClaimTurnForceReleasesOnCtxTimeout(t *testing.T) {
+	pty := newIOSPty("R1")
+	h := newConsoleHub(pty, "R1")
+	defer h.shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err := h.ClaimTurn(ctx, "stuck:holder")
+	if err != nil {
+		t.Fatalf("ClaimTurn: %v", err)
+	}
+	// Deliberately never call release() — simulate a caller that forgot, or
+	// whose own work hung past ctx's deadline.
+
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+	if err := sub.Write([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh claim must succeed once the watchdog force-releases the stuck
+	// turn — this only happens if force-release actually ran.
+	release2, err := h.ClaimTurn(context.Background(), "next")
+	if err != nil {
+		t.Fatalf("ClaimTurn after force-release: %v", err)
+	}
+	release2()
+
+	// The queued interactive byte from before the force-release must have been
+	// flushed (force-release flushes the queue per the ctx-timeout path).
+	waitFor(t, "queued write to flush after force-release", func() bool { return pty.writeCount() >= 1 })
 }
 
 // TestHubMixedTCPAndInProcessSubscribers confirms a TCP client and an

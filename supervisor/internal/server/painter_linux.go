@@ -4,35 +4,38 @@ package server
 
 import (
 	"context"
-	"net"
-	"strconv"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/rohanpunj/iolbox/supervisor/internal/consolescript"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
-	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 )
 
-// runShowTimeout bounds a single runShow session end-to-end (dial + prompt sync
-// + one command). IOL exec output is small; a converged `show` returns in well
-// under a second, so a few seconds is generous and still fails fast on a wedged
-// console.
+// runShowTimeout bounds a single runShow session end-to-end (turn claim +
+// prompt sync + one command). IOL exec output is small; a converged `show`
+// returns in well under a second, so a few seconds is generous and still
+// fails fast on a wedged console. Also mirrored as the turn-claim timeout
+// (v0.3.0 §7 decision 4) since RunExec's ctx bounds both.
 const runShowTimeout = 8 * time.Second
 
 // runShow runs ONE exec `show` command on a running IOL node and returns its
 // output with the echoed command line and the trailing prompt stripped.
 //
-// It reuses the SAME console path config.extract's siblings use: it dials the
-// node's loopback telnet console port, which the per-node consoleHub multiplexes
-// (see node/console_hub.go) — so this attaches as just another hub client
-// ALONGSIDE the webconsole and never opens a second pty owner that would fight
-// it. The session: negotiate telnet, wait for an exec prompt, enter enable mode
-// if needed, set `terminal length 0` (no pager), send the show command, read
-// until the prompt returns, then strip the echo + prompt.
+// v0.3.0 Phase 4: this no longer dials its own telnet socket. It claims the
+// node's console hub's input-arbitration turn and drives the command over the
+// hub's OWN decoded byte stream (node.Process.RunExec -> consoleHub.RunExec),
+// so it: (a) never opens a second pty owner/Negotiator (the hub is the ONLY
+// telnet-speaking thing left in the process — see docs/v0.3.0-console-
+// unification.md §3(a)), (b) is guaranteed uninterleaved with concurrent
+// interactive typing in the web/native console (the turn gate queues
+// interactive keystrokes for the duration, §2.3/§3(b)), and (c) writes the
+// show command to the SAME pty the student's own console reads, so it scrolls
+// there too (§3(c), the teaching-win property).
 //
-// Only valid for a RUNNING IOL node (caller checks state); a stopped node has no
-// console port and this returns an error the caller turns into an empty result.
+// Only valid for a RUNNING IOL node (caller checks state); a stopped node has
+// no console hub and this returns an error the caller turns into an empty
+// result.
 func (s *Server) runShow(ctx context.Context, ll *loadedLab, nodeID int, cmd string) (string, error) {
 	nr := ll.get(nodeID)
 	if nr == nil || nr.proc == nil {
@@ -41,75 +44,17 @@ func (s *Server) runShow(ctx context.Context, ll *loadedLab, nodeID int, cmd str
 	if nr.machine.State() != node.StateRunning {
 		return "", protocol.Errorf(protocol.CodeNotLoaded, "node %d is not running", nodeID)
 	}
-	port := nr.consolePort
 
 	ctx, cancel := context.WithTimeout(ctx, runShowTimeout)
 	defer cancel()
 
-	sess, err := dialConsole(ctx, port)
+	holder := fmt.Sprintf("painter:show:node%d", nodeID)
+	out, err := nr.proc.RunExec(ctx, holder, cmd)
 	if err != nil {
+		if errors.Is(err, node.ErrNoConsoleHub) {
+			return "", protocol.Errorf(protocol.CodeNotLoaded, "node %d has no console", nodeID)
+		}
 		return "", err
 	}
-	defer sess.close()
-
-	return sess.runShow(ctx, cmd)
-}
-
-// consoleSession is one scripted telnet exec session against a node console.
-// The connection-agnostic prompt-sync/exec-parsing logic (SyncPrompt/RunExec/
-// HasPromptSuffix/CleanShowOutput) lives in internal/consolescript (v0.3.0
-// Phase 0 extraction) so it can be shared with a future hub-based turn
-// (Phase 4); this type retains only the net.Conn + telnet.Negotiator plumbing
-// that's specific to today's dial-your-own-socket path.
-type consoleSession struct {
-	conn net.Conn
-	neg  *telnet.Negotiator
-	sess *consolescript.Session
-}
-
-// dialConsole opens a telnet session to the loopback console port and completes
-// initial IAC negotiation.
-func dialConsole(ctx context.Context, port int) (*consoleSession, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		return nil, protocol.Errorf(protocol.CodeNotLoaded, "dial console :%d: %v", port, err)
-	}
-	s := &consoleSession{conn: conn, neg: telnet.NewNegotiator()}
-	s.sess = consolescript.New(s.write)
-	return s, nil
-}
-
-func (s *consoleSession) close() { _ = s.conn.Close() }
-
-// write sends raw bytes to the console.
-func (s *consoleSession) write(b []byte) error {
-	_, err := s.conn.Write(b)
-	return err
-}
-
-// readInto reads one chunk, feeds it through the telnet negotiator (answering
-// option requests), and appends the clean output to the session buffer.
-// Honors the ctx deadline via a read deadline. Satisfies
-// consolescript.ReadFunc.
-func (s *consoleSession) readInto(ctx context.Context) error {
-	if dl, ok := ctx.Deadline(); ok {
-		_ = s.conn.SetReadDeadline(dl)
-	}
-	tmp := make([]byte, 4096)
-	n, err := s.conn.Read(tmp)
-	if n > 0 {
-		clean := s.neg.Feed(tmp[:n])
-		if reply := s.neg.Reply(); len(reply) > 0 {
-			_ = s.write(reply)
-		}
-		s.sess.Feed(clean)
-	}
-	return err
-}
-
-// runShow performs the full scripted exec: sync prompt, ensure enable +
-// `terminal length 0`, run the command, and return the trimmed output.
-func (s *consoleSession) runShow(ctx context.Context, cmd string) (string, error) {
-	return s.sess.RunExec(ctx, s.readInto, cmd)
+	return out, nil
 }

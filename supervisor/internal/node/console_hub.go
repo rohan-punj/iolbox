@@ -1,12 +1,31 @@
 package node
 
 import (
+	"context"
+	"errors"
 	"io"
+	"log"
 	"net"
 	"sync"
+	"time"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/consolescript"
 	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 )
+
+// errHubClosed is returned by ClaimTurn/RunExec when the hub has already shut
+// down (node exited/torn down) — the v0.3.0 Phase 4 equivalent of runShow's
+// previous "dial console: connection refused" failure mode, but without a
+// socket involved.
+var errHubClosed = errors.New("node: console hub is shut down")
+
+// ErrNoConsoleHub is returned by Process.RunExec when the node has no console
+// hub at all — VPCS (its own telnet server, see the Process doc comment) or an
+// IOL node that hasn't started yet / has already torn down. Distinct from
+// errHubClosed (hub existed but shut down) so callers/logs can tell "never had
+// one" from "had one, it's gone" apart, though today's only caller
+// (painter_linux.go's runShow) treats both as "console unavailable".
+var ErrNoConsoleHub = errors.New("node: no console hub for this node")
 
 // consoleHub multiplexes ONE node's pty console across any number of
 // subscribers simultaneously — telnet TCP clients (native OS telnet) and
@@ -470,6 +489,141 @@ func (h *consoleHub) Subscribe() *Subscription {
 		return nil
 	}
 	return &Subscription{hub: h, c: c, Out: c.out}
+}
+
+// turnClaimPoll is how often ClaimTurn re-checks whether the turn has become
+// free while waiting for a prior holder to release. A console turn finishes in
+// well under a second (real show commands), so this is fine-grained enough to
+// not add perceptible latency while staying cheap.
+const turnClaimPoll = 10 * time.Millisecond
+
+// ClaimTurn blocks (bounded by ctx) until it can become the SOLE programmatic
+// input-turn holder for this node, then returns a release func the caller
+// MUST call exactly once to hand the turn back — typically via `defer release()`.
+// While the turn is held, every interactive writer (TCP clients via attach,
+// in-process Subscriptions via Write) has its input queued instead of written
+// to the pty (see inputTurn/gatedWrite); release() flushes that queue in
+// original order.
+//
+// holder is a short diagnostic label (e.g. "painter:show:R1") used ONLY in the
+// force-release warning log below — never surfaced to any protocol/UI (v0.3.0
+// §7 decision 5: no protocol-visible "console busy" event).
+//
+// If ctx is done before the turn is released, ClaimTurn force-releases it and
+// logs a visible warning (v0.3.0 §7 decision 4: no silent recovery) — this is
+// the "stuck turn" guard: a caller that forgets to release, or whose ctx
+// carries a deadline shorter than its own work, cannot wedge every future
+// programmatic call or all interactive input forever.
+//
+// Returns an error (without claiming) if the hub is already shut down or ctx
+// is done before a turn becomes available.
+func (h *consoleHub) ClaimTurn(ctx context.Context, holder string) (release func(), err error) {
+	for {
+		h.mu.Lock()
+		closed := h.closed
+		h.mu.Unlock()
+		if closed {
+			return nil, errHubClosed
+		}
+		if h.turn.claim(holder) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-h.done:
+			return nil, errHubClosed
+		case <-time.After(turnClaimPoll):
+		}
+	}
+
+	var once sync.Once
+	// watchdog force-releases the turn if the caller's ctx expires (or the hub
+	// shuts down) before an explicit release() call — the stuck-turn guard.
+	watchdogDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			once.Do(func() {
+				queued := h.turn.release()
+				log.Printf("consoleHub: FORCE-RELEASED stuck input turn holder=%q reason=%v (queued %d interactive write(s) flushed)", holder, ctx.Err(), len(queued))
+				h.flushQueued(queued)
+			})
+		case <-h.done:
+			once.Do(func() {
+				queued := h.turn.release()
+				log.Printf("consoleHub: force-released input turn holder=%q on hub shutdown (queued %d interactive write(s) discarded)", holder, len(queued))
+				// Hub is shutting down — the pty is going away too; don't bother
+				// flushing to a dead write path.
+			})
+		case <-watchdogDone:
+		}
+	}()
+
+	release = func() {
+		once.Do(func() {
+			close(watchdogDone)
+			queued := h.turn.release()
+			h.flushQueued(queued)
+		})
+	}
+	return release, nil
+}
+
+// flushQueued writes queued interactive bytes to the pty in original order,
+// AFTER the turn's own output has settled — this is the ordering guarantee
+// docs/v0.3.0-console-unification.md §5 calls out ("queued interactive bytes
+// go out after the turn's own output settles, not interleaved mid-turn").
+// Uses writeDirect (not gatedWrite) since the turn is already released by the
+// time this runs; re-entering gatedWrite here would be correct too (no turn
+// active) but writeDirect makes the "no re-queueing" invariant explicit.
+func (h *consoleHub) flushQueued(queued [][]byte) {
+	for _, p := range queued {
+		if err := h.writeDirect(p); err != nil {
+			return
+		}
+	}
+}
+
+// RunExec claims a turn, drives one scripted exec command (sync prompt, enable
+// if needed, `terminal length 0`, run cmd, capture until the prompt returns)
+// via internal/consolescript.Session against this hub's OWN decoded output
+// stream, and releases the turn before returning — v0.3.0 Phase 4. This is
+// what supervisor/internal/server/painter_linux.go's runShow calls instead of
+// dialing its own telnet socket: no TCP dial, no separate Negotiator, and the
+// command is written to the SAME pty the student's own web/native console
+// reads, so it scrolls in their session too (the teaching-win property, §3c).
+//
+// ctx bounds the whole call (turn claim + the exec sequence); a caller should
+// pass a context already carrying the desired timeout (painter_linux.go uses
+// runShowTimeout, 8s, mirroring the turn-claim-timeout decision in §7.4).
+func (h *consoleHub) RunExec(ctx context.Context, holder, cmd string) (string, error) {
+	release, err := h.ClaimTurn(ctx, holder)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
+	sub := h.Subscribe()
+	if sub == nil {
+		return "", errHubClosed
+	}
+	defer sub.Unsubscribe()
+
+	sess := consolescript.New(h.writeDirect)
+	read := func(ctx context.Context) error {
+		select {
+		case chunk, ok := <-sub.Out:
+			if !ok {
+				return errHubClosed
+			}
+			sess.Feed(chunk)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return sess.RunExec(ctx, read, cmd)
 }
 
 // normalizeNVTLineEndings collapses telnet NVT Enter sequences to the bare CR

@@ -2,7 +2,10 @@
 
 package node
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // ErrUnsupportedPlatform is returned when node spawning is attempted off Linux.
 // IOL is a Linux ELF binary; spawning only works inside the runtime. The pure
@@ -26,6 +29,12 @@ func (p *Process) PID() int { return 0 }
 // Subscribe always returns nil on non-Linux platforms (no console hub exists
 // off Linux — see the Linux Process doc comment).
 func (p *Process) Subscribe() *Subscription { return nil }
+
+// RunExec always fails on non-Linux platforms (no console hub exists off
+// Linux — see the Linux Process doc comment).
+func (p *Process) RunExec(ctx context.Context, holder, cmd string) (string, error) {
+	return "", ErrUnsupportedPlatform
+}
 
 // Stop is a no-op on non-Linux platforms.
 func (p *Process) Stop() error { return ErrUnsupportedPlatform }
