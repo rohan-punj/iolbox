@@ -187,6 +187,22 @@ build_raw_disk() {
     trap "losetup -d '$loop_dev' 2>/dev/null || true" RETURN
     root_part="${loop_dev}p2"
 
+    # losetup -P asks the kernel to scan the partition table, but the
+    # /dev/loopNp2 device node is created asynchronously by udev — mkfs.ext4
+    # can otherwise race ahead and die with "The file ...p2 does not exist"
+    # (observed intermittently across back-to-back disk builds). Wait for the
+    # node to materialise before formatting.
+    udevadm settle 2>/dev/null || true
+    for _ in $(seq 1 50); do
+        [ -b "$root_part" ] && break
+        sleep 0.2
+        partprobe "$loop_dev" 2>/dev/null || true
+    done
+    if [ ! -b "$root_part" ]; then
+        echo "lib-disk: partition node $root_part never appeared after losetup -P" >&2
+        exit 1
+    fi
+
     # ext4 mkfs — size levers applied here. Defaults (no --inode-count,
     # no --lazy-init) reproduce the historical `mkfs.ext4 -q -L iolab-root`.
     local mkfs_opts=(-q -L iolab-root)
