@@ -14,7 +14,7 @@ import (
 // materialize into LabsDir on startup ONLY when the store holds no labs yet,
 // so a user who deletes or edits them never has them forced back.
 //
-//go:embed seedlabs/*.json
+//go:embed seedlabs/*.yml
 var seedLabFS embed.FS
 
 // seedLabs writes the embedded starter labs into LabsDir if (and only if) the
@@ -27,7 +27,7 @@ func (s *Server) seedLabs() {
 	}
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".json") {
+			if strings.HasSuffix(e.Name(), ".yml") || strings.HasSuffix(e.Name(), ".json") {
 				return // store already has labs — user territory now
 			}
 		}

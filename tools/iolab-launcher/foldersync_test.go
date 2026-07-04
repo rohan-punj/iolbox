@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,20 +17,20 @@ import (
 type stubControlClient struct {
 	mu sync.Mutex
 
-	registered []string // guest paths passed to registerImage
+	registered     []string // guest paths passed to registerImage
 	registerErrFor map[string]error
 
-	savedLabs []json.RawMessage
+	savedLabs []string
 	saveErr   error
 
-	labs map[string]json.RawMessage // id -> doc, the guest's current lab set
+	labs      map[string]string // id -> doc text, the guest's current lab set
 	getErrFor map[string]error
 	listErr   error
 }
 
 func newStubControlClient() *stubControlClient {
 	return &stubControlClient{
-		labs:           make(map[string]json.RawMessage),
+		labs:           make(map[string]string),
 		registerErrFor: make(map[string]error),
 		getErrFor:      make(map[string]error),
 	}
@@ -48,7 +46,7 @@ func (s *stubControlClient) registerImage(guestPath string) error {
 	return nil
 }
 
-func (s *stubControlClient) saveLab(doc json.RawMessage) (string, error) {
+func (s *stubControlClient) saveLab(doc string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.saveErr != nil {
@@ -74,15 +72,15 @@ func (s *stubControlClient) listLabIDs() ([]string, error) {
 	return ids, nil
 }
 
-func (s *stubControlClient) getLab(id string) (json.RawMessage, error) {
+func (s *stubControlClient) getLab(id string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err, ok := s.getErrFor[id]; ok {
-		return nil, err
+		return "", err
 	}
 	doc, ok := s.labs[id]
 	if !ok {
-		return nil, fmt.Errorf("no such lab %q", id)
+		return "", fmt.Errorf("no such lab %q", id)
 	}
 	return doc, nil
 }
@@ -130,6 +128,11 @@ func mustWriteFile(t *testing.T, dir, name string, content string) {
 
 func labJSON(id, name string) string {
 	return fmt.Sprintf(`{"id":%q,"version":1,"name":%q,"nodes":[],"links":[]}`, id, name)
+}
+
+// labYAML is the native format: a lab document as YAML text.
+func labYAML(id, name string) string {
+	return fmt.Sprintf("version: 1\nid: %s\nname: %s\nnodes: []\nlinks: []\n", id, name)
 }
 
 // ---- syncImagesIn ------------------------------------------------------
@@ -215,10 +218,10 @@ func TestSyncImagesIn_RegisterFailureIsNonFatal(t *testing.T) {
 
 func TestSyncLabsIn_SavesValidSkipsInvalid(t *testing.T) {
 	dir := t.TempDir()
-	mustWriteFile(t, dir, "lab1.json", labJSON("lab1", "First Lab"))
-	mustWriteFile(t, dir, "lab2.json", labJSON("lab2", "Second Lab"))
-	mustWriteFile(t, dir, "malformed.json", `{not valid json`)
-	mustWriteFile(t, dir, "noid.json", `{"name":"missing id field"}`)
+	mustWriteFile(t, dir, "lab1.yml", labYAML("lab1", "First Lab"))   // native YAML
+	mustWriteFile(t, dir, "lab2.json", labJSON("lab2", "Second Lab")) // legacy JSON still read
+	mustWriteFile(t, dir, "malformed.yml", `: : not valid`)
+	mustWriteFile(t, dir, "noid.yml", "name: missing id field\n")
 	mustWriteFile(t, dir, "notes.txt", "ignore me")
 
 	cc := newStubControlClient()
@@ -266,15 +269,15 @@ func TestSyncLabsOut_WritesNonSeedSkipsSeed(t *testing.T) {
 	fs := newFolderSync(t.TempDir(), labsDir, cc, up)
 
 	// Seed the guest with two "starter" labs before recordSeedLabIDs.
-	cc.labs["starter1"] = json.RawMessage(labJSON("starter1", "Starter One"))
-	cc.labs["starter2"] = json.RawMessage(labJSON("starter2", "Starter Two"))
+	cc.labs["starter1"] = labYAML("starter1", "Starter One")
+	cc.labs["starter2"] = labYAML("starter2", "Starter Two")
 
 	if err := fs.recordSeedLabIDs(); err != nil {
 		t.Fatalf("recordSeedLabIDs: %v", err)
 	}
 
 	// Now the user creates a new lab in the GUI (not a seed).
-	cc.labs["user-lab-1"] = json.RawMessage(labJSON("user-lab-1", "My Lab"))
+	cc.labs["user-lab-1"] = labYAML("user-lab-1", "My Lab")
 
 	count, err := fs.syncLabsOut()
 	if err != nil {
@@ -284,26 +287,23 @@ func TestSyncLabsOut_WritesNonSeedSkipsSeed(t *testing.T) {
 		t.Errorf("count = %d, want 1 (only the non-seed lab)", count)
 	}
 
-	if _, err := os.Stat(filepath.Join(labsDir, "user-lab-1.json")); err != nil {
-		t.Errorf("expected user-lab-1.json to be written: %v", err)
+	// Written as <id>.yml, verbatim (the guest's doc text is already formatted).
+	if _, err := os.Stat(filepath.Join(labsDir, "user-lab-1.yml")); err != nil {
+		t.Errorf("expected user-lab-1.yml to be written: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(labsDir, "starter1.json")); err == nil {
-		t.Error("starter1.json should NOT have been written (it's a seed lab)")
+	if _, err := os.Stat(filepath.Join(labsDir, "starter1.yml")); err == nil {
+		t.Error("starter1.yml should NOT have been written (it's a seed lab)")
 	}
-	if _, err := os.Stat(filepath.Join(labsDir, "starter2.json")); err == nil {
-		t.Error("starter2.json should NOT have been written (it's a seed lab)")
+	if _, err := os.Stat(filepath.Join(labsDir, "starter2.yml")); err == nil {
+		t.Error("starter2.yml should NOT have been written (it's a seed lab)")
 	}
 
-	// Content should be pretty-printed JSON containing the id.
-	data, err := os.ReadFile(filepath.Join(labsDir, "user-lab-1.json"))
+	data, err := os.ReadFile(filepath.Join(labsDir, "user-lab-1.yml"))
 	if err != nil {
 		t.Fatalf("read written lab: %v", err)
 	}
-	if !bytes.Contains(data, []byte(`"user-lab-1"`)) {
-		t.Errorf("written file doesn't contain the id: %s", data)
-	}
-	if !bytes.Contains(data, []byte("\n")) {
-		t.Error("expected pretty-printed (indented, multi-line) JSON")
+	if string(data) != labYAML("user-lab-1", "My Lab") {
+		t.Errorf("written file not verbatim: %q", data)
 	}
 }
 
@@ -313,18 +313,16 @@ func TestSyncLabsOut_SeedIDCollisionDoesNotClobberExistingFile(t *testing.T) {
 	up := newStubUploader()
 	fs := newFolderSync(t.TempDir(), labsDir, cc, up)
 
-	cc.labs["starter1"] = json.RawMessage(labJSON("starter1", "Starter One"))
+	cc.labs["starter1"] = labYAML("starter1", "Starter One")
 	if err := fs.recordSeedLabIDs(); err != nil {
 		t.Fatalf("recordSeedLabIDs: %v", err)
 	}
 
 	// Pre-existing user file that happens to collide with a seed id — must
-	// not be touched. (This scenario would only arise if listLabIDs somehow
-	// returned a seed id as "current" AND it wasn't filtered — but the guard
-	// in syncLabsOut is belt-and-suspenders: isSeedID(id) already skips it
-	// before getLab is even called. This test locks in that behavior.)
-	existing := labJSON("starter1", "user's local copy - should not change")
-	mustWriteFile(t, labsDir, "starter1.json", existing)
+	// not be touched. The guard in syncLabsOut is belt-and-suspenders:
+	// isSeedID(id) already skips it before getLab is even called.
+	existing := labYAML("starter1", "user's local copy - should not change")
+	mustWriteFile(t, labsDir, "starter1.yml", existing)
 
 	count, err := fs.syncLabsOut()
 	if err != nil {
@@ -334,7 +332,7 @@ func TestSyncLabsOut_SeedIDCollisionDoesNotClobberExistingFile(t *testing.T) {
 		t.Errorf("count = %d, want 0 (starter1 is a seed id)", count)
 	}
 
-	data, err := os.ReadFile(filepath.Join(labsDir, "starter1.json"))
+	data, err := os.ReadFile(filepath.Join(labsDir, "starter1.yml"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -353,8 +351,8 @@ func TestSyncLabsOut_SkipsUnsafeIDs(t *testing.T) {
 		t.Fatalf("recordSeedLabIDs: %v", err)
 	}
 
-	cc.labs["../escape"] = json.RawMessage(`{"id":"../escape"}`)
-	cc.labs["good-id"] = json.RawMessage(labJSON("good-id", "Fine"))
+	cc.labs["../escape"] = `{"id":"../escape"}`
+	cc.labs["good-id"] = labYAML("good-id", "Fine")
 
 	count, err := fs.syncLabsOut()
 	if err != nil {
@@ -375,19 +373,22 @@ func TestSyncLabsOut_SkipsUnsafeIDs(t *testing.T) {
 
 func TestLabDocID(t *testing.T) {
 	cases := []struct {
-		raw     string
-		wantID  string
-		wantOK  bool
+		raw    string
+		wantID string
+		wantOK bool
 	}{
-		{labJSON("abc", "x"), "abc", true},
-		{`{"name":"no id"}`, "", false},
-		{`{"id":123}`, "", false}, // id must be a string
-		{`{"id":""}`, "", false},
-		{`not json`, "", false},
-		{`["array","not","object"]`, "", false},
+		{labYAML("abc", "x"), "abc", true},   // native YAML
+		{`id: quoted`, "quoted", true},       // bare YAML id line
+		{"name: R1\nid: 'q2'\n", "q2", true}, // quoted YAML id, not first line
+		{labJSON("abc", "x"), "abc", true},   // legacy JSON
+		{"name: no id here\n", "", false},    // YAML, no id
+		{`{"name":"no id"}`, "", false},      // JSON, no id
+		{`{"id":123}`, "", false},            // JSON id must be a string
+		{`{"id":""}`, "", false},             // JSON empty id
+		{`not a document`, "", false},
 	}
 	for _, c := range cases {
-		id, ok := labDocID([]byte(c.raw))
+		id, ok := labDocID(c.raw)
 		if id != c.wantID || ok != c.wantOK {
 			t.Errorf("labDocID(%q) = (%q,%v), want (%q,%v)", c.raw, id, ok, c.wantID, c.wantOK)
 		}
@@ -415,15 +416,15 @@ func TestIsImageFile(t *testing.T) {
 
 func TestIsPlainLabID(t *testing.T) {
 	cases := map[string]bool{
-		"lab1":        true,
-		"my-lab_2":    true,
-		"":            false,
-		".":           false,
-		"..":          false,
-		"../escape":   false,
-		"a/b":         false,
-		"a b":         false,
-		"lab.json":    false,
+		"lab1":      true,
+		"my-lab_2":  true,
+		"":          false,
+		".":         false,
+		"..":        false,
+		"../escape": false,
+		"a/b":       false,
+		"a b":       false,
+		"lab.json":  false,
 	}
 	for id, want := range cases {
 		if got := isPlainLabID(id); got != want {

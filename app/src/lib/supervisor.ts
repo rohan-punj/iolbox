@@ -16,6 +16,7 @@ import type {
   SupervisorEvent,
 } from "./protocol";
 import type { LabDocument, LabLink, LabNode } from "./labTypes";
+import { labToYaml, labFromText } from "./yaml";
 import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
 
@@ -184,16 +185,29 @@ export class SupervisorClient {
   }
 
   // ---- durable lab-document store ----
+  // Labs persist as YAML text (iolab's native format). This client is the YAML
+  // boundary: it serialises on save and parses on read, so callers still work in
+  // LabDocument terms. Docs that fail to parse are dropped from the list.
   labSaveDoc(lab: LabDocument) {
-    return this.call<LabSaveDocResult>("lab.saveDoc", { lab });
+    return this.call<LabSaveDocResult>("lab.saveDoc", { lab: labToYaml(lab) });
   }
 
-  labListDocs() {
-    return this.call<LabListDocsResult>("lab.listDocs", {});
+  async labListDocs(): Promise<LabListDocsResult> {
+    const res = await this.call<{ labs: string[] }>("lab.listDocs", {});
+    const labs: LabDocument[] = [];
+    for (const text of res.labs) {
+      try {
+        labs.push(labFromText(text));
+      } catch {
+        // Skip a corrupt/unparseable stored doc rather than failing the whole list.
+      }
+    }
+    return { labs };
   }
 
-  labGetDoc(labId: string) {
-    return this.call<LabGetDocResult>("lab.getDoc", { labId });
+  async labGetDoc(labId: string): Promise<LabGetDocResult> {
+    const res = await this.call<{ lab: string }>("lab.getDoc", { labId });
+    return { lab: labFromText(res.lab) };
   }
 
   labDeleteDoc(labId: string) {

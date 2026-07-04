@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
@@ -23,11 +25,10 @@ func newStoreServer(t *testing.T) *Server {
 func TestLabStoreRoundTrip(t *testing.T) {
 	s := newStoreServer(t)
 
-	// A document carrying a field the lab struct does not model, to prove the
-	// store is byte-exact and preserves unknown fields.
-	doc := json.RawMessage(`{"version":1,"id":"lab-abc","name":"Store Test","nodes":[],"links":[],"custom":{"note":"keep me"}}`)
+	// A YAML document (the native format) carrying an unknown field, to prove the
+	// store is byte-exact and format-agnostic.
+	doc := "version: 1\nid: lab-abc\nname: Store Test\nnodes: []\nlinks: []\ncustom:\n  note: keep me\n"
 
-	// saveDoc -> {id}
 	resp := dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: doc})
 	if !resp.OK {
 		t.Fatalf("saveDoc failed: %+v", resp.Error)
@@ -39,8 +40,12 @@ func TestLabStoreRoundTrip(t *testing.T) {
 	if saved.ID != "lab-abc" {
 		t.Fatalf("saveDoc id = %q, want lab-abc", saved.ID)
 	}
+	// Stored as <id>.yml.
+	if _, err := os.Stat(filepath.Join(s.cfg.LabsDir, "lab-abc.yml")); err != nil {
+		t.Fatalf("expected lab-abc.yml on disk: %v", err)
+	}
 
-	// getDoc round-trips the exact bytes (including the unknown field).
+	// getDoc round-trips the exact text (including the unknown field).
 	resp = dispatch(t, s, "lab.getDoc", protocol.LabGetDocArgs{LabID: "lab-abc"})
 	if !resp.OK {
 		t.Fatalf("getDoc failed: %+v", resp.Error)
@@ -49,8 +54,8 @@ func TestLabStoreRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &got); err != nil {
 		t.Fatal(err)
 	}
-	if string(got.Lab) != string(doc) {
-		t.Fatalf("getDoc = %s, want byte-exact %s", got.Lab, doc)
+	if got.Lab != doc {
+		t.Fatalf("getDoc = %q, want byte-exact %q", got.Lab, doc)
 	}
 
 	// listDocs returns exactly the one stored doc.
@@ -62,11 +67,11 @@ func TestLabStoreRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Labs) != 1 || string(list.Labs[0]) != string(doc) {
+	if len(list.Labs) != 1 || list.Labs[0] != doc {
 		t.Fatalf("listDocs = %v, want one byte-exact doc", list.Labs)
 	}
 
-	// deleteDoc removes it; a second delete is not an error (idempotent).
+	// deleteDoc removes it; a second delete is idempotent.
 	resp = dispatch(t, s, "lab.deleteDoc", protocol.LabGetDocArgs{LabID: "lab-abc"})
 	if !resp.OK {
 		t.Fatalf("deleteDoc failed: %+v", resp.Error)
@@ -75,43 +80,59 @@ func TestLabStoreRoundTrip(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("deleteDoc of missing file should succeed, got: %+v", resp.Error)
 	}
-
-	// getDoc after delete -> not_found.
 	resp = dispatch(t, s, "lab.getDoc", protocol.LabGetDocArgs{LabID: "lab-abc"})
 	if resp.OK || resp.Error.Code != protocol.CodeNotFound {
 		t.Fatalf("getDoc after delete: want not_found, got %+v", resp)
 	}
+}
 
-	// listDocs is empty again.
+// TestLabStoreReadsLegacyJSON confirms a lab saved before the YAML switch (a
+// bare <id>.json on disk) is still listed and fetched.
+func TestLabStoreReadsLegacyJSON(t *testing.T) {
+	s := newStoreServer(t)
+	legacy := `{"version":1,"id":"old-lab","name":"Legacy","nodes":[],"links":[]}`
+	if err := os.MkdirAll(s.cfg.LabsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.cfg.LabsDir, "old-lab.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp := dispatch(t, s, "lab.getDoc", protocol.LabGetDocArgs{LabID: "old-lab"})
+	if !resp.OK {
+		t.Fatalf("getDoc legacy json failed: %+v", resp.Error)
+	}
+	var got protocol.LabGetDocResult
+	json.Unmarshal(resp.Result, &got)
+	if got.Lab != legacy {
+		t.Fatalf("legacy getDoc = %q, want %q", got.Lab, legacy)
+	}
 	resp = dispatch(t, s, "lab.listDocs", nil)
+	var list protocol.LabListDocsResult
 	json.Unmarshal(resp.Result, &list)
-	if len(list.Labs) != 0 {
-		t.Fatalf("listDocs after delete = %v, want empty", list.Labs)
+	if len(list.Labs) != 1 {
+		t.Fatalf("listDocs should include the legacy json, got %d", len(list.Labs))
 	}
 }
 
 func TestLabStoreSaveOverwrites(t *testing.T) {
 	s := newStoreServer(t)
-	v1 := json.RawMessage(`{"id":"dup","name":"v1"}`)
-	v2 := json.RawMessage(`{"id":"dup","name":"v2"}`)
-	dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: v1})
-	dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: v2})
+	dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: "id: dup\nname: v1\n"})
+	dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: "id: dup\nname: v2\n"})
 
 	resp := dispatch(t, s, "lab.getDoc", protocol.LabGetDocArgs{LabID: "dup"})
 	var got protocol.LabGetDocResult
 	json.Unmarshal(resp.Result, &got)
-	if string(got.Lab) != string(v2) {
-		t.Fatalf("overwrite: got %s, want %s", got.Lab, v2)
+	if got.Lab != "id: dup\nname: v2\n" {
+		t.Fatalf("overwrite: got %q, want v2", got.Lab)
 	}
 }
 
 func TestLabStoreRejectsBadID(t *testing.T) {
 	s := newStoreServer(t)
 	// Traversal / illegal filename tokens are rejected on save and get.
-	bad := json.RawMessage(`{"id":"../evil","name":"x"}`)
-	resp := dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: bad})
-	if resp.OK || resp.Error.Code != protocol.CodeSchemaInvalid {
-		t.Fatalf("saveDoc with bad id: want schema_invalid, got %+v", resp)
+	resp := dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: "id: ../evil\nname: x\n"})
+	if resp.OK {
+		t.Fatalf("saveDoc with bad id must fail, got %+v", resp)
 	}
 
 	resp = dispatch(t, s, "lab.getDoc", protocol.LabGetDocArgs{LabID: "a/b"})
@@ -120,7 +141,7 @@ func TestLabStoreRejectsBadID(t *testing.T) {
 	}
 
 	// A document with no id is rejected.
-	resp = dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: json.RawMessage(`{"name":"noid"}`)})
+	resp = dispatch(t, s, "lab.saveDoc", protocol.LabSaveDocArgs{Lab: "name: noid\n"})
 	if resp.OK || resp.Error.Code != protocol.CodeSchemaInvalid {
 		t.Fatalf("saveDoc with no id: want schema_invalid, got %+v", resp)
 	}

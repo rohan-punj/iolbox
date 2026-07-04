@@ -4,6 +4,8 @@
   import { uiSvg } from "../icons.svelte";
   import { emptyLab, type LabDocument } from "../labTypes";
   import { importClab, exportClab } from "../clab";
+  import { labToYaml, labFromText } from "../yaml";
+  import { load as yamlLoad } from "js-yaml";
 
   const anyRunning = $derived(labStore.labRunning);
   const providerLabel = $derived(
@@ -55,9 +57,9 @@
   }
   const safeName = () => (labStore.lab.name || "lab").replace(/[^\w.-]+/g, "_");
 
-  // Export the current doc as a downloadable .json file.
-  function exportJson() {
-    download(JSON.stringify($state.snapshot(labStore.lab), null, 2), `${safeName()}.json`, "application/json");
+  // Export the current doc as a downloadable .yml file (iolab's native format).
+  function exportYaml() {
+    download(labToYaml($state.snapshot(labStore.lab)), `${safeName()}.yml`, "text/yaml");
   }
   // Export the current doc as a containerlab .clab.yml file.
   function exportClabFile() {
@@ -74,24 +76,21 @@
     if (!file) return;
     try {
       const text = await file.text();
-      // Auto-detect: containerlab YAML (by extension, or content that isn't a
-      // JSON object) vs iolab JSON.
-      const isYaml = /\.(ya?ml)$/i.test(file.name) || !text.trimStart().startsWith("{");
       if (labStore.lab.nodes.length > 0 && !labStore.currentLabSaved) {
         if (!confirm("The current lab hasn't been saved. Discard it and import this file?")) return;
       }
-      if (isYaml) {
+      // A YAML file is either a containerlab topology (has a top-level
+      // `topology:` key) or a native iolab lab; JSON is a legacy iolab lab.
+      const isJson = text.trimStart().startsWith("{");
+      const parsed = isJson ? null : (yamlLoad(text) as Record<string, unknown> | null);
+      if (parsed && typeof parsed === "object" && "topology" in parsed) {
         const { doc, warnings } = importClab(text);
         await labStore.openLab(doc);
         if (warnings.length) {
           alert(`Imported "${doc.name}" from containerlab.\n\nNotes:\n` + warnings.map((w) => "• " + w).join("\n"));
         }
       } else {
-        const doc = JSON.parse(text) as LabDocument;
-        if (!doc || !Array.isArray(doc.nodes) || !Array.isArray(doc.links)) {
-          throw new Error("not a lab document");
-        }
-        await labStore.openLab(doc);
+        await labStore.openLab(labFromText(text));
       }
     } catch (err) {
       labStore.lastError = `import failed: ${(err as Error).message}`;
@@ -170,13 +169,13 @@
   </button>
 
   <div class="seg io-seg" role="group" aria-label="Import / export">
-    <button title="Export lab as JSON" aria-label="Export JSON" onclick={exportJson}>
+    <button title="Export lab as YAML (.yml)" aria-label="Export YAML" onclick={exportYaml}>
       {@html uiSvg("download", 13)}
     </button>
     <button class="io-clab" title="Export as containerlab .clab.yml" aria-label="Export containerlab YAML" onclick={exportClabFile}>
       clab
     </button>
-    <button title="Import lab from JSON or containerlab .clab.yml" aria-label="Import lab" onclick={pickImport}>
+    <button title="Import lab (.yml native, containerlab .clab.yml, or legacy .json)" aria-label="Import lab" onclick={pickImport}>
       {@html uiSvg("upload", 13)}
     </button>
   </div>

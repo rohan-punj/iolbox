@@ -14,6 +14,7 @@ import type {
   StatusResult,
 } from "./protocol";
 import type { LabDocument, LibraryImage, NodeState } from "./labTypes";
+import { labFromText } from "./yaml";
 import type { IncomingFrame, Transport } from "./transport";
 
 const MOCK_IMAGES: LibraryImage[] = [
@@ -66,7 +67,7 @@ export class MockTransport implements Transport {
   private captures = new Map<number, number>(); // linkId -> capturePort
   private captureCounter = 5501;
   private consoleBuffers = new Map<number, string[]>();
-  private docs = new Map<string, LabDocument>(); // durable lab-doc store (mock)
+  private docs = new Map<string, string>(); // durable lab-doc store (mock; YAML text like the real wire)
 
   async connect(): Promise<void> {
     await delay(150);
@@ -376,9 +377,11 @@ export class MockTransport implements Transport {
       }
 
       case "lab.saveDoc": {
-        const doc = args?.lab as LabDocument;
-        this.docs.set(doc.id, JSON.parse(JSON.stringify(doc)));
-        this.ok(id, { id: doc.id });
+        // The wire carries the doc as YAML text (see supervisor.ts).
+        const text = args?.lab as string;
+        const docId = labFromText(text).id;
+        this.docs.set(docId, text);
+        this.ok(id, { id: docId });
         return;
       }
 
@@ -388,12 +391,12 @@ export class MockTransport implements Transport {
       }
 
       case "lab.getDoc": {
-        const doc = this.docs.get(args?.labId as string);
-        if (!doc) {
+        const text = this.docs.get(args?.labId as string);
+        if (!text) {
           this.err(id, "not_loaded", `lab ${args?.labId} not found`);
           return;
         }
-        this.ok(id, { lab: doc });
+        this.ok(id, { lab: text });
         return;
       }
 

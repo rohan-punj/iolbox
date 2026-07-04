@@ -20,146 +20,8 @@
 // an image from their library. startup-config file paths can't be read in the
 // browser, so they are skipped with a warning. Nodes get an auto circle layout.
 
+import { load } from "js-yaml";
 import { emptyLab, type LabDocument, type LabLink, type LabNode, type NodeKind } from "./labTypes";
-
-// ---------------------------------------------------------------------------
-// Minimal YAML-subset parser (block maps, block/flow sequences, scalars, #
-// comments, quoted strings). Sufficient for containerlab topologies; not a
-// general YAML implementation (no anchors, multi-line scalars, etc.).
-// ---------------------------------------------------------------------------
-
-type Line = { indent: number; text: string };
-
-function stripComment(line: string): string {
-  // Remove a trailing # comment, but not one inside a quoted string.
-  let inS = "";
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inS) {
-      if (c === inS) inS = "";
-    } else if (c === '"' || c === "'") {
-      inS = c;
-    } else if (c === "#" && (i === 0 || line[i - 1] === " " || line[i - 1] === "\t")) {
-      return line.slice(0, i);
-    }
-  }
-  return line;
-}
-
-function tokenize(src: string): Line[] {
-  const out: Line[] = [];
-  for (const raw of src.split(/\r?\n/)) {
-    const noComment = stripComment(raw);
-    if (noComment.trim() === "") continue;
-    if (noComment.trim() === "---" || noComment.trim() === "...") continue;
-    out.push({ indent: noComment.length - noComment.trimStart().length, text: noComment.trim() });
-  }
-  return out;
-}
-
-function splitFlowSeq(s: string): string[] {
-  // "a, \"b:c\", 'd'" -> ["a", "b:c", "d"], respecting quotes.
-  const parts: string[] = [];
-  let cur = "";
-  let inS = "";
-  for (const c of s) {
-    if (inS) {
-      if (c === inS) inS = "";
-      else cur += c;
-    } else if (c === '"' || c === "'") {
-      inS = c;
-    } else if (c === ",") {
-      parts.push(cur.trim());
-      cur = "";
-    } else {
-      cur += c;
-    }
-  }
-  if (cur.trim() !== "") parts.push(cur.trim());
-  return parts;
-}
-
-function parseScalar(s: string): unknown {
-  const t = s.trim();
-  if (t === "") return null;
-  if (t === "null" || t === "~") return null;
-  if (t === "true") return true;
-  if (t === "false") return false;
-  if (t.startsWith("[") && t.endsWith("]")) {
-    return splitFlowSeq(t.slice(1, -1)).map((x) => parseScalar(x));
-  }
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
-    return t.slice(1, -1);
-  }
-  if (/^-?\d+$/.test(t)) return parseInt(t, 10);
-  return t;
-}
-
-function isKeyValue(text: string): boolean {
-  // A mapping entry "key: value" or "key:". Guard against a lone URL-ish scalar.
-  const m = text.match(/^("[^"]*"|'[^']*'|[^:\s][^:]*?):(\s|$)/);
-  return m !== null;
-}
-
-function splitKeyValue(text: string): { key: string; val: string } {
-  const idx = text.indexOf(":");
-  const key = text.slice(0, idx).trim().replace(/^['"]|['"]$/g, "");
-  return { key, val: text.slice(idx + 1).trim() };
-}
-
-function parseYaml(src: string): unknown {
-  const lines = tokenize(src);
-  let pos = 0;
-
-  function parseBlock(indent: number): unknown {
-    if (pos >= lines.length) return null;
-    // Sequence?
-    if (lines[pos].indent === indent && (lines[pos].text === "-" || lines[pos].text.startsWith("- "))) {
-      const arr: unknown[] = [];
-      while (
-        pos < lines.length &&
-        lines[pos].indent === indent &&
-        (lines[pos].text === "-" || lines[pos].text.startsWith("- "))
-      ) {
-        const cur = lines[pos];
-        const rest = cur.text === "-" ? "" : cur.text.slice(2);
-        if (rest === "") {
-          pos++;
-          arr.push(pos < lines.length && lines[pos].indent > indent ? parseBlock(lines[pos].indent) : null);
-        } else if (isKeyValue(rest)) {
-          // Inline map item ("- key: val"): reinterpret this line as a map key at
-          // a deeper virtual indent so the map picks up any sibling keys below.
-          lines[pos] = { indent: cur.indent + 2, text: rest };
-          arr.push(parseBlock(cur.indent + 2));
-        } else {
-          pos++;
-          arr.push(parseScalar(rest));
-        }
-      }
-      return arr;
-    }
-    // Mapping?
-    if (lines[pos].indent === indent && isKeyValue(lines[pos].text)) {
-      const map: Record<string, unknown> = {};
-      while (pos < lines.length && lines[pos].indent === indent && isKeyValue(lines[pos].text)) {
-        const { key, val } = splitKeyValue(lines[pos].text);
-        pos++;
-        if (val === "") {
-          map[key] = pos < lines.length && lines[pos].indent > indent ? parseBlock(lines[pos].indent) : null;
-        } else {
-          map[key] = parseScalar(val);
-        }
-      }
-      return map;
-    }
-    // Bare scalar.
-    const s = parseScalar(lines[pos].text);
-    pos++;
-    return s;
-  }
-
-  return lines.length ? parseBlock(lines[0].indent) : null;
-}
 
 // ---------------------------------------------------------------------------
 // Import: containerlab topology -> iolab LabDocument.
@@ -197,7 +59,7 @@ function parseEndpoint(ep: unknown): { name: string; iface: string } | null {
 }
 
 export function importClab(text: string): { doc: LabDocument; warnings: string[] } {
-  const y = parseYaml(text) as Record<string, unknown> | null;
+  const y = load(text) as Record<string, unknown> | null;
   const warnings: string[] = [];
   if (!y || typeof y !== "object") throw new Error("could not parse YAML");
 

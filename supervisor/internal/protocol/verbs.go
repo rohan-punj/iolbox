@@ -81,9 +81,12 @@ type LabLoadResult struct {
 // so it round-trips byte-exact and preserves any fields the supervisor's lab
 // struct does not model.
 
-// LabSaveDocArgs is the lab.saveDoc request payload: the full lab document.
+// LabSaveDocArgs is the lab.saveDoc request payload: the full lab document as
+// text (YAML — iolab's native lab format; JSON is also accepted on read for
+// back-compat). The supervisor stores it verbatim and does not parse it beyond
+// extracting the id for the filename.
 type LabSaveDocArgs struct {
-	Lab json.RawMessage `json:"lab"`
+	Lab string `json:"lab"`
 }
 
 // LabSaveDocResult is the lab.saveDoc response payload.
@@ -91,10 +94,10 @@ type LabSaveDocResult struct {
 	ID string `json:"id"`
 }
 
-// LabListDocsResult is the lab.listDocs response payload: every stored doc,
-// parsed back from disk as raw JSON.
+// LabListDocsResult is the lab.listDocs response payload: every stored doc as
+// its raw on-disk text (YAML or legacy JSON), parsed by the client.
 type LabListDocsResult struct {
-	Labs []json.RawMessage `json:"labs"`
+	Labs []string `json:"labs"`
 }
 
 // LabGetDocArgs is the lab.getDoc / lab.deleteDoc request payload.
@@ -102,9 +105,9 @@ type LabGetDocArgs struct {
 	LabID string `json:"labId"`
 }
 
-// LabGetDocResult is the lab.getDoc response payload: the stored doc.
+// LabGetDocResult is the lab.getDoc response payload: the stored doc text.
 type LabGetDocResult struct {
-	Lab json.RawMessage `json:"lab"`
+	Lab string `json:"lab"`
 }
 
 // --- lab.start / lab.stop / node.* ---

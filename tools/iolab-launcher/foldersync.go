@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +20,9 @@ import (
 //
 //	images\   user drops .bin/.iol IOL image files here; each run they are
 //	          uploaded + registered into the guest's image registry.
-//	labs\     lab documents as <labId>.json; synced in at start and out
-//	          periodically + at shutdown, so labs created/edited in the GUI
-//	          land back on the Windows FS.
+//	labs\     lab documents as <labId>.yml (native YAML; legacy .json still
+//	          read); synced in at start and out periodically + at shutdown, so
+//	          labs created/edited in the GUI land back on the Windows FS.
 //
 // All guest interaction goes through the supervisor's EXISTING APIs (HTTP
 // upload + the /control WS verb channel) — no guest changes.
@@ -30,10 +30,10 @@ import (
 // controlClient is the set of /control verbs the sync engine needs. Backed by
 // controlWSClient in production; stubbed in tests.
 type controlClient interface {
-	registerImage(guestPath string) error                // image.register
-	saveLab(doc json.RawMessage) (id string, err error)   // lab.saveDoc
-	listLabIDs() ([]string, error)                        // lab.listDocs -> each doc's "id"
-	getLab(id string) (json.RawMessage, error)            // lab.getDoc
+	registerImage(guestPath string) error      // image.register
+	saveLab(doc string) (id string, err error) // lab.saveDoc (doc is YAML/JSON text)
+	listLabIDs() ([]string, error)             // lab.listDocs -> each doc's id
+	getLab(id string) (string, error)          // lab.getDoc -> doc text
 }
 
 // imageUploader performs the plain-HTTP image upload.
@@ -74,7 +74,7 @@ func ensureDirs(imagesDir, labsDir string) error {
 		}
 	}
 	logf("  images folder: %s  (drop .bin/.iol IOL images here)", imagesDir)
-	logf("  labs folder:   %s  (saved labs persist here as <id>.json)", labsDir)
+	logf("  labs folder:   %s  (saved labs persist here as <id>.yml)", labsDir)
 	return nil
 }
 
@@ -141,16 +141,20 @@ func (fs *folderSync) syncImagesIn() (count int, err error) {
 	return count, nil
 }
 
-// syncLabsIn reads every *.json in labsDir, validates it is a JSON object
-// with an "id" field, and calls saveLab. Malformed files are skipped with a
-// warning; sync continues.
+// syncLabsIn reads every *.yml (native) and legacy *.json in labsDir, extracts
+// the lab id from the document text, and calls saveLab with the raw text.
+// Malformed files are skipped with a warning; sync continues.
 func (fs *folderSync) syncLabsIn() (count int, err error) {
 	entries, err := os.ReadDir(fs.labsDir)
 	if err != nil {
 		return 0, fmt.Errorf("syncLabsIn: read %s: %w", fs.labsDir, err)
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".json") {
+		if e.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if ext != ".yml" && ext != ".yaml" && ext != ".json" {
 			continue
 		}
 		name := e.Name()
@@ -160,12 +164,12 @@ func (fs *folderSync) syncLabsIn() (count int, err error) {
 			logf("  lab %s: WARNING: cannot read: %v", name, readErr)
 			continue
 		}
-		id, ok := labDocID(raw)
+		id, ok := labDocID(string(raw))
 		if !ok {
-			logf("  lab %s: WARNING: not a valid lab document (expected a JSON object with an \"id\" string field) — skipped", name)
+			logf("  lab %s: WARNING: not a valid lab document (no top-level id) — skipped", name)
 			continue
 		}
-		if _, saveErr := fs.client.saveLab(json.RawMessage(raw)); saveErr != nil {
+		if _, saveErr := fs.client.saveLab(string(raw)); saveErr != nil {
 			logf("  lab %s (id=%s): saveLab FAILED: %v", name, id, saveErr)
 			continue
 		}
@@ -175,23 +179,27 @@ func (fs *folderSync) syncLabsIn() (count int, err error) {
 	return count, nil
 }
 
-// labDocID validates raw is a JSON object with a non-empty "id" string field
-// and returns it.
-func labDocID(raw []byte) (string, bool) {
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &doc); err != nil {
+// labDocID extracts a non-empty lab id from a document's text, accepting either
+// YAML (native — a top-level `id:` line) or JSON (legacy — an "id" field).
+func labDocID(text string) (string, bool) {
+	t := strings.TrimSpace(text)
+	if strings.HasPrefix(t, "{") {
+		var doc struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal([]byte(t), &doc) == nil && doc.ID != "" {
+			return doc.ID, true
+		}
 		return "", false
 	}
-	idRaw, ok := doc["id"]
-	if !ok {
-		return "", false
+	if m := yamlIDLine.FindStringSubmatch(text); m != nil {
+		return m[1], true
 	}
-	var id string
-	if err := json.Unmarshal(idRaw, &id); err != nil || id == "" {
-		return "", false
-	}
-	return id, true
+	return "", false
 }
+
+// yamlIDLine matches a top-level `id: <value>` line in a YAML document.
+var yamlIDLine = regexp.MustCompile(`(?m)^id:\s*["']?([A-Za-z0-9_-]+)["']?\s*$`)
 
 // syncLabsOut lists the guest's current labs and writes every non-seed one to
 // labs\<id>.json as pretty JSON. If a labs\ file with a seed id already
@@ -222,7 +230,7 @@ func (fs *folderSync) syncLabsOut() (count int, err error) {
 			logf("  lab %s: getLab FAILED: %v", id, getErr)
 			continue
 		}
-		target := filepath.Join(fs.labsDir, id+".json")
+		target := filepath.Join(fs.labsDir, id+".yml")
 
 		docID, ok := labDocID(doc)
 		if ok && fs.isSeedID(docID) {
@@ -230,12 +238,8 @@ func (fs *folderSync) syncLabsOut() (count int, err error) {
 			continue
 		}
 
-		pretty, indentErr := prettyJSON(doc)
-		if indentErr != nil {
-			logf("  lab %s: WARNING: could not pretty-print: %v", id, indentErr)
-			pretty = doc
-		}
-		if writeErr := writeFileAtomic(target, pretty); writeErr != nil {
+		// The doc is already formatted YAML (or legacy JSON) text — write verbatim.
+		if writeErr := writeFileAtomic(target, []byte(doc)); writeErr != nil {
 			logf("  lab %s: write FAILED (%s): %v", id, target, writeErr)
 			continue
 		}
@@ -257,14 +261,6 @@ func isPlainLabID(id string) bool {
 		return false
 	}
 	return true
-}
-
-func prettyJSON(raw json.RawMessage) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, raw, "", "  "); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // writeFileAtomic writes via a temp file + rename so a crash mid-write never
@@ -290,8 +286,8 @@ func (c *wsControlClient) registerImage(guestPath string) error {
 	return err
 }
 
-func (c *wsControlClient) saveLab(doc json.RawMessage) (string, error) {
-	res, err := c.ws.request("lab.saveDoc", map[string]json.RawMessage{"lab": doc})
+func (c *wsControlClient) saveLab(doc string) (string, error) {
+	res, err := c.ws.request("lab.saveDoc", map[string]string{"lab": doc})
 	if err != nil {
 		return "", err
 	}
@@ -310,7 +306,7 @@ func (c *wsControlClient) listLabIDs() ([]string, error) {
 		return nil, err
 	}
 	var out struct {
-		Labs []json.RawMessage `json:"labs"`
+		Labs []string `json:"labs"`
 	}
 	if err := json.Unmarshal(res, &out); err != nil {
 		return nil, fmt.Errorf("lab.listDocs: unexpected result shape: %w", err)
@@ -324,16 +320,16 @@ func (c *wsControlClient) listLabIDs() ([]string, error) {
 	return ids, nil
 }
 
-func (c *wsControlClient) getLab(id string) (json.RawMessage, error) {
+func (c *wsControlClient) getLab(id string) (string, error) {
 	res, err := c.ws.request("lab.getDoc", map[string]string{"labId": id})
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	var out struct {
-		Lab json.RawMessage `json:"lab"`
+		Lab string `json:"lab"`
 	}
 	if err := json.Unmarshal(res, &out); err != nil {
-		return nil, fmt.Errorf("lab.getDoc: unexpected result shape: %w", err)
+		return "", fmt.Errorf("lab.getDoc: unexpected result shape: %w", err)
 	}
 	return out.Lab, nil
 }
