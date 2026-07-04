@@ -16,10 +16,6 @@
 
   const iolImages = $derived(labStore.images);
   const running = $derived(labStore.labRunning);
-  // Capture-ready wiring (Option A): bridge same-host IOL↔IOL links so any can
-  // be captured live. Default on; only settable while stopped (the native-vs-
-  // bridged NETMAP is read at IOL boot, so it applies at the next lab start).
-  const captureReady = $derived(labStore.captureReady);
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
   const hasNat = $derived(labStore.features.includes("natgw"));
@@ -83,47 +79,68 @@
 </script>
 
 <div class="palette">
-  <div class="section-title">Lab</div>
-  <div class="lab-controls">
-    <button class="btn lab-btn" onclick={startAll} disabled={running}>Start all</button>
-    <button class="btn lab-btn" onclick={stopAll} disabled={!running}>Stop all</button>
+  <div class="section-title">Session</div>
+  <div class="session-actions">
+    <button class="btn btn-primary session-primary" onclick={startAll} disabled={running}>
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" /></svg>
+      Start all
+    </button>
+    <button class="btn session-secondary" onclick={stopAll} disabled={!running}>
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5" /></svg>
+      Stop all
+    </button>
+  </div>
+
+  <div class="session-rows">
     <button
-      class="btn lab-btn"
+      class="action-row"
       onclick={saveConfigs}
       disabled={!hasRunningIol}
       title="Extract each running IOL node's saved NVRAM startup-config into the lab — write memory on the nodes first"
-    >Save configs</button>
-    <button class="btn lab-btn btn-danger" onclick={wipeAll} disabled={running}>Wipe all</button>
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+        <path d="M17 21v-8H7v8M7 3v5h8" />
+      </svg>
+      <span>Save configs</span>
+    </button>
     <button
-      class="btn lab-btn"
-      onclick={forceClean}
-      title="Force-stop every node, relay and capture on the runtime — clears orphaned processes when nodes still show running or host CPU stays high after a normal stop."
-    >Force clean</button>
-    <button
-      class="btn lab-btn"
+      class="action-row"
       onclick={consoleAll}
       disabled={!hasRunningNode}
       title={hasRunningNode
         ? "Open a console for every running node, honouring the Web/Native mode below"
         : "No running nodes — start the lab first"}
-    >Console all</button>
-  </div>
-
-  <label
-    class="lab-opt"
-    class:disabled={running}
-    title={running
-      ? "Stop the lab to change capture-ready wiring — it applies at the next start."
-      : "Capture-ready: wire IOL↔IOL links through the capture bridge so any link can be packet-captured live (no node restart). Off = faster native netio, but inter-IOL links need a restart to capture. Applies at the next lab start."}
-  >
-    <input
-      type="checkbox"
-      checked={captureReady}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M7 9l3 3-3 3M13 15h4" />
+      </svg>
+      <span>Console all</span>
+    </button>
+    <button
+      class="action-row"
+      onclick={forceClean}
+      title="Force-stop every node, tap/bridge and capture on the runtime — clears orphaned processes when nodes still show running or host CPU stays high after a normal stop."
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5" />
+        <path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
+      </svg>
+      <span>Force clean</span>
+    </button>
+    <button
+      class="action-row danger"
+      onclick={wipeAll}
       disabled={running}
-      onchange={(e) => labStore.setCaptureReady((e.currentTarget as HTMLInputElement).checked)}
-    />
-    <span>Capture-ready links</span>
-  </label>
+      title="Delete all saved NVRAM/state for this lab (stops nodes first). Cannot be undone."
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6" />
+      </svg>
+      <span>Wipe all</span>
+    </button>
+  </div>
 
   <div class="section-title">Console</div>
   <div
@@ -148,10 +165,16 @@
 
   <div class="section-title">View</div>
   <button
-    class="btn lab-btn"
+    class="action-row"
     title="Network Watcher — pick protocols to highlight as animated directional overlays on the links (PNetLab-style), read off link.stats"
     onclick={() => watcherStore.togglePanel()}
-  >Network watcher…</button>
+  >
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+    <span>Network watcher</span>
+  </button>
 
   <div class="section-title">Nodes</div>
 
@@ -418,39 +441,84 @@
   .section-title:first-child {
     margin-top: 0;
   }
-  .lab-controls {
+  /* SESSION — a prominent Start/Stop pair over a list of icon action rows. */
+  .session-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .session-primary,
+  .session-secondary {
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px 8px;
+    font-size: var(--fs-sm);
+  }
+  .session-primary svg,
+  .session-secondary svg {
+    flex-shrink: 0;
+  }
+  .session-rows {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 1px;
     margin-bottom: var(--sp-2);
   }
-  .lab-btn {
-    justify-content: center;
-    width: 100%;
-    font-size: var(--fs-xs);
-    padding: 6px 8px;
-  }
-  .lab-opt {
+  /* Menu-style row: leading icon + label, full width, hover-highlighted. */
+  .action-row {
+    all: unset;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: -2px 0 var(--sp-2);
-    padding: 4px 2px;
-    font-size: var(--fs-xs);
+    gap: var(--sp-2);
+    width: 100%;
+    padding: 7px 8px;
+    border-radius: var(--radius-md);
+    font-size: var(--fs-sm);
+    font-weight: 500;
     color: var(--ink-2);
     cursor: pointer;
-    user-select: none;
+    transition: background var(--transition-fast), color var(--transition-fast);
   }
-  .lab-opt input {
-    accent-color: var(--accent);
-    cursor: pointer;
+  .action-row svg {
+    flex-shrink: 0;
+    color: var(--ink-3);
+    transition: color var(--transition-fast);
   }
-  .lab-opt.disabled {
+  .action-row:hover {
+    background: var(--bg-hover);
+    color: var(--ink);
+  }
+  .action-row:hover svg {
+    color: var(--accent);
+  }
+  .action-row:focus-visible {
+    background: var(--bg-hover);
+    color: var(--ink);
+  }
+  .action-row:disabled {
+    opacity: 0.42;
     cursor: not-allowed;
-    opacity: 0.55;
+    background: none;
+    color: var(--ink-2);
   }
-  .lab-opt.disabled input {
-    cursor: not-allowed;
+  .action-row:disabled svg {
+    color: var(--ink-3);
+  }
+  .action-row.danger {
+    color: var(--danger);
+  }
+  .action-row.danger svg {
+    color: var(--danger);
+  }
+  .action-row.danger:hover {
+    background: var(--state-crashed-bg);
+    color: var(--danger-hover);
+  }
+  .action-row.danger:hover svg {
+    color: var(--danger-hover);
   }
   /* Segmented toggle (Console open mode). */
   .seg {

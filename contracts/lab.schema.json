@@ -42,11 +42,6 @@
     "links": {
       "type": "array",
       "items": { "$ref": "#/$defs/link" }
-    },
-    "captureReady": {
-      "description": "When true (the DEFAULT — a missing field counts as true), same-host IOL<->IOL point-to-point links are wired through the iouyap+UDP relay bridge instead of native netio, so any of them can be packet-captured live with no node restart. Set false to restore the zero-relay native netio fast path.",
-      "type": "boolean",
-      "default": true
     }
   },
   "$defs": {

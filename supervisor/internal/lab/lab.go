@@ -19,23 +19,6 @@ type Lab struct {
 	Canvas      *Canvas `json:"canvas,omitempty"`
 	Nodes       []Node  `json:"nodes"`
 	Links       []Link  `json:"links"`
-	// CaptureReady, when enabled (the DEFAULT), realizes same-host IOL<->IOL
-	// point-to-point links through the iouyap+UDP relay bridge instead of native
-	// netio, so any of them can be packet-captured live — a pcapng tee attaches
-	// to the already-running relay with no node restart. A nil pointer means the
-	// default (on), so labs authored before this field and the GUI default both
-	// get capturable inter-IOL links. Set it false to restore the zero-relay
-	// native netio fast path (no live capture on IOL<->IOL without a restart).
-	CaptureReady *bool `json:"captureReady,omitempty"`
-}
-
-// CaptureReadyEnabled reports whether capture-ready wiring is on. It is the
-// default: a nil flag counts as enabled, so pre-existing labs (and the GUI,
-// which only sends the field when the user turns it off) get capturable
-// inter-IOL links. See CaptureReady. (In the static-tap fabric every link is
-// capturable regardless, so this flag is now vestigial.)
-func (l *Lab) CaptureReadyEnabled() bool {
-	return l.CaptureReady == nil || *l.CaptureReady
 }
 
 // Canvas holds purely presentational view state.

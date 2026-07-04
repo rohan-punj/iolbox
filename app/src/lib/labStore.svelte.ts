@@ -488,25 +488,6 @@ class LabStore {
     }, 1200);
   }
 
-  // ---- capture-ready wiring (Option A) ----
-
-  /** Whether same-host IOL↔IOL links are bridged for live capture. Default on;
-   *  undefined counts as on so pre-existing labs are capture-ready too. */
-  get captureReady(): boolean {
-    return this.lab.captureReady !== false;
-  }
-
-  /** Toggle capture-ready wiring for the current lab. Persists (autosave) and,
-   *  when the field is turned back on, drops it so the doc stays clean (the
-   *  supervisor and GUI both treat a missing field as on). Takes effect at the
-   *  next lab start — the NETMAP that selects native vs bridged is read at IOL
-   *  boot — so it is only settable while the lab is stopped. */
-  setCaptureReady(on: boolean) {
-    if (on) delete this.lab.captureReady;
-    else this.lab.captureReady = false;
-    this.scheduleAutosave();
-  }
-
   // ---- live-capture console tabs (feature 1) ----
 
   openCapture(linkId: number) {

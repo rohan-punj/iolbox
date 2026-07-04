@@ -141,12 +141,6 @@ export interface LabDocument {
   /** Free-form lab instructions / checklist. Markdown-lite: "- [ ]"/"- [x]"
    *  lines become live checkboxes, "## " lines become headings. Optional. */
   tasks?: string;
-  /** Capture-ready wiring. When true (the default — undefined also counts as on)
-   *  same-host IOL↔IOL links are bridged through the capture relay so any of
-   *  them can be captured live with no node restart. Set false for the faster
-   *  native-netio fast path (inter-IOL links then need a restart to capture).
-   *  Only sent to the supervisor when the user turns it OFF. */
-  captureReady?: boolean;
 }
 
 /** Library image metadata, as returned by image.list / image.register. */
