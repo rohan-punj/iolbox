@@ -170,6 +170,11 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 #             must exist; detect_linux.go probes `sudo -n true`)
 #   procps    /usr/sbin/sysctl (extnet flips net.ipv4.ip_forward for NAT)
 #   iptables  NAT node MASQUERADE + FORWARD rules (commands.go)
+#   tcpdump   the bridge-fabric capture (internal/bcap) shells
+#             `sudo -n tcpdump -i br-<link> -w -` to tee a link's frames to the
+#             GUI capture tab; without it captures come up EMPTY (the always-on
+#             watcher uses in-process AF_PACKET so it still works — which is why
+#             only the capture tab, not the watcher, was affected).
 #   coreutils' hostid is used by -gen-iourc (in minbase already)
 # ca-certificates is omitted on purpose: the runtime itself makes no
 # outbound TLS connections (the NAT node MASQUERADEs lab traffic at L3;
@@ -178,7 +183,7 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 # button — without it a hypervisor-initiated shutdown (qemu QMP
 # system_powerdown, vmrun soft stop, OVA guest shutdown) is never acted
 # on in-guest and hosts fall back to hard-kill after their grace period.
-BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables"
+BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
