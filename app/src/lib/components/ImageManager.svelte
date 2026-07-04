@@ -204,7 +204,11 @@
             </tr>
           {/each}
           {#if labStore.images.length === 0}
-            <tr><td colspan="7" class="empty">No images registered yet.</td></tr>
+            <tr>
+              <td colspan="7" class="empty">
+                {labStore.imagesLoading ? "Loading images…" : "No images registered yet."}
+              </td>
+            </tr>
           {/if}
         </tbody>
       </table>

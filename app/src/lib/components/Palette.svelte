@@ -233,7 +233,11 @@
 
   <div class="section-title">IOL images</div>
   {#if iolImages.length === 0}
-    <div class="empty-hint">No images yet. Open the Image Manager to add one.</div>
+    {#if labStore.imagesLoading}
+      <div class="empty-hint">Loading images…</div>
+    {:else}
+      <div class="empty-hint">No images yet. Open the Image Manager to add one.</div>
+    {/if}
   {/if}
   {#each iolImages as img (img.id)}
     <div

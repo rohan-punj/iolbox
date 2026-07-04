@@ -42,6 +42,14 @@ class LabStore {
   private nodeLockTimers: Record<number, ReturnType<typeof setTimeout>> = {};
   consolePorts = $state<Record<number, number>>({});
   images = $state<LibraryImage[]>([]);
+  /** True while the initial image.list round-trip after (re)connect is still
+   *  in flight. On a real supervisor, image.list can take several (observed:
+   *  10-15s) seconds to answer under TCG right after boot/reconnect — without
+   *  this flag the GUI showed an empty "No images yet" library the whole time,
+   *  which reads as "my registered images vanished" on a page refresh even
+   *  though they were never actually gone server-side. Drives a "Loading
+   *  images…" hint instead of a false empty state; never fake the list. */
+  imagesLoading = $state(false);
   logs = $state<LogLine[]>([]);
   /** Last user-visible failure (start/stop/load); shown in the top bar until
    *  the next successful action clears it. Never silently swallow errors. */
@@ -223,8 +231,13 @@ class LabStore {
       // not a Windows-side choice — leave activeProvider as Preflight (mock
       // path) or unset (ws path) already set it, rather than hardcoding.
       if (this.transportKind === "mock") this.activeProvider = "vmware";
-      const { images } = await this.client.imageList();
-      this.images = images;
+      this.imagesLoading = true;
+      try {
+        const { images } = await this.client.imageList();
+        this.images = images;
+      } finally {
+        this.imagesLoading = false;
+      }
       // Reload the last lab the user was working on (so a browser refresh keeps
       // their additions) instead of the throwaway seed. Falls back to the seed
       // when there's no remembered lab or it's gone from the store.
