@@ -191,7 +191,7 @@ func realInstances(doc *lab.Lab) map[int]bool {
 // It is pure except for port allocation (udp) — no sockets are bound and no
 // iouyap bridge is created here; that is the Linux data-plane's job (see
 // bridgeplan_linux.go). uid is os.Getuid() on Linux (the netio dir owner).
-func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int, captureBind string, assigns map[int]*linkAssign) (*bridgePlan, error) {
+func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int, captureBind string, assigns map[int]*linkAssign, reserved map[int]bool) (*bridgePlan, error) {
 	isIOL := isIOLMap(doc)
 	kindByID := kindMap(doc)
 	reals := realInstances(doc)
@@ -206,13 +206,23 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 	// under the same id) is released now so its ports return to the pool before
 	// fresh allocation. New pseudos must avoid real instances AND every pseudo a
 	// kept assignment already owns.
-	avoid := make(map[int]bool, len(reals))
+	avoid := make(map[int]bool, len(reals)+len(reserved))
 	for r := range reals {
 		avoid[r] = true
+	}
+	// The static-tap fabric owns pseudo-instances from the same reserved pool;
+	// avoid them so a legacy bridged endpoint never aliases a fabric tap's socket.
+	for p := range reserved {
+		avoid[p] = true
 	}
 	nNewIOL := 0
 	for i := range linksSorted {
 		l := &linksSorted[i]
+		// Fabric IOL<->IOL links are realised by the static-tap fabric, not the
+		// relay: skip them here so no pseudo-instance / relay ports are allocated.
+		if isFabricLink(l, isIOL) {
+			continue
+		}
 		if wiringFor(l, isIOL, captureReady) != wiringBridged {
 			continue
 		}
@@ -247,6 +257,9 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 
 	for i := range linksSorted {
 		l := &linksSorted[i]
+		if isFabricLink(l, isIOL) {
+			continue
+		}
 		if wiringFor(l, isIOL, captureReady) != wiringBridged {
 			continue
 		}
@@ -424,6 +437,12 @@ func (p *bridgePlan) udpPorts() []int {
 // startBridges (Linux) does that, consuming the plan this produces. Called
 // under no lock; caller serialises.
 func (s *Server) rebuildBridgePlan(ll *loadedLab) error {
+	// Recompute the static-tap fabric first (deterministic, topology-independent)
+	// so its pseudo-instances can be reserved out of the legacy plan below and the
+	// whole-lab NETMAP can include a static line per fabric interface.
+	ll.staticTaps = computeStaticTaps(ll.doc, currentUID())
+	reserved := staticPseudoSet(ll.staticTaps)
+
 	// Release assignments of links no longer bridged in the current doc.
 	isIOL := isIOLMap(ll.doc)
 	captureReady := ll.doc.CaptureReadyEnabled()
@@ -460,7 +479,7 @@ func (s *Server) rebuildBridgePlan(ll *loadedLab) error {
 		captures[k] = v
 	}
 	ll.mu.Unlock()
-	plan, err := buildBridgePlan(ll.doc, currentUID(), s.udpPorts, captures, s.cfg.CaptureBind, ll.assigns)
+	plan, err := buildBridgePlan(ll.doc, currentUID(), s.udpPorts, captures, s.cfg.CaptureBind, ll.assigns, reserved)
 	if err != nil {
 		return err
 	}

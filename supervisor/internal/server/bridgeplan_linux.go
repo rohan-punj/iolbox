@@ -97,4 +97,8 @@ func (s *Server) stopBridges(ll *loadedLab) {
 	for _, b := range bridges {
 		_ = b.close()
 	}
+	// Full teardown also tears down the static-tap fabric (tap iouyaps, bridges,
+	// taps). Per-node stop leaves them up; they restart idempotently on the next
+	// spawn — mirroring the legacy iouyap bridges above.
+	s.teardownFabric(ll)
 }

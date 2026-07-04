@@ -92,30 +92,42 @@ func TestWiringForBridgedCases(t *testing.T) {
 	}
 }
 
-// TestNetmapForOnlyNativeLinks confirms the whole-lab NETMAP contains a line for
-// the native IOL<->IOL link and NONE for the VPCS/segment/capture links.
-func TestNetmapForOnlyNativeLinks(t *testing.T) {
+// TestNetmapFabricAndLegacyLinks confirms the whole-lab NETMAP routes a plain
+// IOL<->IOL link through the STATIC-TAP FABRIC (a static line per interface, no
+// native line) while VPCS/segment links stay legacy-bridged, and that even an
+// UNCONNECTED IOL interface gets a static line (the topology-independent NETMAP
+// that makes hot-connect work).
+func TestNetmapFabricAndLegacyLinks(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "lab-x", Name: "n",
-		// capture-ready OFF so the IOL<->IOL link stays native and this test
-		// exercises the native-NETMAP path specifically.
 		CaptureReady: boolPtr(false),
 		Nodes:        []lab.Node{iolNode(1), iolNode(2), vpcsNode(3)},
 		Links: []lab.Link{
-			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{ // native
+			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{ // IOL<->IOL -> FABRIC
 				{Node: 1, Interface: "e0/0"}, {Node: 2, Interface: "e0/0"}}},
-			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{ // vpcs -> bridged
+			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{ // vpcs -> legacy bridged
 				{Node: 1, Interface: "e0/1"}, {Node: 3, Interface: "eth0"}}},
-			{ID: 2, Type: lab.LinkSegment, Endpoints: []lab.Endpoint{ // segment -> bridged
+			{ID: 2, Type: lab.LinkSegment, Endpoints: []lab.Endpoint{ // segment -> legacy bridged
 				{Node: 1, Interface: "e0/2"}, {Node: 2, Interface: "e0/2"}}},
 		},
 	}
 	s := newTestServer()
 	ll := newLoadedLab(doc, "/run/iolab")
+	if err := s.rebuildBridgePlan(ll); err != nil {
+		t.Fatal(err)
+	}
 	got := s.netmapFor(ll)
-	// Lab nodes 1,2 -> IOL instances 2,3 (nodeID+1).
-	want := "2:0/0 3:0/0\n"
-	if got != want {
-		t.Fatalf("netmap:\n got %q\nwant %q", got, want)
+	// Link 0 is a fabric IOL<->IOL link: NO native "2:0/0 3:0/0" line.
+	if strings.Contains(got, "2:0/0 3:0/0\n") {
+		t.Fatalf("fabric IOL<->IOL must not emit a native line: %q", got)
+	}
+	// node 2 (instance 3) e0/1 is UNCONNECTED yet still gets a static tap line —
+	// the property that lets a link drawn to it later hot-connect with no restart.
+	if !strings.Contains(got, "3:0/1 ") {
+		t.Fatalf("unconnected interface must still get a static tap line: %q", got)
+	}
+	// node 1 (instance 2) e0/1 is on the VPCS legacy link -> legacy bridged line.
+	if !strings.Contains(got, "2:0/1 ") {
+		t.Fatalf("legacy bridged line for node1 e0/1 missing: %q", got)
 	}
 }
 

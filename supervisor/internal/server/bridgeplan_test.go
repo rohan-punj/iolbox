@@ -25,7 +25,7 @@ func TestBridgePlanCapturedIOLtoIOL(t *testing.T) {
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"}}}},
 	}
 	captures := map[int]int{7: 5500}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), captures, "", map[int]*linkAssign{})
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), captures, "", map[int]*linkAssign{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBridgePlanVPCStoIOL(t *testing.T) {
 		Links: []lab.Link{{ID: 3, Type: lab.LinkP2P,
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 1, Interface: "eth0"}}}},
 	}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{})
+	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,13 +161,19 @@ func TestNetmapIncludesBridgedLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := s.netmapFor(ll)
-	// Native line: instances 1,2 (nodes 0,1). Bridged line: instance 1 e0/1 ->
-	// pseudo-instance 500 (first from the pool; reals are 1,2).
-	if !strings.Contains(got, "1:0/0 2:0/0\n") {
-		t.Fatalf("native line missing: %q", got)
+	// Link 0 (plain IOL<->IOL) is a FABRIC link now: NO native "1:0/0 2:0/0" line;
+	// each of its interfaces gets a static-tap line instead.
+	if strings.Contains(got, "1:0/0 2:0/0\n") {
+		t.Fatalf("fabric IOL<->IOL must not emit a native line: %q", got)
 	}
-	if !strings.Contains(got, "1:0/1 500:0/0\n") {
-		t.Fatalf("bridged pseudo-instance line missing: %q", got)
+	if !strings.Contains(got, "1:0/0 ") {
+		t.Fatalf("static tap line for node0 e0/0 missing: %q", got)
+	}
+	// Link 1 (VPCS<->IOL) stays legacy-bridged: node0 e0/1 -> its iouyap
+	// pseudo-instance (excluded from the static fabric because it is on a legacy
+	// link). Its pseudo id follows the static allocations, so assert structurally.
+	if !strings.Contains(got, "1:0/1 ") {
+		t.Fatalf("bridged pseudo-instance line for node0 e0/1 missing: %q", got)
 	}
 }
 
@@ -206,13 +212,17 @@ func TestBridgePlanReleasesPortsOnRebuild(t *testing.T) {
 // scratch each rebuild, so removing link 1 shifted link 2's whole identity —
 // silently orphaning endpoints whose configs were frozen at start; observed as
 // a NAT's DHCP OFFERs never reaching a router after topology edits.)
+// Note: the links here are all LEGACY (each has a VPCS/NAT endpoint), because
+// plain IOL<->IOL links now route through the static-tap fabric (no relay, no
+// sticky assignment). Sticky assignments still protect the legacy relay path
+// until it is retired in P5, which is what this test guards.
 func TestStickyAssignmentsAcrossLinkRemoval(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
-		Nodes: []lab.Node{iolNode(0), iolNode(1), iolNode(2), natNode(3)},
+		Nodes: []lab.Node{iolNode(0), vpcsNode(1), vpcsNode(2), natNode(3), vpcsNode(4)},
 		Links: []lab.Link{
-			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "e0/0"}}},
-			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 1, Interface: "e0/1"}, {Node: 2, Interface: "e0/1"}}},
-			{ID: 2, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 3, Interface: "eth0"}}},
+			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
+			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
+			{ID: 2, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/2"}, {Node: 3, Interface: "eth0"}}},
 		},
 	}
 	s := newTestServer()
@@ -263,9 +273,9 @@ func TestStickyAssignmentsAcrossLinkRemoval(t *testing.T) {
 	if _, still := ll.assigns[1]; still {
 		t.Fatal("removed link 1's assignment must be released")
 	}
-	// And a NEW link picks up fresh (recycled) resources without error.
+	// And a NEW legacy link picks up fresh (recycled) resources without error.
 	ll.doc.Links = append(ll.doc.Links, lab.Link{ID: 9, Type: lab.LinkP2P,
-		Endpoints: []lab.Endpoint{{Node: 1, Interface: "e0/2"}, {Node: 2, Interface: "e0/2"}}})
+		Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/3"}, {Node: 4, Interface: "eth0"}}})
 	if err := s.rebuildBridgePlan(ll); err != nil {
 		t.Fatal(err)
 	}

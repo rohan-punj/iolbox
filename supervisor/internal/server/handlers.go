@@ -726,6 +726,23 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 		ll.doc.Links = append(ll.doc.Links, args.Link)
 	}
 
+	// Fabric IOL<->IOL link: the HOT-CONNECT path. Every IOL interface already has
+	// its own static tap (created at boot, topology-independent NETMAP), so wiring
+	// this link is a pure runtime bridge-attach that never touches a running IOL —
+	// no relay, no rebuild-driven port churn, no restart. Recompute the plan (so a
+	// newly reconnected interface gets/keeps its static tap) then ensure the
+	// bridge + attach both taps (both idempotent).
+	if isFabricLink(&args.Link, isIOLMap(ll.doc)) {
+		if err := s.rebuildBridgePlan(ll); err != nil {
+			return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
+		}
+		if err := s.startFabric(ll); err != nil {
+			return nil, err
+		}
+		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
+		return protocol.LinkData{Link: args.Link.ID}, nil
+	}
+
 	// Native same-host IOL<->IOL links are realized through the whole-lab
 	// NETMAP, which IOL reads once at boot from the shared lab dir. There is no
 	// runtime relay to start for them: they come up when the NETMAP (written by
@@ -803,6 +820,12 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	_ = s.relays.Stop(args.Link.ID)
+	// If this was a fabric link, detach its taps + delete its bridge (the taps
+	// persist — the interfaces are unconnected again, still tap-ready for a future
+	// hot-connect). Classify from the CURRENT doc before we drop the link.
+	if isFabricLink(&args.Link, isIOLMap(ll.doc)) {
+		s.detachFabricLink(ll, &args.Link)
+	}
 	// Mirror the removal into the loaded doc + plan (see handleLinkAdd's upsert)
 	// so the wiring a later start/rebuild derives never resurrects this link.
 	kept := ll.doc.Links[:0]
@@ -1106,5 +1129,11 @@ func (s *Server) netmapFor(ll *loadedLab) string {
 	if ll.bridge != nil {
 		bridged = ll.bridge.bridgedEndpointsForNetmap()
 	}
-	return netmap.Build(nativeLinkSpecs(ll.doc), bridged...)
+	// Legacy native + iouyap-UDP-bridged lines, PLUS a static-tap line for every
+	// fabric-eligible IOL interface (the static fabric points each such interface
+	// at its own pseudo-instance/tap, whether or not a link exists for it — the
+	// topology-independent NETMAP that makes hot-connect work).
+	legacy := netmap.Build(nativeLinkSpecs(ll.doc), bridged...)
+	static := netmap.BuildStatic(staticNetmapEntries(ll.staticTaps))
+	return legacy + static
 }

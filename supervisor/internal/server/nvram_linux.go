@@ -45,6 +45,14 @@ func (s *Server) prepareLabDir(ll *loadedLab) error {
 		return err
 	}
 
+	// Realise the static-tap fabric: pre-create every fabric-eligible IOL
+	// interface's tap + netio<->tap iouyap (so its socket exists before IOL
+	// connects), and attach each fabric IOL<->IOL link's taps to its bridge. Must
+	// run before any IOL spawns, like startBridges.
+	if err := s.startFabric(ll); err != nil {
+		return err
+	}
+
 	// And the UDP relay for every bridged link, so those links carry traffic
 	// from the moment the nodes boot (capture.start only ADDS a tee to an
 	// already-running relay's config via restart; it must not be what brings

@@ -27,6 +27,22 @@ type loadedLab struct {
 	// bridges holds the live iouyap bridges started for this lab, keyed by netio
 	// socket path, so they can be Closed on stop (Linux only). Guarded by mu.
 	bridges map[string]*labBridge
+
+	// staticTaps is the whole-lab STATIC-TAP FABRIC: every fabric-eligible IOL
+	// interface's stable {tap, pseudo-instance, netio path} identity, keyed by
+	// node id then canonical interface string. Recomputed deterministically from
+	// the node set + adapter counts alone (never the link set) on every
+	// rebuildBridgePlan, so it never changes while a lab runs — which is what lets
+	// a link drawn to a running IOL be realised as a pure tap-to-bridge attach
+	// with no NETMAP re-read / node restart. See fabric.go (computeStaticTaps).
+	staticTaps map[int]map[string]ifaceTap
+	// tapBridges holds the live netio<->tap iouyap bridges (one per static tap),
+	// keyed by netio socket path, so they can be Closed on stop (Linux only).
+	// Guarded by mu.
+	tapBridges map[string]*labBridge
+	// fabricLinks records which link ids currently have a Linux bridge created +
+	// their endpoint taps attached (P1 IOL<->IOL fabric links). Guarded by mu.
+	fabricLinks map[int]bool
 	// assigns is each bridged link's STICKY data-plane identity (relay UDP port
 	// pair per endpoint + pseudo-instance per IOL endpoint), keyed by link id.
 	// Once assigned, a link keeps these values across every plan rebuild for the
@@ -68,6 +84,10 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		runDir:   runDir,
 		bridges:  make(map[string]*labBridge),
 		assigns:  make(map[int]*linkAssign),
+
+		staticTaps:  make(map[int]map[string]ifaceTap),
+		tapBridges:  make(map[string]*labBridge),
+		fabricLinks: make(map[int]bool),
 	}
 }
 
