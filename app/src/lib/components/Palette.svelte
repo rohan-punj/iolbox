@@ -20,6 +20,13 @@
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
   const hasNat = $derived(labStore.features.includes("natgw"));
+  // WS6 — inform-only egress warning on the NAT entry when the runtime's NAT is
+  // QEMU user-mode slirp (ICMP terminated). Routed/unknown → renders normally.
+  const natSlirp = $derived(labStore.egress === "slirp");
+  const natEgressNote = $derived(
+    labStore.egressNote ||
+      "DHCP & TCP only — no ping/traceroute on this runtime (QEMU slirp). Use the bridged VMware/OVA appliance or WSL2 for real internet."
+  );
   // "Save configs" only makes sense when running IOL nodes exist.
   const hasRunningIol = $derived(
     labStore.lab.nodes.some(
@@ -206,16 +213,20 @@
   {#if hasNat}
     <div
       class="palette-item"
+      class:egress-warn={natSlirp}
       draggable="true"
       role="button"
       tabindex="0"
       ondragstart={(e) => onDragStart(e, "nat")}
-      title="NAT gateway to the outside network (single eth0)"
+      title={natSlirp ? natEgressNote : "NAT gateway to the outside network (single eth0)"}
     >
-      <span class="swatch nat" aria-hidden="true">{@html iconSvg("nat", 28)}</span>
+      <span class="swatch nat" aria-hidden="true">
+        {@html iconSvg("nat", 28)}
+        {#if natSlirp}<span class="egress-badge" aria-hidden="true">⚠</span>{/if}
+      </span>
       <div class="item-text">
         <div class="item-name">NAT Gateway</div>
-        <div class="item-sub">Internet egress</div>
+        <div class="item-sub">{natSlirp ? "DHCP/TCP only — no ping" : "Internet egress"}</div>
       </div>
     </div>
   {/if}
@@ -597,6 +608,27 @@
   }
   .swatch.nat {
     color: var(--accent);
+    position: relative;
+  }
+  /* WS6 — slirp egress: greyed NAT glyph + a warn chip on the palette entry.
+     Inform-only; the row stays draggable. Filter the svg only so the warn chip
+     (a sibling of the svg) stays crisp and unaffected by the parent grayscale. */
+  .palette-item.egress-warn .swatch.nat :global(svg) {
+    filter: grayscale(0.85) opacity(0.7);
+  }
+  .swatch.nat .egress-badge {
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: var(--accent-ink);
+    display: grid;
+    place-items: center;
+    font-size: 9px;
+    line-height: 1;
   }
   .swatch :global(svg) {
     width: 28px;

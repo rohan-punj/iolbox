@@ -34,6 +34,14 @@
   // Artwork icons carry their own plate and render full-bleed, PNetLab-style.
   const artwork = $derived((iconRegistryVersion(), isArtworkIcon(iconKey)));
   const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, artwork ? 58 : 28)));
+  // WS6 — inform-only egress warning: ONLY the NAT builtin, and ONLY when the
+  // runtime's NAT is QEMU user-mode slirp (ICMP terminated). vpcs/iol never
+  // hit this (kind gate) and routed/unknown egress renders normally (no badge).
+  const egressWarn = $derived(kind === "nat" && labStore.egress === "slirp");
+  const egressNote = $derived(
+    labStore.egressNote ||
+      "DHCP & TCP only — no ping/traceroute on this runtime (QEMU slirp). Use the bridged VMware/OVA appliance or WSL2 for real internet."
+  );
 </script>
 
 <div
@@ -43,6 +51,7 @@
   class:drop-target={isDropTarget}
   class:linking={isLinkSource}
   class:locked={isLocked}
+  class:egress-warn={egressWarn}
   data-state={state}
   ondblclick={onDblClick}
   role="button"
@@ -59,6 +68,9 @@
       <span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>
     {/if}
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
+    {#if egressWarn}
+      <span class="egress-badge" title={egressNote} aria-label={egressNote}>⚠</span>
+    {/if}
     <button
       class="connector nodrag"
       title="Drag to another node to connect"
@@ -136,6 +148,29 @@
     display: grid;
     place-items: center;
     color: inherit;
+  }
+  /* WS6 — slirp egress: subtle greyed/desaturated NAT glyph + a warn chip.
+     Inform-only; the node stays fully functional (drag/add/start/wire). */
+  .node.egress-warn .glyph {
+    filter: grayscale(0.85) opacity(0.7);
+  }
+  .egress-badge {
+    position: absolute;
+    top: -5px;
+    left: -5px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: var(--accent-ink);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    line-height: 1;
+    box-shadow: var(--shadow-md);
+    z-index: 5;
+    pointer-events: auto;
+    cursor: help;
   }
   /* WS1 — action-lock progress overlay (see IolNode for rationale). */
   .lock-overlay {

@@ -115,6 +115,13 @@ export interface HelloResult {
   runtime: string;
   arch: string;
   features: string[];
+  // WS6 — internet-egress capability of the runtime's NAT path. "slirp" (QEMU
+  // user-mode NAT) terminates ICMP → ping/traceroute to the internet do NOT
+  // work through the NAT node; "routed" is a real host NAT/bridge (full).
+  // Always present on the WS6 supervisor; treat absence as "routed".
+  egress?: "slirp" | "routed";
+  // Human-readable note; only sent when egress === "slirp".
+  egressNote?: string;
 }
 
 export interface ImageListResult {

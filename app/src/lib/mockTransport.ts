@@ -167,6 +167,12 @@ export class MockTransport implements Transport {
           runtime: "debian-slim-12",
           arch: "x86_64",
           features: ["nvram", "capture", "i386", "natgw"],
+          // WS6 — default matches a real host NAT (no badge). To exercise the
+          // NAT-node slirp warning badge in dev, set egress to "slirp" and add
+          // an egressNote:
+          //   egress: "slirp",
+          //   egressNote: "QEMU user-mode slirp: DHCP & outbound TCP work through NAT, but ping/traceroute to the internet do not. Use the bridged VMware/OVA appliance or WSL2 for real internet.",
+          egress: "routed",
         });
         return;
       }

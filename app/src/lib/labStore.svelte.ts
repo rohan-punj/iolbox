@@ -66,6 +66,12 @@ class LabStore {
    *  via build-release.sh's -ldflags). Empty until connected; surfaced in the
    *  Palette host-monitor footer so staleness is visible at a glance. */
   supervisorVersion = $state<string>("");
+  /** WS6 — internet-egress capability from the hello handshake. "slirp" (QEMU
+   *  user-mode NAT) terminates ICMP so ping/traceroute to the internet do not
+   *  work through the NAT node; "routed" (or absent/unknown) is a full path.
+   *  Drives the inform-only NAT-node warning badge. */
+  egress = $state<"slirp" | "routed" | "">("");
+  egressNote = $state<string>("");
   /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
    *  these to drive the traffic glow; entries older than ~5s are treated stale.
    *  `protos` (Network Watcher) is the optional per-protocol fps breakdown;
@@ -209,6 +215,9 @@ class LabStore {
       const hello = await this.client.connect();
       this.features = hello.features ?? [];
       this.supervisorVersion = hello.supervisor ?? "";
+      // WS6 — absent egress defaults to the permissive "routed" (no badge).
+      this.egress = hello.egress ?? "routed";
+      this.egressNote = hello.egressNote ?? "";
       this.providerStatus = "connected";
       // Real supervisor: the runtime provider is whatever process spawned it,
       // not a Windows-side choice — leave activeProvider as Preflight (mock
