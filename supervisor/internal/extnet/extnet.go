@@ -142,6 +142,13 @@ type Config struct {
 	// MgmtIface is the management interface a mgmt node's macvtap attaches to
 	// (mgmt only). Resolved by the server via PickMgmtIface / the -mgmt-iface flag.
 	MgmtIface string
+
+	// Bridged selects the P2 static-tap bridge-fabric data plane (nat only): the
+	// tap is created unbridged at Start with NO relay/UDP pumps, the DHCP server
+	// runs directly on the tap fd, and AttachBridge/DetachBridge wire the gateway
+	// + NAT onto the link bridge when the link is drawn/removed. When false the
+	// endpoint uses the legacy UDP-relay pumps (mgmt, and nat until migrated).
+	Bridged bool
 }
 
 // resolvedHost returns Config.Host, defaulting to loopback.

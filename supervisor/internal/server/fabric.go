@@ -11,14 +11,16 @@ import (
 // isFabricLink reports whether a link is realised by the STATIC-TAP LINUX-BRIDGE
 // FABRIC (the P1 migration path) rather than the legacy iouyap-UDP + relay path.
 //
-// P1 scope: a plain same-host IOL<->IOL point-to-point link with NO active
-// capture. Everything else — VPCS/NAT/mgmt endpoints, segment links, and links
-// with capture.enabled — stays on the legacy relay path until P2 (NAT), P3
+// Scope grows per phase: P1 = IOL<->IOL; P2 adds IOL<->NAT. VPCS/mgmt/segment
+// links and links with capture.enabled stay on the legacy relay path until P3
 // (VPCS) and P4 (capture) move them onto the fabric and P5 retires the relay.
 // captureReady is deliberately NOT consulted: in the fabric model every link is
-// capturable (via tcpdump on the bridge, P4), so a plain IOL<->IOL link always
+// capturable (via tcpdump on the bridge, P4), so a fabric-eligible link always
 // takes the fabric regardless of the lab-level capture-ready flag.
-func isFabricLink(l *lab.Link, isIOL map[int]bool) bool {
+//
+// fabricOK maps node id -> whether the node's kind can live on the fabric (see
+// fabricNodes: IOL and NAT today).
+func isFabricLink(l *lab.Link, fabricOK map[int]bool) bool {
 	if l.EffectiveType() != lab.LinkP2P || len(l.Endpoints) != 2 {
 		return false
 	}
@@ -26,11 +28,24 @@ func isFabricLink(l *lab.Link, isIOL map[int]bool) bool {
 		return false // active capture still uses the relay tee until P4
 	}
 	for _, ep := range l.Endpoints {
-		if !isIOL[ep.Node] {
+		if !fabricOK[ep.Node] {
 			return false
 		}
 	}
 	return true
+}
+
+// fabricNodes returns the set of node ids whose kind is realised by the static-
+// tap fabric: IOL (P1) and NAT (P2). VPCS/mgmt stay on the legacy relay path.
+func fabricNodes(doc *lab.Lab) map[int]bool {
+	out := make(map[int]bool, len(doc.Nodes))
+	for i := range doc.Nodes {
+		switch doc.Nodes[i].Kind {
+		case lab.KindIOL, lab.KindNAT:
+			out[doc.Nodes[i].ID] = true
+		}
+	}
+	return out
 }
 
 // ifaceTap is one IOL interface's STABLE, topology-independent fabric identity: a
@@ -61,10 +76,11 @@ type ifaceKey struct {
 // instead, and a static tap would double-wire the port. Interface names are
 // normalised to netmap's canonical "e0/0" form so they match computeStaticTaps.
 func legacyBridgedIfaces(doc *lab.Lab, isIOL map[int]bool, captureReady bool) map[ifaceKey]bool {
+	fabricOK := fabricNodes(doc)
 	out := make(map[ifaceKey]bool)
 	for i := range doc.Links {
 		l := &doc.Links[i]
-		if isFabricLink(l, isIOL) {
+		if isFabricLink(l, fabricOK) {
 			continue
 		}
 		if wiringFor(l, isIOL, captureReady) != wiringBridged {

@@ -67,14 +67,15 @@ func TestStartNatUnsupported(t *testing.T) {
 	}
 }
 
-// TestBridgePlanExtnetUDP pins that a nat endpoint is bridged like VPCS: it gets
-// relay UDP ports (no pseudo-instance, not marked vpcs), and extnetUDPFor maps
-// send=relay.LocalPort / listen=relay.RemotePort.
+// TestBridgePlanExtnetUDP pins that a nat endpoint on a LEGACY link (here
+// VPCS<->NAT — an IOL<->NAT link now takes the static-tap fabric, P2) is bridged
+// like VPCS: it gets relay UDP ports (no pseudo-instance, not marked vpcs), and
+// extnetUDPFor maps send=relay.LocalPort / listen=relay.RemotePort.
 func TestBridgePlanExtnetUDP(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
-		Nodes: []lab.Node{iolNode(0), natNode(1)},
+		Nodes: []lab.Node{vpcsNode(0), natNode(1)},
 		Links: []lab.Link{{ID: 5, Type: lab.LinkP2P,
-			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}}},
+			Endpoints: []lab.Endpoint{{Node: 0, Interface: "eth0"}, {Node: 1, Interface: "eth0"}}}},
 	}
 	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{}, nil)
 	if err != nil {

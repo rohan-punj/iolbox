@@ -8,7 +8,8 @@ import "github.com/rohanpunj/iolab/supervisor/internal/lab"
 // control plane still computes ll.staticTaps (so the NETMAP and tests match), but
 // no kernel objects are created; these are no-ops.
 
-func (s *Server) startFabric(ll *loadedLab) error                   { return nil }
-func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error { return nil }
-func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link)       {}
-func (s *Server) teardownFabric(ll *loadedLab)                      {}
+func (s *Server) startFabric(ll *loadedLab) error                     { return nil }
+func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error   { return nil }
+func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error { return nil }
+func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link)         {}
+func (s *Server) teardownFabric(ll *loadedLab)                        {}

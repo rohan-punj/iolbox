@@ -114,13 +114,14 @@ func kindMap(doc *lab.Lab) map[int]lab.Kind {
 // through iouyap+relay instead, and a NETMAP line would double-wire the port.
 func nativeLinkSpecs(doc *lab.Lab) []netmap.LinkSpec {
 	isIOL := isIOLMap(doc)
+	fabricOK := fabricNodes(doc)
 	captureReady := doc.CaptureReadyEnabled()
 	out := make([]netmap.LinkSpec, 0, len(doc.Links))
 	for i := range doc.Links {
 		l := &doc.Links[i]
-		// Fabric IOL<->IOL links get a STATIC-tap NETMAP line (see netmapFor /
+		// Fabric links get a STATIC-tap NETMAP line (see netmapFor /
 		// staticNetmapEntries), never a native direct-netio line.
-		if isFabricLink(l, isIOL) {
+		if isFabricLink(l, fabricOK) {
 			continue
 		}
 		if wiringFor(l, isIOL, captureReady) != wiringNative {

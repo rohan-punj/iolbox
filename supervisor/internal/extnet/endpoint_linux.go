@@ -39,10 +39,14 @@ type Endpoint struct {
 	// rules are NOT touched by Rebind — only the UDP relay binding is.
 	mu       sync.Mutex
 	cfg      Config
-	udpConn  *net.UDPConn // bound on ListenPort; sends to SendPort
+	udpConn  *net.UDPConn // bound on ListenPort; sends to SendPort (legacy mode)
 	sendTo   *net.UDPAddr
 	pumpStop chan struct{}  // closed to stop the current pump generation
-	pumpWG   sync.WaitGroup // the current generation's two pumps
+	pumpWG   sync.WaitGroup // the current generation's pumps
+
+	// brName is the link bridge this nat tap is currently attached to (bridge
+	// mode only; "" until AttachBridge). Guarded by mu.
+	brName string
 }
 
 // ioctl constants for TUNSETIFF (opening a tap via /dev/net/tun).
@@ -149,6 +153,23 @@ func Start(cfg Config) (*Endpoint, error) {
 	switch cfg.Kind {
 	case KindNAT:
 		sub := Subnet{Index: cfg.SubnetIndex}
+		if cfg.Bridged {
+			// Bridge mode (P2): create the tap unbridged, no gateway/NAT yet
+			// (AttachBridge does that when the link exists). The DHCP server runs
+			// on the tap fd; no relay socket, no UDP pumps.
+			if err := setupWithRetry(natBridgeTapCmds(dev, owner)); err != nil {
+				return nil, err
+			}
+			tap, oerr := openTap(dev)
+			if oerr != nil {
+				_ = runCmdsBestEffort(natBridgeTapDelCmds(dev))
+				return nil, oerr
+			}
+			e.tap = tap
+			e.dhcp = newDHCPServer(net.ParseIP(sub.GatewayIP()), sub)
+			e.startDHCPPump()
+			return e, nil
+		}
 		if err := setupWithRetry(natSetupCmds(dev, sub, cfg.DefaultIface, owner)); err != nil {
 			return nil, err
 		}
@@ -198,6 +219,96 @@ func (e *Endpoint) startPumps() {
 	e.mu.Unlock()
 	go func() { defer e.pumpWG.Done(); e.pumpTapToRelay(stop, conn) }()
 	go func() { defer e.pumpWG.Done(); e.pumpRelayToTap(stop, conn) }()
+}
+
+// startDHCPPump launches the bridge-mode DHCP loop: a single goroutine that
+// reads frames off the tap fd (the bridge floods broadcast DISCOVER/REQUEST to
+// it), answers DHCP from the userspace server, and drops everything else (real
+// IP traffic and ARP are handled by the kernel bridge + gateway on br). No relay
+// socket is involved. Recorded in pumpStop/pumpWG so Close reuses stopPumps.
+func (e *Endpoint) startDHCPPump() {
+	e.mu.Lock()
+	stop := make(chan struct{})
+	e.pumpStop = stop
+	e.pumpWG.Add(1)
+	e.mu.Unlock()
+	go func() { defer e.pumpWG.Done(); e.pumpDHCPTap(stop) }()
+}
+
+// pumpDHCPTap is the bridge-mode DHCP loop (see startDHCPPump).
+func (e *Endpoint) pumpDHCPTap(stop chan struct{}) {
+	buf := make([]byte, frameMax)
+	for {
+		select {
+		case <-stop:
+			return
+		case <-e.closed:
+			return
+		default:
+		}
+		_ = e.tap.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, err := e.tap.Read(buf)
+		if err != nil {
+			if os.IsTimeout(err) {
+				continue
+			}
+			return
+		}
+		if n == 0 || e.dhcp == nil {
+			continue
+		}
+		if reply, consumed := e.dhcp.consume(buf[:n]); consumed && reply != nil {
+			if _, werr := e.tap.Write(reply); werr != nil && e.isClosed() {
+				return
+			}
+		}
+	}
+}
+
+// AttachBridge wires this nat endpoint onto the link's Linux bridge: it attaches
+// the tap as an L2 member and moves the gateway address + MASQUERADE/FORWARD
+// rules onto the bridge interface. Idempotent (a no-op if already attached to
+// brName). This is the runtime hot-connect step — it never touches the running
+// DHCP loop or the tap fd, so a link drawn to an already-running nat immediately
+// starts serving DHCP with no restart.
+func (e *Endpoint) AttachBridge(brName string) error {
+	if e.isClosed() {
+		return nil
+	}
+	e.mu.Lock()
+	if e.brName == brName {
+		e.mu.Unlock()
+		return nil
+	}
+	prev := e.brName
+	e.mu.Unlock()
+	if prev != "" {
+		e.DetachBridge() // moved to a different bridge (reshaped link)
+	}
+	sub := Subnet{Index: e.cfg.SubnetIndex}
+	if err := runCmds(natBridgeAttachCmds(e.dev, brName, sub, e.cfg.DefaultIface)); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.brName = brName
+	e.mu.Unlock()
+	return nil
+}
+
+// DetachBridge reverses AttachBridge (remove NAT rules + gateway address, detach
+// the tap). The tap and DHCP loop persist — the nat is simply unconnected again,
+// ready to reattach to a new link. Best-effort; the bridge device is deleted by
+// the fabric, not here.
+func (e *Endpoint) DetachBridge() {
+	e.mu.Lock()
+	br := e.brName
+	e.brName = ""
+	e.mu.Unlock()
+	if br == "" {
+		return
+	}
+	sub := Subnet{Index: e.cfg.SubnetIndex}
+	_ = runCmdsBestEffort(natBridgeDetachCmds(e.dev, br, sub, e.cfg.DefaultIface))
 }
 
 // stopPumps signals the current pump generation and waits for both pumps to
@@ -429,6 +540,13 @@ func (e *Endpoint) teardownDevice() {
 func (e *Endpoint) runTeardown() {
 	switch e.cfg.Kind {
 	case KindNAT:
+		if e.cfg.Bridged {
+			// Remove any bridge wiring (gateway/NAT rules + nomaster) then delete
+			// the tap. The bridge device itself is fabric-owned.
+			e.DetachBridge()
+			_ = runCmdsBestEffort(natBridgeTapDelCmds(e.dev))
+			return
+		}
 		sub := Subnet{Index: e.cfg.SubnetIndex}
 		_ = runCmdsBestEffort(natTeardownCmds(e.dev, sub, e.cfg.DefaultIface))
 	case KindMgmt:

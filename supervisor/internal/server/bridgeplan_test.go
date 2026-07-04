@@ -218,7 +218,7 @@ func TestBridgePlanReleasesPortsOnRebuild(t *testing.T) {
 // until it is retired in P5, which is what this test guards.
 func TestStickyAssignmentsAcrossLinkRemoval(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
-		Nodes: []lab.Node{iolNode(0), vpcsNode(1), vpcsNode(2), natNode(3), vpcsNode(4)},
+		Nodes: []lab.Node{iolNode(0), vpcsNode(1), vpcsNode(2), vpcsNode(3), vpcsNode(4)},
 		Links: []lab.Link{
 			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
 			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},

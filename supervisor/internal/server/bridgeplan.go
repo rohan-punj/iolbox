@@ -194,6 +194,7 @@ func realInstances(doc *lab.Lab) map[int]bool {
 func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures map[int]int, captureBind string, assigns map[int]*linkAssign, reserved map[int]bool) (*bridgePlan, error) {
 	isIOL := isIOLMap(doc)
 	kindByID := kindMap(doc)
+	fabricOK := fabricNodes(doc)
 	reals := realInstances(doc)
 	captureReady := doc.CaptureReadyEnabled()
 
@@ -220,7 +221,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 		l := &linksSorted[i]
 		// Fabric IOL<->IOL links are realised by the static-tap fabric, not the
 		// relay: skip them here so no pseudo-instance / relay ports are allocated.
-		if isFabricLink(l, isIOL) {
+		if isFabricLink(l, fabricOK) {
 			continue
 		}
 		if wiringFor(l, isIOL, captureReady) != wiringBridged {
@@ -257,7 +258,7 @@ func buildBridgePlan(doc *lab.Lab, uid int, udp *node.PortAllocator, captures ma
 
 	for i := range linksSorted {
 		l := &linksSorted[i]
-		if isFabricLink(l, isIOL) {
+		if isFabricLink(l, fabricOK) {
 			continue
 		}
 		if wiringFor(l, isIOL, captureReady) != wiringBridged {

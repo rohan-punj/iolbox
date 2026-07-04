@@ -462,9 +462,17 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	}
 
 	cfg := extnet.Config{Kind: extnet.Kind(n.Kind), NodeID: n.ID}
-	// Relay UDP ports (same pattern as VPCS): the endpoint pumps its tap against
-	// the plan's relay endpoint for this node's single link.
-	if ll.bridge != nil {
+	// A NAT node on a fabric link (P2) uses the static-tap bridge data plane: no
+	// relay ports, tap created unbridged, gateway/NAT wired onto the link bridge
+	// by AttachBridge. mgmt (and a NAT not on a fabric link) keep the legacy relay
+	// pumps, pairing against the plan's relay endpoint for this node's link.
+	// A NAT defaults to the bridge data plane (the common IOL<->NAT case, and it
+	// lets a NAT dropped before its link is drawn still hot-connect). It falls
+	// back to the legacy relay ONLY when it is currently on a legacy link (a
+	// VPCS<->NAT link, until P3 moves VPCS onto the fabric too).
+	bridged := n.Kind == lab.KindNAT && !s.natOnLegacyLink(ll, n.ID)
+	cfg.Bridged = bridged
+	if !bridged && ll.bridge != nil {
 		if send, listen, ok := ll.bridge.extnetUDPFor(n.ID); ok {
 			cfg.SendPort = send
 			cfg.ListenPort = listen
@@ -507,7 +515,35 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	}
 	nr.extnet = ep
 	nr.machine.To(node.StateRunning)
+	// If this NAT is on a fabric link, attach it now (its bridge was created by
+	// startFabric before this node started). No-op for legacy/mgmt endpoints or a
+	// NAT whose link isn't drawn yet — link.add attaches it then.
+	if cfg.Bridged {
+		if err := s.attachFabricForNode(ll, n.ID); err != nil {
+			return protocol.StartedNode{}, err
+		}
+	}
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
+}
+
+// natOnLegacyLink reports whether a node is an endpoint of a current LEGACY
+// (non-fabric) link — e.g. a VPCS<->NAT link. Used to keep such a NAT on the
+// legacy relay data plane; an unlinked NAT or an IOL<->NAT NAT is not "on a
+// legacy link" and so takes the bridge data plane.
+func (s *Server) natOnLegacyLink(ll *loadedLab, nodeID int) bool {
+	fabricOK := fabricNodes(ll.doc)
+	for i := range ll.doc.Links {
+		l := &ll.doc.Links[i]
+		if isFabricLink(l, fabricOK) {
+			continue
+		}
+		for _, ep := range l.Endpoints {
+			if ep.Node == nodeID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildSpec assembles a node.Spec from the lab node + runtime state.
@@ -732,7 +768,7 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	// no relay, no rebuild-driven port churn, no restart. Recompute the plan (so a
 	// newly reconnected interface gets/keeps its static tap) then ensure the
 	// bridge + attach both taps (both idempotent).
-	if isFabricLink(&args.Link, isIOLMap(ll.doc)) {
+	if isFabricLink(&args.Link, fabricNodes(ll.doc)) {
 		if err := s.rebuildBridgePlan(ll); err != nil {
 			return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
 		}
@@ -823,7 +859,7 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	// If this was a fabric link, detach its taps + delete its bridge (the taps
 	// persist — the interfaces are unconnected again, still tap-ready for a future
 	// hot-connect). Classify from the CURRENT doc before we drop the link.
-	if isFabricLink(&args.Link, isIOLMap(ll.doc)) {
+	if isFabricLink(&args.Link, fabricNodes(ll.doc)) {
 		s.detachFabricLink(ll, &args.Link)
 	}
 	// Mirror the removal into the loaded doc + plan (see handleLinkAdd's upsert)

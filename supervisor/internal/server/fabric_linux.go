@@ -63,11 +63,11 @@ func (s *Server) startFabric(ll *loadedLab) error {
 		}
 	}
 
-	// Attach every fabric IOL<->IOL link's taps to its bridge.
-	isIOL := isIOLMap(ll.doc)
+	// Attach every fabric link's taps to its bridge.
+	fabricOK := fabricNodes(ll.doc)
 	for i := range ll.doc.Links {
 		l := &ll.doc.Links[i]
-		if !isFabricLink(l, isIOL) {
+		if !isFabricLink(l, fabricOK) {
 			continue
 		}
 		if err := s.attachFabricLink(ll, l); err != nil {
@@ -92,6 +92,20 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric bridge %s: %v", br, err)
 	}
 	for _, ep := range l.Endpoints {
+		// IOL endpoint: attach its static tap. NAT endpoint: hand the bridge to
+		// its extnet endpoint, which attaches its own tap + moves the gateway/NAT
+		// onto the bridge. A NAT not yet started is skipped here — startExtnetNode
+		// attaches it when it comes up (this whole function is idempotent).
+		if node := ll.findNode(ep.Node); node != nil && node.Kind == lab.KindNAT {
+			nr := ll.get(ep.Node)
+			if nr == nil || nr.extnet == nil {
+				continue
+			}
+			if err := nr.extnet.AttachBridge(br); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric nat %d attach %s: %v", ep.Node, br, err)
+			}
+			continue
+		}
 		t, ok := tapForEndpoint(ll.staticTaps, ep)
 		if !ok {
 			return protocol.Errorf(protocol.CodeNodeSpawnFailed,
@@ -107,6 +121,25 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 	return nil
 }
 
+// attachFabricForNode (re)attaches the fabric link that a just-started node
+// participates in — used by startExtnetNode so a NAT that comes up after its
+// bridge already exists gets wired in. No-op if the node is on no fabric link.
+func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error {
+	fabricOK := fabricNodes(ll.doc)
+	for i := range ll.doc.Links {
+		l := &ll.doc.Links[i]
+		if !isFabricLink(l, fabricOK) {
+			continue
+		}
+		for _, ep := range l.Endpoints {
+			if ep.Node == nodeID {
+				return s.attachFabricLink(ll, l)
+			}
+		}
+	}
+	return nil
+}
+
 // detachFabricLink removes a fabric link's bridge (detaching its taps first). The
 // taps themselves persist — the interfaces are simply unconnected again, still
 // fabric-eligible and ready to be reattached to a new link with no restart.
@@ -114,6 +147,14 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	for _, ep := range l.Endpoints {
+		// NAT endpoint: unwire its gateway/NAT + detach its tap via extnet (must
+		// happen while the bridge still exists). IOL endpoint: detach its tap.
+		if node := ll.findNode(ep.Node); node != nil && node.Kind == lab.KindNAT {
+			if nr := ll.get(ep.Node); nr != nil && nr.extnet != nil {
+				nr.extnet.DetachBridge()
+			}
+			continue
+		}
 		if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
 			_ = mgr.Detach(ctx, t.tapName)
 		}
