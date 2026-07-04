@@ -6,6 +6,7 @@ import { SupervisorClient } from "./supervisor";
 import { MockTransport } from "./mockTransport";
 import { selectTransport } from "./transportSelect";
 import { consoleUiStore } from "./consoleUiStore.svelte";
+import { encodePcapng, type CapturedPacket } from "./pcapng";
 import type { SupervisorEvent } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
@@ -556,29 +557,34 @@ class LabStore {
     this.scheduleAutosave();
   }
 
-  // ---- raw capture recording (for "Save .pcapng" download) ----
+  // ---- capture recording (for "Save .pcapng" download) ----
   // Wireshark's live `-i TCP@host:port` attach works, but requires wireshark on
   // PATH; a downloaded .pcapng opens in Wireshark by double-click with zero
-  // setup, so we buffer the raw pcapng byte stream a CaptureTerm receives and
-  // offer it as a file. Plain Map (not reactive) — binary, appended per frame.
-  private captureBuffers = new Map<number, { chunks: Uint8Array[]; bytes: number }>();
+  // setup. We buffer the PARSED packets (frame + absolute ts) — NOT the raw
+  // byte stream — because the live /capture WS spans reconnects (each restarts
+  // its own SHB) and can drop mid-block, so concatenated raw bytes produce a
+  // file Wireshark rejects. The download re-serializes one clean pcapng section
+  // from these packets (see encodePcapng). Plain Map (not reactive).
+  private captureBuffers = new Map<number, { packets: CapturedPacket[]; bytes: number }>();
   private static CAPTURE_BUF_CAP = 64 * 1024 * 1024;
   /** Reactive byte counter so the download button can show size / enable state. */
   captureRecorded = $state<Record<number, number>>({});
 
-  /** Append raw pcapng bytes from a link's live capture stream (called by
-   *  CaptureTerm). Copies the view (the transport reuses its buffer) and caps
-   *  total size; the stream stays a valid pcapng (a truncated trailing block is
-   *  ignored by readers). */
-  appendCaptureBytes(linkId: number, bytes: Uint8Array) {
+  /** Append PARSED packets from a link's live capture stream (called by
+   *  CaptureTerm with the parser's output). Each packet's `data` is already a
+   *  copy (PcapngParser slices it). Caps total buffered bytes. */
+  appendCapturePackets(linkId: number, packets: CapturedPacket[]) {
+    if (packets.length === 0) return;
     let b = this.captureBuffers.get(linkId);
     if (!b) {
-      b = { chunks: [], bytes: 0 };
+      b = { packets: [], bytes: 0 };
       this.captureBuffers.set(linkId, b);
     }
     if (b.bytes >= LabStore.CAPTURE_BUF_CAP) return;
-    b.chunks.push(bytes.slice());
-    b.bytes += bytes.length;
+    for (const p of packets) {
+      b.packets.push({ data: p.data, tsMicros: p.tsMicros });
+      b.bytes += p.data.length;
+    }
     this.captureRecorded = { ...this.captureRecorded, [linkId]: b.bytes };
   }
 
@@ -586,11 +592,14 @@ class LabStore {
    *  opens directly in Wireshark (no PATH/command needed). */
   downloadCapture(linkId: number) {
     const b = this.captureBuffers.get(linkId);
-    if (!b || b.chunks.length === 0) {
+    if (!b || b.packets.length === 0) {
       this.pushLog("warn", "no packets captured yet — wait for traffic on this link");
       return;
     }
-    const blob = new Blob(b.chunks as BlobPart[], { type: "application/vnd.tcpdump.pcap" });
+    // Rebuild ONE clean pcapng section from the parsed packets (never a raw
+    // concat of the reconnect-spanning stream, which Wireshark rejects).
+    const bytes = encodePcapng(b.packets);
+    const blob = new Blob([bytes as BlobPart], { type: "application/vnd.tcpdump.pcap" });
     const link = this.lab.links.find((l) => l.id === linkId);
     const ep = link?.endpoints ?? [];
     const nm = (i: number) => this.lab.nodes.find((n) => n.id === ep[i]?.node)?.name ?? `n${ep[i]?.node}`;

@@ -116,10 +116,14 @@
         },
         onData: (bytes) => {
           sawData = true;
-          // Buffer the raw pcapng bytes for the "Save .pcapng" download (a
-          // reliable path into Wireshark that needs no PATH/command).
-          labStore.appendCaptureBytes(linkId, bytes);
-          for (const pkt of parser.push(bytes)) writePacket(pkt);
+          // Parse once: feed the live view AND buffer the PARSED packets for
+          // the "Save .pcapng" download. Buffering packets (not the raw stream)
+          // lets the download re-serialize ONE clean pcapng section that opens
+          // in Wireshark even across capture reconnects (which restart the
+          // stream with a fresh SHB and can drop mid-block).
+          const pkts = parser.push(bytes);
+          labStore.appendCapturePackets(linkId, pkts);
+          for (const pkt of pkts) writePacket(pkt);
         },
         onError: () => writeHint(),
         onClose: () => writeHint(),

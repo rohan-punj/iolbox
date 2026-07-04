@@ -27,6 +27,9 @@ export interface ParsedPacket {
   index: number;
   /** Seconds since capture start (relative to the first packet). */
   tRel: number;
+  /** Absolute capture time in microseconds since the Unix epoch — preserved so
+   *  the "Save .pcapng" download can re-serialize faithful timestamps. */
+  tsMicros: number;
   /** Captured frame bytes (may be shorter than origLen if snaplen truncated). */
   data: Uint8Array;
   /** Original on-wire length. */
@@ -168,8 +171,87 @@ export class PcapngParser {
     const tRel = Math.max(0, tAbs - this.t0);
     const data = new Uint8Array(dv.buffer, dv.byteOffset + dataStart, capLen).slice();
     this.index += 1;
-    return { index: this.index, tRel, data, origLen };
+    return { index: this.index, tRel, tsMicros: Math.round(tAbs * 1_000_000), data, origLen };
   }
+}
+
+// ---------------------------------------------------------------------------
+// pcapng ENCODER — re-serialize captured packets into a fresh, single-section
+// pcapng file for the "Save .pcapng" download.
+//
+// Why not just save the raw bytes we received? The live /capture WS stream can
+// span RECONNECTS (each restarts with its own Section Header Block) and a drop
+// can land mid-block, so concatenating the raw byte chunks produces a file with
+// a truncated block wedged before a second SHB — which Wireshark rejects
+// ("isn't a capture file in a format Wireshark understands"). Rebuilding from
+// the already-PARSED packets guarantees ONE clean section: SHB +
+// IDB(LINKTYPE_ETHERNET) + one Enhanced Packet Block per packet, with faithful
+// absolute-microsecond timestamps. Mirrors supervisor/internal/relay/pcapng.go.
+// ---------------------------------------------------------------------------
+
+export interface CapturedPacket {
+  data: Uint8Array;
+  tsMicros: number;
+}
+
+export function encodePcapng(packets: CapturedPacket[]): Uint8Array {
+  const LINKTYPE_ETHERNET = 1;
+  const SNAPLEN = 262144;
+
+  let total = 28 + 20; // SHB(28) + IDB(20)
+  for (const p of packets) {
+    const pad = (4 - (p.data.length % 4)) % 4;
+    total += 32 + p.data.length + pad; // EPB: 32 header/trailer + data + pad
+  }
+
+  const out = new Uint8Array(total);
+  const dv = new DataView(out.buffer);
+  let o = 0;
+  const u32 = (v: number) => {
+    dv.setUint32(o, v >>> 0, true);
+    o += 4;
+  };
+  const u16 = (v: number) => {
+    dv.setUint16(o, v & 0xffff, true);
+    o += 2;
+  };
+
+  // Section Header Block (little-endian).
+  u32(0x0a0d0d0a);
+  u32(28);
+  u32(0x1a2b3c4d); // byte-order magic
+  u16(1);
+  u16(0); // major, minor
+  u32(0xffffffff);
+  u32(0xffffffff); // section length = -1 (unknown)
+  u32(28);
+
+  // Interface Description Block.
+  u32(0x00000001);
+  u32(20);
+  u16(LINKTYPE_ETHERNET);
+  u16(0); // reserved
+  u32(SNAPLEN);
+  u32(20);
+
+  // One Enhanced Packet Block per packet.
+  for (const p of packets) {
+    const capLen = p.data.length;
+    const pad = (4 - (capLen % 4)) % 4;
+    const epbTotal = 32 + capLen + pad;
+    const ts = Math.max(0, Math.floor(p.tsMicros));
+    u32(0x00000006);
+    u32(epbTotal);
+    u32(0); // interface id 0
+    u32(Math.floor(ts / 0x1_0000_0000)); // ts high
+    u32(ts >>> 0); // ts low (mod 2^32)
+    u32(capLen);
+    u32(capLen);
+    out.set(p.data, o);
+    o += capLen + pad; // trailing pad bytes are already zero
+    u32(epbTotal);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
