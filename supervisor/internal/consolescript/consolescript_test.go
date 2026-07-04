@@ -110,8 +110,8 @@ func TestSessionRunExec(t *testing.T) {
 	// consoleSession behavior, unchanged by the Phase 0 extraction — so only
 	// ONE read is consumed across the first two sync phases combined.
 	f.chunks = [][]byte{
-		[]byte("\r\nR1>"),                               // response to the initial bare CR (unprivileged) — also satisfies the immediately-following enable-sync's stale-buffer check
-		[]byte("\r\nR1#"),                                // response after Reset()+"terminal length 0\r"+bare CR
+		[]byte("\r\nR1>"), // response to the initial bare CR (unprivileged) — also satisfies the immediately-following enable-sync's stale-buffer check
+		[]byte("\r\nR1#"), // response after Reset()+"terminal length 0\r"+bare CR
 		[]byte("show clock\r\n*12:00:00.000 UTC\r\nR1#"), // response after Reset()+the show command
 	}
 
@@ -142,9 +142,9 @@ func TestSessionRunExecAlreadyPrivileged(t *testing.T) {
 	f := &fakeConsole{}
 	f.sess = New(f.write)
 	f.chunks = [][]byte{
-		[]byte("R1#"),                     // already privileged
-		[]byte("R1#"),                     // after terminal length 0
-		[]byte("ok\r\nR1#"),                // after show command
+		[]byte("R1#"),       // already privileged
+		[]byte("R1#"),       // after terminal length 0
+		[]byte("ok\r\nR1#"), // after show command
 	}
 	out, err := f.sess.RunExec(context.Background(), f.read, "show version")
 	if err != nil {

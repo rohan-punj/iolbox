@@ -23,5 +23,9 @@ func Spawn(spec Spec, m *Machine) (*Process, error) {
 // PID returns 0 on non-Linux platforms.
 func (p *Process) PID() int { return 0 }
 
+// Subscribe always returns nil on non-Linux platforms (no console hub exists
+// off Linux — see the Linux Process doc comment).
+func (p *Process) Subscribe() *Subscription { return nil }
+
 // Stop is a no-op on non-Linux platforms.
 func (p *Process) Stop() error { return ErrUnsupportedPlatform }

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 	"github.com/rohanpunj/iolbox/supervisor/internal/server"
 	"github.com/rohanpunj/iolbox/supervisor/internal/ws"
@@ -331,6 +332,75 @@ func TestConsoleEndpointTelnetNegotiationAndData(t *testing.T) {
 	}
 }
 
+// TestConsoleEndpointInProcessSubscription is the v0.3.0 Phase 2 regression
+// test: when ConsoleSubscribe returns a live subscription (simulating a
+// running IOL node's hub), handleConsole must use the in-process path
+// (bridgeConsoleSub) — no TCP dial, no telnet.Negotiator of its own — and the
+// client must see clean application bytes plus a working bidirectional
+// keystroke path, identical in externally-observable behavior to the
+// TCP-dial path exercised by TestConsoleEndpointTelnetNegotiationAndData.
+func TestConsoleEndpointInProcessSubscription(t *testing.T) {
+	// A fake "pty": write to serverSide.outW to simulate node output; read
+	// from serverSide.inR to observe what the browser typed reaching the pty.
+	outR, outW := io.Pipe() // node output -> hub read side
+	inR, inW := io.Pipe()   // hub write side -> "pty" input
+	pty := &pipePty{r: outR, w: inW}
+
+	sub := node.NewSubscriptionForTest(pty, "")
+
+	fake := &fakeControlServer{
+		consolePorts:  map[int]int{},
+		subscriptions: map[int]*node.Subscription{7: sub},
+	}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+
+	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/console/7"
+	conn := dialWS(t, wsURL)
+	defer conn.Close()
+
+	// Feed some "node output" through the fake pty.
+	go func() { outW.Write([]byte("R1#")) }()
+
+	op, data := readServerFrame(t, conn)
+	if op != ws.OpBinary {
+		t.Fatalf("expected binary frame, got opcode %d", op)
+	}
+	// No IAC bytes: the in-process path never runs its own Negotiator, and the
+	// hub's Subscribe never sends the telnet preamble to in-process
+	// subscribers (see consoleHub.registerLocked's wantTelnetPreamble=false).
+	if bytes.Contains(data, []byte{0xFF}) {
+		t.Fatalf("IAC byte leaked into in-process subscriber's client frame: %v", data)
+	}
+	if !bytes.Contains(data, []byte("R1#")) {
+		t.Fatalf("expected node output, got %q", data)
+	}
+
+	// Keystrokes flow browser -> ws -> subscription.Write -> pty.
+	if err := writeClientFrame(conn, ws.OpBinary, []byte("show version\r")); err != nil {
+		t.Fatalf("write keystroke: %v", err)
+	}
+	buf := make([]byte, 64)
+	n, err := inR.Read(buf)
+	if err != nil {
+		t.Fatalf("read from fake pty: %v", err)
+	}
+	if string(buf[:n]) != "show version\r" {
+		t.Fatalf("fake pty received %q, want %q", buf[:n], "show version\r")
+	}
+}
+
+// pipePty adapts a pair of io.Pipe halves to the io.ReadWriter a consoleHub
+// wants for its pty, for the in-process subscription test above.
+type pipePty struct {
+	r *io.PipeReader
+	w *io.PipeWriter
+}
+
+func (p *pipePty) Read(b []byte) (int, error)  { return p.r.Read(b) }
+func (p *pipePty) Write(b []byte) (int, error) { return p.w.Write(b) }
+
 func TestConsoleEndpointUnknownNode(t *testing.T) {
 	fake := &fakeControlServer{consolePorts: map[int]int{}}
 	b := New(Config{Addr: "127.0.0.1:0"}, fake)
@@ -444,10 +514,16 @@ func httpGetUpgradeAttempt(url string) (string, error) {
 }
 
 // fakeControlServer implements ControlServer without a real lab/server.Server,
-// for testing the console/capture bridges in isolation.
+// for testing the console/capture bridges in isolation. subscriptions, if
+// non-nil, makes ConsoleSubscribe return a canned *node.Subscription for the
+// given node id (simulating a running IOL node's hub); a node id with no
+// entry falls back to nil, exactly like Server.ConsoleSubscribe does for a
+// VPCS node or one with no running hub — exercising handleConsole's fallback
+// to the TCP dial path.
 type fakeControlServer struct {
-	consolePorts map[int]int
-	capturePorts map[int]int
+	consolePorts  map[int]int
+	capturePorts  map[int]int
+	subscriptions map[int]*node.Subscription
 }
 
 func (f *fakeControlServer) ServeConn(ctx context.Context, rwc io.ReadWriteCloser) {}
@@ -455,6 +531,10 @@ func (f *fakeControlServer) ServeConn(ctx context.Context, rwc io.ReadWriteClose
 func (f *fakeControlServer) ConsolePort(nodeID int) (int, bool) {
 	p, ok := f.consolePorts[nodeID]
 	return p, ok
+}
+
+func (f *fakeControlServer) ConsoleSubscribe(nodeID int) *node.Subscription {
+	return f.subscriptions[nodeID]
 }
 
 func (f *fakeControlServer) CapturePort(linkID int) (int, bool) {

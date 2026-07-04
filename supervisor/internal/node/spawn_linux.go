@@ -435,6 +435,23 @@ func (p *Process) teardown() {
 	}
 }
 
+// Subscribe attaches an in-process console subscriber to this node's hub (see
+// consoleHub.Subscribe) so a caller in another package (internal/wsbridge,
+// and later a programmatic exec caller — v0.3.0 Phases 2/4) can consume
+// decoded console output and write keystrokes without dialing ConsolePort
+// over TCP. Returns nil if the node has no console hub — VPCS nodes (which
+// are their own telnet server, see the Process doc comment) or an IOL node
+// that hasn't started/has already torn down.
+func (p *Process) Subscribe() *Subscription {
+	p.mu.Lock()
+	hub := p.hub
+	p.mu.Unlock()
+	if hub == nil {
+		return nil
+	}
+	return hub.Subscribe()
+}
+
 // PID returns the OS process id, or 0 if not started.
 func (p *Process) PID() int {
 	p.mu.Lock()

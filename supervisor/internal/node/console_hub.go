@@ -144,6 +144,15 @@ func (s *Subscription) Unsubscribe() {
 	s.hub.detach(s.c)
 }
 
+// NewSubscriptionForTest starts a standalone consoleHub over pty and returns
+// an in-process Subscription attached to it, for exercising a
+// Subscription-shaped consumer (e.g. internal/wsbridge's bridgeConsoleSub)
+// without a real spawned node. Exported ONLY for cross-package tests — normal
+// callers get a Subscription via Process.Subscribe/Server.ConsoleSubscribe.
+func NewSubscriptionForTest(pty io.ReadWriter, name string) *Subscription {
+	return newConsoleHub(pty, name).Subscribe()
+}
+
 // newConsoleHub starts the hub's pty reader goroutine and returns the hub.
 // name is the node's display name for the attach-time title escape (may be "").
 func newConsoleHub(pty io.ReadWriter, name string) *consoleHub {

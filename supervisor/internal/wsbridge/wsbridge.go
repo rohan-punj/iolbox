@@ -46,22 +46,31 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 	"github.com/rohanpunj/iolbox/supervisor/internal/web"
 	"github.com/rohanpunj/iolbox/supervisor/internal/ws"
 )
 
 // ControlServer is the subset of *server.Server the bridge needs: the shared
-// NDJSON connection core and console-port lookup. Kept as an interface so
-// this package doesn't import internal/server's concrete type and so the
-// connection core can be exercised with a fake in tests.
+// NDJSON connection core, console-port lookup, and in-process console
+// subscription. Kept as an interface so this package doesn't import
+// internal/server's concrete type and so the connection core can be
+// exercised with a fake in tests.
 type ControlServer interface {
 	// ServeConn runs the NDJSON control loop over rwc until it ends or ctx is
 	// cancelled (see server.Server.ServeConn).
 	ServeConn(ctx context.Context, rwc io.ReadWriteCloser)
 	// ConsolePort returns the allocated telnet console port for nodeID in the
-	// currently loaded lab.
+	// currently loaded lab. Still used for the native/OS-telnet URL the
+	// frontend opens directly (v0.3.0 Phase 2 migrates ONLY the web console;
+	// native keeps dialing this port until Phase 3).
 	ConsolePort(nodeID int) (port int, ok bool)
+	// ConsoleSubscribe attaches an in-process subscriber to nodeID's console
+	// hub (v0.3.0 Phase 2 — see node.Process.Subscribe/consoleHub.Subscribe).
+	// Returns nil if the node has no running console hub (not started, no
+	// such node/lab, or a VPCS node with no hub at all).
+	ConsoleSubscribe(nodeID int) *node.Subscription
 	// CapturePort returns the local TCP port serving the live pcapng stream for
 	// linkID in the currently loaded lab, if that link has an active capture.
 	CapturePort(linkID int) (port int, ok bool)
@@ -77,6 +86,14 @@ type Config struct {
 	ImageDir string
 	// DialConsole dials a node's local telnet console port. Defaults to
 	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
+	//
+	// v0.3.0 Phase 2: the web console no longer uses this for IOL nodes (it
+	// subscribes in-process via ControlServer.ConsoleSubscribe instead — see
+	// handleConsole). It survives ONLY as the fallback for node kinds with no
+	// console hub at all: VPCS is its own telnet server (see
+	// node.Process's doc comment) and is explicitly out of scope for console
+	// unification (docs/v0.3.0-console-unification.md §5 non-goals), so its
+	// web console still dials ConsolePort exactly as before.
 	DialConsole func(port int) (net.Conn, error)
 	// DialCapture dials a link's local pcapng capture port. Defaults to
 	// net.Dial("tcp", "127.0.0.1:<port>") when nil; overridable for tests.
@@ -177,16 +194,38 @@ func nodeIDFromPath(path string) (int, error) {
 	return strconv.Atoi(rest)
 }
 
-// handleConsole upgrades to WebSocket, dials the node's telnet console port,
-// and pumps bytes bidirectionally: node->client is telnet-IAC-cleaned and
-// sent as binary frames; client->node is either a resize control message
-// (text frame) or raw keystrokes (binary frame) written straight through.
+// handleConsole upgrades to WebSocket and bridges it to the node's console,
+// pumping bytes bidirectionally: node->client as binary frames; client->node
+// is either a resize control message (text frame) or raw keystrokes (binary
+// frame).
+//
+// v0.3.0 Phase 2: for a node with a running console hub (IOL), this attaches
+// in-process via ControlServer.ConsoleSubscribe — no TCP dial, no
+// telnet.Negotiator of its own, since the hub already decoded the byte
+// stream once (see internal/node/console_hub.go). A node with no hub at all
+// (VPCS, which is its own telnet server and explicitly out of scope for
+// console unification — docs/v0.3.0-console-unification.md §5) falls back to
+// the original dial-ConsolePort-directly path unchanged.
 func (b *Bridge) handleConsole(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := nodeIDFromPath(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	if sub := b.ctrl.ConsoleSubscribe(nodeID); sub != nil {
+		wsConn, err := ws.Accept(w, r)
+		if err != nil {
+			log.Printf("wsbridge: /console/%d handshake: %v", nodeID, err)
+			sub.Unsubscribe()
+			return
+		}
+		defer wsConn.Close()
+		bridgeConsoleSub(r.Context(), wsConn, sub)
+		return
+	}
+
+	// Fallback: no console hub for this node (VPCS, or not started/loaded).
 	port, ok := b.ctrl.ConsolePort(nodeID)
 	if !ok {
 		http.Error(w, fmt.Sprintf("node %d has no allocated console (load/start the lab first)", nodeID), http.StatusNotFound)
@@ -279,6 +318,90 @@ func bridgeConsole(ctx context.Context, wsConn *ws.Conn, telnetConn net.Conn) {
 				}
 			case ws.OpText:
 				if err := handleTextFrame(telnetConn, data); err != nil {
+					log.Printf("wsbridge: console resize frame: %v", err)
+				}
+			}
+		}
+	}()
+
+	<-done
+}
+
+// bridgeConsoleSub runs the bidirectional pump for one in-process console
+// subscription (v0.3.0 Phase 2) until either side closes or the context is
+// cancelled. Mirrors bridgeConsole's structure and framing exactly, minus the
+// telnet.Negotiator: sub.Out already delivers telnet-IAC-free application
+// bytes (the hub's single Negotiator — internal/node/console_hub.go — decoded
+// them once for every subscriber), so there is nothing to strip/answer here.
+// Exported at package level (not a method) so it's independently testable
+// against a fake hub subscription.
+//
+// Resize: exactly as before Phase 2, a {"resize":{...}} control frame is a
+// documented no-op for IOL — internal/telnet's Negotiator has never acted on
+// an inbound NAWS subnegotiation (see handleSubnegotiation's doc comment),
+// so sending a NAWS sequence into the old telnet socket was already silently
+// absorbed with zero effect on the pty. Preserving that exact (non-)behavior
+// here keeps the console "behaviorally identical" per the refactor's
+// guardrail; a real pty-resize (pty.Setsize) is a separate, not-yet-designed
+// feature, not something this refactor should introduce as a side effect.
+func bridgeConsoleSub(ctx context.Context, wsConn *ws.Conn, sub *node.Subscription) {
+	done := make(chan struct{})
+	var once sync.Once
+	closeAll := func() {
+		once.Do(func() {
+			_ = wsConn.Close()
+			sub.Unsubscribe()
+			close(done)
+		})
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeAll()
+		case <-done:
+		}
+	}()
+
+	// node -> browser: sub.Out already carries clean application bytes (the
+	// hub decoded telnet once); forward each chunk as a binary WS frame.
+	go func() {
+		defer closeAll()
+		for {
+			select {
+			case chunk, ok := <-sub.Out:
+				if !ok {
+					return
+				}
+				if len(chunk) > 0 {
+					if werr := wsConn.WriteMessage(ws.OpBinary, chunk); werr != nil {
+						return
+					}
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// browser -> node: keystrokes (binary frames) go straight to the pty via
+	// the subscription's Write (serialized against every other writer by the
+	// hub's write mutex); a resize control message (text frame) is parsed and
+	// discarded — see the no-op rationale above.
+	go func() {
+		defer closeAll()
+		for {
+			op, data, err := wsConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			switch op {
+			case ws.OpBinary:
+				if werr := sub.Write(data); werr != nil {
+					return
+				}
+			case ws.OpText:
+				if err := validateResizeFrame(data); err != nil {
 					log.Printf("wsbridge: console resize frame: %v", err)
 				}
 			}
@@ -415,15 +538,37 @@ type resizeMessage struct {
 // handleTextFrame parses a text-frame control message from the client and, if
 // it is a resize request, writes the NAWS subnegotiation to the node.
 func handleTextFrame(telnetConn net.Conn, data []byte) error {
+	msg, err := parseResizeFrame(data)
+	if err != nil {
+		return err
+	}
+	_, err = telnetConn.Write(telnet.NAWS(msg.Resize.Cols, msg.Resize.Rows))
+	return err
+}
+
+// validateResizeFrame parses a text-frame control message exactly like
+// handleTextFrame, but for the in-process subscription path (bridgeConsoleSub)
+// there is no telnet socket to write a NAWS subnegotiation to — see
+// bridgeConsoleSub's doc comment for why that was already a no-op for IOL
+// even on the old TCP path. Returning the parse error (if any) lets the
+// caller log a malformed frame exactly as before; a well-formed resize frame
+// is simply acknowledged as parsed and otherwise ignored.
+func validateResizeFrame(data []byte) error {
+	_, err := parseResizeFrame(data)
+	return err
+}
+
+// parseResizeFrame is the shared validation both handleTextFrame and
+// validateResizeFrame build on.
+func parseResizeFrame(data []byte) (resizeMessage, error) {
 	var msg resizeMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		return fmt.Errorf("invalid control frame: %w", err)
+		return msg, fmt.Errorf("invalid control frame: %w", err)
 	}
 	if msg.Resize == nil {
-		return fmt.Errorf("unrecognized control frame (want {\"resize\":{\"cols\":C,\"rows\":R}})")
+		return msg, fmt.Errorf("unrecognized control frame (want {\"resize\":{\"cols\":C,\"rows\":R}})")
 	}
-	_, err := telnetConn.Write(telnet.NAWS(msg.Resize.Cols, msg.Resize.Rows))
-	return err
+	return msg, nil
 }
 
 // textFrameRWC adapts a *ws.Conn to io.ReadWriteCloser for

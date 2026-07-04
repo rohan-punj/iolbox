@@ -178,6 +178,28 @@ func (s *Server) ConsolePort(nodeID int) (port int, ok bool) {
 	return nr.consolePort, true
 }
 
+// ConsoleSubscribe attaches an in-process subscriber to nodeID's console hub
+// (v0.3.0 Phase 2), letting internal/wsbridge consume decoded console output
+// and write keystrokes without dialing ConsolePort over loopback TCP — see
+// node.Process.Subscribe / node.consoleHub.Subscribe. Returns nil if no lab is
+// loaded, the node id is unknown, the node hasn't started, or the node has no
+// console hub at all (VPCS, which is its own telnet server — see the
+// node.Process doc comment). Mirrors ConsolePort's existing precedent for
+// crossing the internal/node boundary into the server/wsbridge layer.
+func (s *Server) ConsoleSubscribe(nodeID int) *node.Subscription {
+	s.mu.Lock()
+	ll := s.lab
+	s.mu.Unlock()
+	if ll == nil {
+		return nil
+	}
+	nr := ll.get(nodeID)
+	if nr == nil || nr.proc == nil {
+		return nil
+	}
+	return nr.proc.Subscribe()
+}
+
 // CapturePort returns the local TCP port serving the live pcapng stream for
 // linkID in the currently loaded lab, if that link has an active capture. Used
 // by the WebSocket capture bridge (internal/wsbridge) to dial the right local
