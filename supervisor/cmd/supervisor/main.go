@@ -37,6 +37,7 @@ func main() {
 	iourcPath := flag.String("iourc", "/opt/iolab/iourc", "IOU license file copied into each lab's shared dir (generated at firstboot by -gen-iourc)")
 	consoleBind := flag.String("console-bind", "127.0.0.1", "host the per-node IOL console listeners bind; 0.0.0.0 lets a native telnet client on the GUI host dial <vm-ip>:<consolePort>")
 	captureBind := flag.String("capture-bind", "127.0.0.1", "host each link's pcapng capture tee listener binds; 0.0.0.0 lets a native Wireshark on the GUI host attach with `wireshark -k -i TCP@<vm-ip>:<capturePort>`")
+	egressMode := flag.String("egress", "auto", "NAT internet-egress capability advertised in hello: auto (detect QEMU slirp signature), slirp (force ICMP-limited: DHCP/TCP only), or routed (force full ICMP/traceroute)")
 	genIourc := flag.Bool("gen-iourc", false, "generate the IOU license file to stdout from this host's hostid+hostname, then exit (used by the runtime firstboot script)")
 	flag.Parse()
 
@@ -58,6 +59,7 @@ func main() {
 		ConsoleBind: *consoleBind,
 		CaptureBind: *captureBind,
 		Version:     version,
+		Egress:      *egressMode,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

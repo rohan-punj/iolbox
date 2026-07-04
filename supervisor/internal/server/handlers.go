@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/egress"
 	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/image"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
@@ -41,6 +42,8 @@ func (s *Server) handleHello(raw json.RawMessage) (any, error) {
 		Runtime:    s.cfg.Runtime,
 		Arch:       s.cfg.Arch,
 		Features:   features,
+		Egress:     s.egress,
+		EgressNote: egress.Note(s.egress),
 	}, nil
 }
 

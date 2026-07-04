@@ -37,6 +37,11 @@ func TestHelloVerb(t *testing.T) {
 	if r.Supervisor != "test" || r.Arch == "" {
 		t.Fatalf("hello result: %+v", r)
 	}
+	// Egress is always resolved to a concrete value ("slirp" or "routed"); the
+	// GUI reads it to badge the NAT node. The test box is not behind slirp.
+	if r.Egress != "slirp" && r.Egress != "routed" {
+		t.Fatalf("hello egress = %q, want slirp or routed", r.Egress)
+	}
 }
 
 func TestLabLoadValidation(t *testing.T) {

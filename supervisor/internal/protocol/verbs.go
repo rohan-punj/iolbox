@@ -22,6 +22,16 @@ type HelloResult struct {
 	Runtime    string   `json:"runtime"`
 	Arch       string   `json:"arch"`
 	Features   []string `json:"features"`
+	// Egress reports the runtime's internet-egress capability for the NAT node:
+	// "slirp" means QEMU user-mode slirp (DHCP + outbound TCP work through NAT,
+	// but ping/traceroute to the internet do NOT); "routed" means a full path
+	// (ICMP/traceroute work). "routed" is the permissive default on any runtime
+	// that isn't detected as slirp, so the NAT node is only badged when it truly
+	// can't pass ICMP.
+	Egress string `json:"egress"`
+	// EgressNote is a short human explanation of the egress limitation, present
+	// only when Egress == "slirp".
+	EgressNote string `json:"egressNote,omitempty"`
 }
 
 // --- image.list / image.register ---

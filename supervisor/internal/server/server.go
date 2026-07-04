@@ -13,6 +13,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/egress"
 	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/image"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
@@ -49,6 +50,11 @@ type Config struct {
 	Runtime string
 	Arch    string
 	Version string
+	// Egress is the -egress flag value ("auto"|"slirp"|"routed"). "auto" (the
+	// default) runs the egress detector at startup; the resolved "slirp"/"routed"
+	// value is advertised in hello so the GUI can badge the NAT node when it can't
+	// pass ICMP/traceroute. Empty defaults to "auto".
+	Egress string
 }
 
 // Server is the supervisor control server.
@@ -64,6 +70,11 @@ type Server struct {
 	// caps reports which external-net node kinds (nat/mgmt) the runtime supports,
 	// detected once at startup. Advertised in hello; enforced at lab.start.
 	caps extnet.Capabilities
+
+	// egress is the resolved internet-egress capability ("slirp" or "routed"),
+	// from the -egress flag / auto-detection at startup. Advertised in hello so
+	// the GUI can badge the NAT node when it can't pass ICMP/traceroute.
+	egress string
 
 	mu     sync.Mutex
 	images map[string]image.Info // by id
@@ -92,6 +103,9 @@ func New(cfg Config) *Server {
 	if cfg.LabsDir == "" {
 		cfg.LabsDir = "/opt/iolab/labs"
 	}
+	if cfg.Egress == "" {
+		cfg.Egress = "auto"
+	}
 	s := &Server{
 		cfg:          cfg,
 		disp:         protocol.NewDispatcher(),
@@ -106,6 +120,9 @@ func New(cfg Config) *Server {
 	// Linux this is always false, so the dev box never advertises the feature.
 	// See extnet.Detect / handleHello.
 	s.caps = extnet.Detect(extnet.SudoOK())
+	// Resolve the NAT egress capability once (auto-detects the QEMU slirp
+	// signature; -egress slirp|routed forces it). Best-effort, never fails.
+	s.egress = egress.Resolve(cfg.Egress)
 	s.register()
 	return s
 }
