@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
@@ -237,6 +238,80 @@ func TestRegisterSeedsCache(t *testing.T) {
 	}
 	if cache := readCacheFile(t, dir); len(cache) != 1 {
 		t.Fatalf("outside-dir register must not enter the cache: %+v", cache)
+	}
+}
+
+// TestRegisterTrustsMatchingHint: image.register with a hint fingerprint whose
+// (size, mtime) match the file on disk must skip image.Inspect entirely —
+// proven the same way TestRescanUsesCache proves it: swap the body for
+// different same-size content while keeping the stat pair, and the result
+// must still be the ORIGINAL (hinted) sha, i.e. the file was never re-read.
+func TestRegisterTrustsMatchingHint(t *testing.T) {
+	dir := t.TempDir()
+	orig := fakeImage('a', false)
+	path := writeImageFile(t, dir, "r1.bin", orig)
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origSum := sha256.Sum256(orig)
+	origSha := hex.EncodeToString(origSum[:])
+
+	// Swap in different content of the same size, restore the exact mtime, so
+	// only a genuine hash (not the hint) could observe the change.
+	writeImageFile(t, dir, "r1.bin", fakeImage('z', false))
+	if err := os.Chtimes(path, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newScanServer(t, dir)
+	resp := dispatch(t, s, "image.register", protocol.ImageRegisterArgs{
+		Path:        path,
+		HintSize:    fi.Size(),
+		HintMTimeNs: fi.ModTime().UnixNano(),
+		HintSHA256:  origSha,
+		HintArch:    "x86_64",
+		HintClass:   "l3",
+	})
+	if !resp.OK {
+		t.Fatalf("image.register: %+v", resp.Error)
+	}
+	var r protocol.ImageRegisterResult
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.SHA256 != origSha {
+		t.Fatalf("expected hint to be trusted (sha %s), got re-hash (%s)", origSha, r.SHA256)
+	}
+}
+
+// TestRegisterIgnoresStaleHint: a hint whose (size, mtime) no longer match the
+// file on disk must be ignored — the register call falls back to a full
+// re-hash and returns the file's ACTUAL current fingerprint, never binding a
+// stale/wrong hash to changed content.
+func TestRegisterIgnoresStaleHint(t *testing.T) {
+	dir := t.TempDir()
+	body := fakeImage('a', false)
+	path := writeImageFile(t, dir, "r1.bin", body)
+	wantSum := sha256.Sum256(body)
+	wantSha := hex.EncodeToString(wantSum[:])
+
+	s := newScanServer(t, dir)
+	resp := dispatch(t, s, "image.register", protocol.ImageRegisterArgs{
+		Path:        path,
+		HintSize:    999999, // deliberately wrong
+		HintMTimeNs: 1,
+		HintSHA256:  strings.Repeat("f", 64),
+	})
+	if !resp.OK {
+		t.Fatalf("image.register: %+v", resp.Error)
+	}
+	var r protocol.ImageRegisterResult
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.SHA256 != wantSha {
+		t.Fatalf("stale hint must be ignored: got %s, want real sha %s", r.SHA256, wantSha)
 	}
 }
 

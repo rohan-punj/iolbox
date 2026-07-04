@@ -65,7 +65,7 @@ func (s *Server) handleImageRegister(raw json.RawMessage) (any, error) {
 	if args.Path == "" {
 		return nil, protocol.NewError(protocol.CodeBadRequest, "path is required")
 	}
-	info, err := image.Inspect(args.Path)
+	info, err := inspectOrTrustHint(args)
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodeImageNotFound, "inspect %s: %v", args.Path, err)
 	}

@@ -30,15 +30,26 @@ import (
 // controlClient is the set of /control verbs the sync engine needs. Backed by
 // controlWSClient in production; stubbed in tests.
 type controlClient interface {
-	registerImage(guestPath string) error      // image.register
+	// registerImage calls image.register. hint is an optional previously-known
+	// fingerprint for this exact (size, mtime) of the source file — the
+	// supervisor only trusts it if its own stat of guestPath still matches
+	// (see supervisor/internal/server/imagescan.go:inspectOrTrustHint); a
+	// zero-value hint (ok=false when looked up) just means "no hint, hash it".
+	// Returns the fingerprint the registry actually ended up with (hinted or
+	// freshly hashed) so the caller can refresh its local cache.
+	registerImage(guestPath string, hint imageFingerprint, hintOK bool) (imageFingerprint, error)
 	saveLab(doc string) (id string, err error) // lab.saveDoc (doc is YAML/JSON text)
 	listLabIDs() ([]string, error)             // lab.listDocs -> each doc's id
 	getLab(id string) (string, error)          // lab.getDoc -> doc text
 }
 
-// imageUploader performs the plain-HTTP image upload.
+// imageUploader performs the plain-HTTP image upload. mtimeNs (Unix
+// nanoseconds, 0 = omit) lets the caller pin the guest file's resulting mtime
+// to the source file's own mtime, so a re-upload of unchanged content lands
+// with the SAME (size, mtime) it had last boot — the pair image.register's
+// cache-hint fast path validates against.
 type imageUploader interface {
-	upload(filename string, body io.Reader) (guestPath string, err error) // POST /api/upload/image
+	upload(filename string, body io.Reader, mtimeNs int64) (guestPath string, err error) // POST /api/upload/image
 }
 
 // folderSync coordinates the images\/labs\ <-> guest sync for one launch.
@@ -109,34 +120,68 @@ func isImageFile(name string) bool {
 
 // syncImagesIn uploads + registers every *.bin/*.iol file in imagesDir.
 // Continues past per-file errors, logging one line per image.
+//
+// Each file's upload carries its own mtime, and each register call carries
+// whatever fingerprint the local sidecar cache (imagecache.go) has for that
+// exact (size, mtime) — letting an unchanged image across boots skip the
+// guest's sha256 re-hash entirely (the supervisor independently re-validates
+// the hint before trusting it). The cache is rewritten once at the end,
+// keyed by the CURRENT (size, mtime) of each source file, so a changed file
+// naturally misses on the next boot.
 func (fs *folderSync) syncImagesIn() (count int, err error) {
 	entries, err := os.ReadDir(fs.imagesDir)
 	if err != nil {
 		return 0, fmt.Errorf("syncImagesIn: read %s: %w", fs.imagesDir, err)
 	}
+	cache := loadImageFingerprintCache(fs.imagesDir)
+	fresh := imageFingerprintCache{}
+	hashed, hinted := 0, 0
 	for _, e := range entries {
 		if e.IsDir() || !isImageFile(e.Name()) {
 			continue
 		}
 		name := e.Name()
 		full := filepath.Join(fs.imagesDir, name)
+		fi, statErr := e.Info()
+		if statErr != nil {
+			logf("  image %s: FAILED to stat: %v", name, statErr)
+			continue
+		}
 		f, openErr := os.Open(full)
 		if openErr != nil {
 			logf("  image %s: FAILED to open: %v", name, openErr)
 			continue
 		}
-		guestPath, upErr := fs.uploader.upload(name, f)
+		mtimeNs := fi.ModTime().UnixNano()
+		guestPath, upErr := fs.uploader.upload(name, f, mtimeNs)
 		f.Close()
 		if upErr != nil {
 			logf("  image %s: upload FAILED: %v", name, upErr)
 			continue
 		}
-		if regErr := fs.client.registerImage(guestPath); regErr != nil {
+		hint, hintOK := cache.lookup(name, fi.Size(), mtimeNs)
+		result, regErr := fs.client.registerImage(guestPath, hint, hintOK)
+		if regErr != nil {
 			logf("  image %s: registered upload but image.register FAILED: %v", name, regErr)
 			continue
 		}
-		logf("  image %s: uploaded + registered (%s)", name, guestPath)
+		result.Size = fi.Size()
+		result.MTimeNs = mtimeNs
+		fresh.put(name, result)
+		if hintOK && result.SHA256 == hint.SHA256 {
+			hinted++
+			logf("  image %s: uploaded + registered from cache, no re-hash (%s)", name, guestPath)
+		} else {
+			hashed++
+			logf("  image %s: uploaded + registered (%s)", name, guestPath)
+		}
 		count++
+	}
+	if err := fresh.save(fs.imagesDir); err != nil {
+		logf("  WARNING: could not save image fingerprint cache: %v", err)
+	}
+	if count > 0 {
+		logf("  image fingerprint cache: %d hashed, %d reused from a previous boot", hashed, hinted)
 	}
 	return count, nil
 }
@@ -286,9 +331,46 @@ type wsControlClient struct {
 // the default control-request timeout, so a big image doesn't time out.
 const imageRegisterTimeout = 5 * time.Minute
 
-func (c *wsControlClient) registerImage(guestPath string) error {
-	_, err := c.ws.requestTimeout("image.register", map[string]string{"path": guestPath}, imageRegisterTimeout)
-	return err
+// imageRegisterArgs mirrors protocol.ImageRegisterArgs (the launcher module
+// doesn't import the supervisor module, so the wire shape is duplicated here
+// — see docs/protocol.md's image.register entry for the authoritative
+// contract). omitempty on every hint field so a no-hint call looks identical
+// to the pre-cache wire shape.
+type imageRegisterArgs struct {
+	Path        string `json:"path"`
+	HintSize    int64  `json:"hintSize,omitempty"`
+	HintMTimeNs int64  `json:"hintMtimeNs,omitempty"`
+	HintSHA256  string `json:"hintSha256,omitempty"`
+	HintArch    string `json:"hintArch,omitempty"`
+	HintClass   string `json:"hintClass,omitempty"`
+}
+
+// imageRegisterResult mirrors protocol.ImageRegisterResult.
+type imageRegisterResult struct {
+	ID     string `json:"id"`
+	Class  string `json:"class"`
+	Arch   string `json:"arch"`
+	SHA256 string `json:"sha256"`
+}
+
+func (c *wsControlClient) registerImage(guestPath string, hint imageFingerprint, hintOK bool) (imageFingerprint, error) {
+	args := imageRegisterArgs{Path: guestPath}
+	if hintOK {
+		args.HintSize = hint.Size
+		args.HintMTimeNs = hint.MTimeNs
+		args.HintSHA256 = hint.SHA256
+		args.HintArch = hint.Arch
+		args.HintClass = hint.Class
+	}
+	raw, err := c.ws.requestTimeout("image.register", args, imageRegisterTimeout)
+	if err != nil {
+		return imageFingerprint{}, err
+	}
+	var res imageRegisterResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return imageFingerprint{}, fmt.Errorf("image.register: unexpected result shape: %w", err)
+	}
+	return imageFingerprint{SHA256: res.SHA256, Arch: res.Arch, Class: res.Class}, nil
 }
 
 func (c *wsControlClient) saveLab(doc string) (string, error) {
@@ -353,8 +435,11 @@ func newHTTPImageUploader(baseURL string) *httpImageUploader {
 	}
 }
 
-func (u *httpImageUploader) upload(filename string, body io.Reader) (string, error) {
+func (u *httpImageUploader) upload(filename string, body io.Reader, mtimeNs int64) (string, error) {
 	url := fmt.Sprintf("%s/api/upload/image?filename=%s", u.baseURL, filename)
+	if mtimeNs > 0 {
+		url += fmt.Sprintf("&mtime=%d", mtimeNs)
+	}
 	req, err := http.NewRequest(http.MethodPost, url, body)
 	if err != nil {
 		return "", err

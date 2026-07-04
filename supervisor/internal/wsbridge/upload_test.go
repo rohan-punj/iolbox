@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,59 @@ func TestUploadImageHappyPath(t *testing.T) {
 		}
 		if fi.Mode()&0o100 == 0 {
 			t.Fatalf("uploaded image mode %v lacks owner-execute", fi.Mode())
+		}
+	}
+}
+
+// TestUploadImageAppliesMtimeHint: an upload carrying ?mtime=<unix-ns> sets
+// the written file's mtime to that value, so a client (the Windows launcher)
+// can make a re-upload of an unchanged source file land with the SAME mtime
+// as last boot — the (size, mtime) pair image.register's cache-hint fast path
+// (server.inspectOrTrustHint) validates against.
+func TestUploadImageAppliesMtimeHint(t *testing.T) {
+	dir := t.TempDir()
+	ts := newUploadBridge(t, dir)
+
+	want := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	url := uploadURL(ts.URL, "router.bin") + "&mtime=" + strconv.FormatInt(want.UnixNano(), 10)
+	resp, err := http.Post(url, "application/octet-stream", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+
+	fi, err := os.Stat(filepath.Join(dir, "router.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.ModTime().Equal(want) {
+		t.Fatalf("mtime = %v, want %v", fi.ModTime(), want)
+	}
+}
+
+// TestUploadImageIgnoresInvalidMtime: a missing/garbage/zero mtime must never
+// fail the upload — it just means the file keeps whatever mtime os.Rename
+// gives it (a later register call re-hashes instead of using a cache hint).
+func TestUploadImageIgnoresInvalidMtime(t *testing.T) {
+	dir := t.TempDir()
+	ts := newUploadBridge(t, dir)
+
+	for i, suffix := range []string{"", "&mtime=", "&mtime=not-a-number", "&mtime=0", "&mtime=-5"} {
+		name := "x" + strconv.Itoa(i) + ".bin"
+		resp, err := http.Post(uploadURL(ts.URL, name)+suffix, "application/octet-stream", strings.NewReader("x"))
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("suffix %q: status = %d, want 200", suffix, resp.StatusCode)
+		}
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("suffix %q: file not written: %v", suffix, err)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/image"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // The image registry (s.images) is in-memory only, so a supervisor restart or
@@ -136,6 +137,31 @@ func (s *Server) cacheRegisteredImage(path string, info *image.Info) {
 		Class:   string(info.Class),
 	}
 	s.writeImageCacheLocked(cache)
+}
+
+// inspectOrTrustHint resolves the image.Info for an image.register call,
+// skipping the sha256 hash when the request carries a trustworthy hint (see
+// protocol.ImageRegisterArgs). The hint is trusted ONLY when a cheap os.Stat
+// of args.Path shows the file's current size and mtime still match
+// HintSize/HintMTimeNs exactly — the same (size, mtime) validation
+// rescanImages uses for its own sidecar cache. Any mismatch, missing hint, or
+// stat error falls back to a full image.Inspect, so a stale or wrong hint can
+// never bind an incorrect fingerprint to a changed file.
+func inspectOrTrustHint(args protocol.ImageRegisterArgs) (*image.Info, error) {
+	if args.HintSize > 0 && args.HintMTimeNs > 0 && len(args.HintSHA256) == 64 {
+		if fi, err := os.Stat(args.Path); err == nil &&
+			fi.Size() == args.HintSize && fi.ModTime().UnixNano() == args.HintMTimeNs {
+			return &image.Info{
+				ID:       args.HintSHA256[:16],
+				Filename: filepath.Base(args.Path),
+				SHA256:   args.HintSHA256,
+				Size:     args.HintSize,
+				Arch:     image.Arch(args.HintArch),
+				Class:    image.Class(args.HintClass),
+			}, nil
+		}
+	}
+	return image.Inspect(args.Path)
 }
 
 // isImageFilename mirrors the upload sanitizer's extension rule (see

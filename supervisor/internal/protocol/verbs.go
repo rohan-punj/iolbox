@@ -52,8 +52,23 @@ type ImageListResult struct {
 }
 
 // ImageRegisterArgs is the image.register request payload.
+//
+// The Hint* fields are an OPTIONAL client-asserted fingerprint (filled in by
+// the Windows launcher, which persists fingerprints across the ephemeral
+// guest disk — see tools/iolab-launcher/imagecache.go). The server only
+// trusts them when a cheap os.Stat of Path shows the file's current
+// (size, mtime) still matches HintSize/HintMTimeNs; any mismatch (or a
+// missing hint) falls back to a full re-hash via image.Inspect. This lets a
+// re-uploaded-but-unchanged image skip re-hashing a multi-hundred-MB file
+// inside the guest without ever trusting an unverified claim.
 type ImageRegisterArgs struct {
 	Path string `json:"path"`
+
+	HintSize    int64  `json:"hintSize,omitempty"`
+	HintMTimeNs int64  `json:"hintMtimeNs,omitempty"`
+	HintSHA256  string `json:"hintSha256,omitempty"`
+	HintArch    string `json:"hintArch,omitempty"`
+	HintClass   string `json:"hintClass,omitempty"`
 }
 
 // ImageRegisterResult is the image.register response payload.

@@ -8,7 +8,9 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // maxUploadBytes caps an accepted image upload at 4 GiB. IOL images are tens of
@@ -28,7 +30,16 @@ var safeImageName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // register the image: the GUI calls image.register over WS with the returned
 // path afterwards.
 //
-//	POST /api/upload/image?filename=<basename>
+// The optional mtime query param (Unix nanoseconds) lets a client pin the
+// written file's modification time to a value it controls — the Windows
+// launcher passes the SOURCE file's own mtime so a re-upload of an unchanged
+// image gets the identical (size, mtime) across guest boots, letting
+// image.register's cache-hint fast path (see server.inspectOrTrustHint) skip
+// re-hashing it. An invalid/missing mtime is ignored (file keeps the mtime
+// os.Rename gives it) — never a hard error, since uploads must keep working
+// for clients that don't send it.
+//
+//	POST /api/upload/image?filename=<basename>&mtime=<unix-nanoseconds>
 //	Content-Type: application/octet-stream, body = raw file bytes.
 //	200 {"path":"/abs/path"} on success; 4xx/5xx {"error":"..."} otherwise.
 func (b *Bridge) handleUploadImage(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +96,11 @@ func (b *Bridge) handleUploadImage(w http.ResponseWriter, r *http.Request) {
 		_ = os.Remove(partialPath)
 		writeUploadError(w, http.StatusInternalServerError, "finalize upload: "+err.Error())
 		return
+	}
+
+	if ns, err := strconv.ParseInt(r.URL.Query().Get("mtime"), 10, 64); err == nil && ns > 0 {
+		mt := time.Unix(0, ns)
+		_ = os.Chtimes(finalPath, mt, mt) // best-effort: a failure just costs a re-hash later
 	}
 
 	writeUploadJSON(w, http.StatusOK, map[string]string{"path": finalPath})

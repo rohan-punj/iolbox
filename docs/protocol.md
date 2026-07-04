@@ -64,7 +64,12 @@ error (`"runtime does not support nat/mgmt nodes"`).
 ### `image.register`
 Called after the provider has synced an image file into the runtime. Supervisor
 fingerprints + sniffs class/arch authoritatively.
-- args: `{ "path": "/opt/iolbox/images/<file>" }`
+- args: `{ "path": "/opt/iolbox/images/<file>", "hintSize"?, "hintMtimeNs"?, "hintSha256"?, "hintArch"?, "hintClass"? }`
+  — the `hint*` fields are optional and client-asserted (the Windows launcher
+  fills them in from a fingerprint it cached on a previous boot). They are only
+  trusted when a stat of `path` shows the file's current size and mtime still
+  match `hintSize`/`hintMtimeNs` exactly; any mismatch (or omitted hints) falls
+  back to a full re-hash. Lets an unchanged re-uploaded image skip re-hashing.
 - result: `{ "id","class","arch","sha256" }`
 
 ### `lab.load`

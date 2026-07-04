@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ---- Stubs ---------------------------------------------------------------
@@ -19,6 +20,9 @@ type stubControlClient struct {
 
 	registered     []string // guest paths passed to registerImage
 	registerErrFor map[string]error
+	hintsSeen      map[string]imageFingerprint // guest path -> hint it was called with
+	hintOKSeen     map[string]bool
+	resultFor      map[string]imageFingerprint // guest path -> fingerprint to return (default: derived)
 
 	savedLabs []string
 	saveErr   error
@@ -33,17 +37,44 @@ func newStubControlClient() *stubControlClient {
 		labs:           make(map[string]string),
 		registerErrFor: make(map[string]error),
 		getErrFor:      make(map[string]error),
+		hintsSeen:      make(map[string]imageFingerprint),
+		hintOKSeen:     make(map[string]bool),
+		resultFor:      make(map[string]imageFingerprint),
 	}
 }
 
-func (s *stubControlClient) registerImage(guestPath string) error {
+// registerImage simulates the supervisor: it "trusts" hintOK exactly like the
+// real inspectOrTrustHint would (returns the hint's fingerprint verbatim when
+// given one), so tests can prove syncImagesIn plumbs a hint through by
+// checking whether the result equals the hint. resultFor lets a test override
+// the return value to simulate the server rejecting a stale hint.
+func (s *stubControlClient) registerImage(guestPath string, hint imageFingerprint, hintOK bool) (imageFingerprint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.hintsSeen[guestPath] = hint
+	s.hintOKSeen[guestPath] = hintOK
 	if err, ok := s.registerErrFor[guestPath]; ok {
-		return err
+		return imageFingerprint{}, err
 	}
 	s.registered = append(s.registered, guestPath)
-	return nil
+	if r, ok := s.resultFor[guestPath]; ok {
+		return r, nil
+	}
+	if hintOK {
+		return hint, nil
+	}
+	return imageFingerprint{SHA256: fakeSha(guestPath), Arch: "x86_64", Class: "l3"}, nil
+}
+
+// fakeSha derives a deterministic 64-hex-char stand-in "hash" from guestPath,
+// just distinct enough per input for tests to assert on; not a real sha256.
+func fakeSha(guestPath string) string {
+	const hex = "0123456789abcdef"
+	b := make([]byte, 64)
+	for i := range b {
+		b[i] = hex[(int(guestPath[i%len(guestPath)])+i)%16]
+	}
+	return string(b)
 }
 
 func (s *stubControlClient) saveLab(doc string) (string, error) {
@@ -88,19 +119,21 @@ func (s *stubControlClient) getLab(id string) (string, error) {
 type stubUploader struct {
 	mu sync.Mutex
 
-	uploaded map[string][]byte // filename -> body bytes seen
-	failFor  map[string]error
-	pathFor  func(filename string) string
+	uploaded   map[string][]byte // filename -> body bytes seen
+	mtimesSeen map[string]int64  // filename -> mtimeNs it was called with
+	failFor    map[string]error
+	pathFor    func(filename string) string
 }
 
 func newStubUploader() *stubUploader {
 	return &stubUploader{
-		uploaded: make(map[string][]byte),
-		failFor:  make(map[string]error),
+		uploaded:   make(map[string][]byte),
+		mtimesSeen: make(map[string]int64),
+		failFor:    make(map[string]error),
 	}
 }
 
-func (u *stubUploader) upload(filename string, body io.Reader) (string, error) {
+func (u *stubUploader) upload(filename string, body io.Reader, mtimeNs int64) (string, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if err, ok := u.failFor[filename]; ok {
@@ -111,6 +144,7 @@ func (u *stubUploader) upload(filename string, body io.Reader) (string, error) {
 		return "", err
 	}
 	u.uploaded[filename] = data
+	u.mtimesSeen[filename] = mtimeNs
 	if u.pathFor != nil {
 		return u.pathFor(filename), nil
 	}
@@ -211,6 +245,107 @@ func TestSyncImagesIn_RegisterFailureIsNonFatal(t *testing.T) {
 	}
 	if len(cc.registered) != 1 || cc.registered[0] != "/opt/iolbox/images/b.bin" {
 		t.Errorf("registered = %v, want only b.bin's path", cc.registered)
+	}
+}
+
+// ---- image fingerprint cache (re-upload across simulated boots) ----------
+
+// TestSyncImagesIn_SecondBootReusesFingerprint simulates two launcher boots
+// against the SAME images\ folder: the first boot has no cache, so the
+// register call carries no hint; the second boot (unchanged source file, same
+// mtime — exactly what happens when snapshot=on wipes the guest disk but the
+// Windows-side file is untouched) must supply a hint whose fingerprint
+// matches what boot 1's register call returned. This is the crux of the
+// fix: proving the cache survives a fresh folderSync/uploader/controlClient
+// (a new "boot") and that hintOK is true the second time, i.e. the register
+// path can skip a real hash.
+func TestSyncImagesIn_SecondBootReusesFingerprint(t *testing.T) {
+	imagesDir := t.TempDir()
+	mustWriteFile(t, imagesDir, "router.bin", "same-bytes-both-boots")
+
+	// --- Boot 1: cold cache ---
+	cc1 := newStubControlClient()
+	up1 := newStubUploader()
+	fs1 := newFolderSync(imagesDir, t.TempDir(), cc1, up1)
+	if _, err := fs1.syncImagesIn(); err != nil {
+		t.Fatalf("boot1 syncImagesIn: %v", err)
+	}
+	guestPath := "/opt/iolbox/images/router.bin"
+	if cc1.hintOKSeen[guestPath] {
+		t.Fatalf("boot1: expected no hint on a cold cache, got one: %+v", cc1.hintsSeen[guestPath])
+	}
+	boot1Result := cc1.resultFor[guestPath]
+	if boot1Result == (imageFingerprint{}) {
+		// resultFor wasn't preset, so read back what registerImage computed via fakeSha.
+		boot1Result = imageFingerprint{SHA256: fakeSha(guestPath), Arch: "x86_64", Class: "l3"}
+	}
+
+	// The guest disk (including the guest's own registry) is now wiped — a
+	// fresh controlClient + uploader simulate a brand new boot. Only the
+	// Windows-side imagesDir (and its sidecar cache file) survives.
+	cc2 := newStubControlClient()
+	up2 := newStubUploader()
+	fs2 := newFolderSync(imagesDir, t.TempDir(), cc2, up2)
+	if _, err := fs2.syncImagesIn(); err != nil {
+		t.Fatalf("boot2 syncImagesIn: %v", err)
+	}
+
+	if !cc2.hintOKSeen[guestPath] {
+		t.Fatalf("boot2: expected a cache hint (unchanged file, same mtime), got none")
+	}
+	gotHint := cc2.hintsSeen[guestPath]
+	if gotHint.SHA256 != boot1Result.SHA256 || gotHint.Arch != boot1Result.Arch || gotHint.Class != boot1Result.Class {
+		t.Fatalf("boot2 hint = %+v, want boot1's fingerprint %+v", gotHint, boot1Result)
+	}
+
+	// Also assert the upload itself carried a stable mtime both times, since
+	// that's the mechanism that keeps (size, mtime) matching across boots.
+	fi, err := os.Stat(filepath.Join(imagesDir, "router.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fi.ModTime().UnixNano()
+	if up1.mtimesSeen["router.bin"] != want || up2.mtimesSeen["router.bin"] != want {
+		t.Fatalf("upload mtime not stable across boots: boot1=%d boot2=%d want=%d",
+			up1.mtimesSeen["router.bin"], up2.mtimesSeen["router.bin"], want)
+	}
+}
+
+// TestSyncImagesIn_ChangedFileGetsNoHint proves a changed source file misses
+// the cache: overwriting the image after boot 1 (which also changes its
+// mtime) must NOT produce a hint on boot 2, so the (simulated) guest always
+// re-hashes genuinely different content rather than trusting a stale
+// fingerprint.
+func TestSyncImagesIn_ChangedFileGetsNoHint(t *testing.T) {
+	imagesDir := t.TempDir()
+	mustWriteFile(t, imagesDir, "router.bin", "version-one")
+
+	cc1 := newStubControlClient()
+	up1 := newStubUploader()
+	fs1 := newFolderSync(imagesDir, t.TempDir(), cc1, up1)
+	if _, err := fs1.syncImagesIn(); err != nil {
+		t.Fatalf("boot1: %v", err)
+	}
+
+	// User replaces the image with different content. Force a distinct mtime
+	// (filesystem timestamp granularity could otherwise make two writes in
+	// the same test look identical).
+	mustWriteFile(t, imagesDir, "router.bin", "version-two-different-length")
+	newTime := time.Now().Add(1 * time.Hour)
+	if err := os.Chtimes(filepath.Join(imagesDir, "router.bin"), newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	cc2 := newStubControlClient()
+	up2 := newStubUploader()
+	fs2 := newFolderSync(imagesDir, t.TempDir(), cc2, up2)
+	if _, err := fs2.syncImagesIn(); err != nil {
+		t.Fatalf("boot2: %v", err)
+	}
+
+	guestPath := "/opt/iolbox/images/router.bin"
+	if cc2.hintOKSeen[guestPath] {
+		t.Fatalf("boot2: changed file must not produce a cache hint, got %+v", cc2.hintsSeen[guestPath])
 	}
 }
 
