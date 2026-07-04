@@ -160,6 +160,16 @@ sudo ./build-all.sh --supervisor-bin ../supervisor/bin/supervisor-linux-amd64
 # -> runtime/build/iolab-appliance.vmdk + iolab-appliance.vmx
 ```
 
+To rebuild the supervisor binary AND every packaging target (WSL, VMware,
+OVA, LXC, native, qemu-compat) in one command, use `build-all-targets.sh`
+instead — see `REDEPLOY.md` for the per-target redeploy steps once the
+artifacts are built:
+
+```sh
+cd runtime
+sudo ./build-all-targets.sh
+```
+
 Windows side, VMware provider: copy `iolab-appliance.vmx` + `.vmdk` into an
 empty directory, then:
 

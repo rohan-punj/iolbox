@@ -54,6 +54,10 @@ class LabStore {
   /** Supervisor feature flags from the hello handshake (e.g. "natgw","mgmt").
    *  Drives feature-gated palette entries. */
   features = $state<string[]>([]);
+  /** Supervisor build version from the hello handshake (git describe, baked in
+   *  via build-release.sh's -ldflags). Empty until connected; surfaced in the
+   *  Palette host-monitor footer so staleness is visible at a glance. */
+  supervisorVersion = $state<string>("");
   /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
    *  these to drive the traffic glow; entries older than ~5s are treated stale.
    *  `protos` (Network Watcher) is the optional per-protocol fps breakdown;
@@ -193,6 +197,7 @@ class LabStore {
     try {
       const hello = await this.client.connect();
       this.features = hello.features ?? [];
+      this.supervisorVersion = hello.supervisor ?? "";
       this.providerStatus = "connected";
       // Real supervisor: the runtime provider is whatever process spawned it,
       // not a Windows-side choice — leave activeProvider as Preflight (mock

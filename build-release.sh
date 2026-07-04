@@ -9,11 +9,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Capture the git describe BEFORE any subshell cd's around, so the version
+# always reflects the repo commit being built, not wherever go build runs from.
+VERSION="$(git describe --tags --always --dirty)"
+echo "==> stamping version: $VERSION"
+
 echo "==> building GUI bundle into supervisor/internal/web/dist"
 ( cd app && npm run build:embed >/dev/null )
 
 echo "==> cross-compiling linux/amd64 supervisor (GUI embedded)"
-( cd supervisor && GOOS=linux GOARCH=amd64 go build -o bin/supervisor-linux-amd64 ./cmd/supervisor )
+( cd supervisor && GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$VERSION" -o bin/supervisor-linux-amd64 ./cmd/supervisor )
 
 # Sanity: the deployed index.html must NOT be the placeholder.
 if grep -q "not bundled" supervisor/internal/web/dist/index.html; then

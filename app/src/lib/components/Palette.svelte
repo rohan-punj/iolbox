@@ -78,6 +78,9 @@
   const memPct = $derived(host ? pct(host.memUsed, host.memTotal) : 0);
   const diskPct = $derived(host ? pct(host.diskUsed, host.diskTotal) : 0);
   const cpuPct = $derived(host ? Math.min(100, Math.round(host.cpuPct)) : 0);
+  // Supervisor build (git describe, from the hello handshake) — makes it
+  // obvious at a glance whether a deployment is stale.
+  const supervisorVersion = $derived(labStore.supervisorVersion);
 </script>
 
 <div class="palette">
@@ -346,6 +349,11 @@
   {:else}
     <div class="host-idle">Waiting for host stats…</div>
   {/if}
+  {#if supervisorVersion}
+    <div class="host-build mono" title="Supervisor build (git describe) — check this against the repo when a fix seems missing">
+      build {supervisorVersion}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -410,6 +418,12 @@
     font-size: var(--fs-xs);
     color: var(--ink-3);
     padding: 6px 2px;
+  }
+  .host-build {
+    font-size: 10px;
+    color: var(--ink-3);
+    text-align: right;
+    padding: 0 2px;
   }
   .section-title {
     font-size: var(--fs-xs);

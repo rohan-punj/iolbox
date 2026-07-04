@@ -24,7 +24,9 @@ import (
 )
 
 // version is the supervisor build version reported in the hello handshake.
-const version = "0.1.0"
+// Overridden at build time via -ldflags "-X main.version=$(git describe ...)"
+// (see build-release.sh); "0.1.0" only shows up in an unstamped dev build.
+var version = "0.1.0"
 
 func main() {
 	controlAddr := flag.String("control-addr", "127.0.0.1:4000", "control API bind address (loopback only)")
