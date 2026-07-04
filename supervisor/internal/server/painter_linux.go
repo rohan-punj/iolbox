@@ -3,13 +3,12 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"net"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/consolescript"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
@@ -57,10 +56,15 @@ func (s *Server) runShow(ctx context.Context, ll *loadedLab, nodeID int, cmd str
 }
 
 // consoleSession is one scripted telnet exec session against a node console.
+// The connection-agnostic prompt-sync/exec-parsing logic (SyncPrompt/RunExec/
+// HasPromptSuffix/CleanShowOutput) lives in internal/consolescript (v0.3.0
+// Phase 0 extraction) so it can be shared with a future hub-based turn
+// (Phase 4); this type retains only the net.Conn + telnet.Negotiator plumbing
+// that's specific to today's dial-your-own-socket path.
 type consoleSession struct {
 	conn net.Conn
 	neg  *telnet.Negotiator
-	buf  bytes.Buffer // accumulated clean output not yet consumed by a wait
+	sess *consolescript.Session
 }
 
 // dialConsole opens a telnet session to the loopback console port and completes
@@ -71,7 +75,9 @@ func dialConsole(ctx context.Context, port int) (*consoleSession, error) {
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodeNotLoaded, "dial console :%d: %v", port, err)
 	}
-	return &consoleSession{conn: conn, neg: telnet.NewNegotiator()}, nil
+	s := &consoleSession{conn: conn, neg: telnet.NewNegotiator()}
+	s.sess = consolescript.New(s.write)
+	return s, nil
 }
 
 func (s *consoleSession) close() { _ = s.conn.Close() }
@@ -83,8 +89,9 @@ func (s *consoleSession) write(b []byte) error {
 }
 
 // readInto reads one chunk, feeds it through the telnet negotiator (answering
-// option requests), and appends the clean output to buf. Honors the ctx
-// deadline via a read deadline.
+// option requests), and appends the clean output to the session buffer.
+// Honors the ctx deadline via a read deadline. Satisfies
+// consolescript.ReadFunc.
 func (s *consoleSession) readInto(ctx context.Context) error {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = s.conn.SetReadDeadline(dl)
@@ -96,133 +103,13 @@ func (s *consoleSession) readInto(ctx context.Context) error {
 		if reply := s.neg.Reply(); len(reply) > 0 {
 			_ = s.write(reply)
 		}
-		s.buf.Write(clean)
+		s.sess.Feed(clean)
 	}
 	return err
-}
-
-// promptRe matches a trailing IOS exec/enable prompt at end of buffer:
-//
-//	R1>   (user exec)
-//	R1#   (privileged exec)
-//	R1(config)#  (config — we never want this; used to detect we overshot)
-//
-// We look for "<word>[>#]" with optional trailing whitespace at the very end.
-func hasPromptSuffix(s string) (prompt string, priv bool, ok bool) {
-	t := strings.TrimRight(s, " \t\r\n")
-	if t == "" {
-		return "", false, false
-	}
-	// Last line.
-	if i := strings.LastIndexByte(t, '\n'); i >= 0 {
-		t = t[i+1:]
-	}
-	t = strings.TrimSpace(t)
-	if t == "" {
-		return "", false, false
-	}
-	last := t[len(t)-1]
-	if last != '>' && last != '#' {
-		return "", false, false
-	}
-	// The prompt token must be a plausible hostname (letters/digits/-/./(/)).
-	for _, c := range t[:len(t)-1] {
-		if !(c == '-' || c == '.' || c == '(' || c == ')' || c == '_' ||
-			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
-			return "", false, false
-		}
-	}
-	return t, last == '#', true
-}
-
-// syncPrompt sends a bare newline and reads until an exec prompt appears,
-// returning whether we're in privileged (enable) mode. Bounded by ctx.
-func (s *consoleSession) syncPrompt(ctx context.Context) (priv bool, err error) {
-	if err := s.write([]byte("\r")); err != nil {
-		return false, err
-	}
-	for {
-		if _, p, ok := hasPromptSuffix(s.buf.String()); ok {
-			return p, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		if err := s.readInto(ctx); err != nil {
-			// A read timeout with no prompt yet is a real failure.
-			return false, err
-		}
-	}
 }
 
 // runShow performs the full scripted exec: sync prompt, ensure enable +
 // `terminal length 0`, run the command, and return the trimmed output.
 func (s *consoleSession) runShow(ctx context.Context, cmd string) (string, error) {
-	priv, err := s.syncPrompt(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !priv {
-		// Enter enable mode. Labs boot with no enable secret (injected default
-		// config), so `enable` drops straight to `#`; if a password is prompted we
-		// simply won't reach `#` and the sync below times out -> empty result.
-		if err := s.write([]byte("enable\r")); err != nil {
-			return "", err
-		}
-		if _, err := s.syncPrompt(ctx); err != nil {
-			return "", err
-		}
-	}
-	// Disable the pager so long output isn't broken by --More-- prompts.
-	s.buf.Reset()
-	if err := s.write([]byte("terminal length 0\r")); err != nil {
-		return "", err
-	}
-	if _, err := s.syncPrompt(ctx); err != nil {
-		return "", err
-	}
-
-	// Run the show command and capture until the prompt returns.
-	s.buf.Reset()
-	if err := s.write([]byte(cmd + "\r")); err != nil {
-		return "", err
-	}
-	for {
-		if _, _, ok := hasPromptSuffix(s.buf.String()); ok {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if err := s.readInto(ctx); err != nil {
-			return "", err
-		}
-	}
-	return cleanShowOutput(s.buf.String(), cmd), nil
-}
-
-// cleanShowOutput strips the echoed command line and the trailing prompt line
-// from a captured show session, returning just the command's output.
-func cleanShowOutput(raw, cmd string) string {
-	// Normalise CRLF.
-	raw = strings.ReplaceAll(raw, "\r\n", "\n")
-	raw = strings.ReplaceAll(raw, "\r", "\n")
-	lines := strings.Split(raw, "\n")
-
-	out := make([]string, 0, len(lines))
-	for _, ln := range lines {
-		trimmed := strings.TrimSpace(ln)
-		// Drop the echoed command line.
-		if trimmed == strings.TrimSpace(cmd) {
-			continue
-		}
-		// Drop a trailing prompt-only line.
-		if _, _, ok := hasPromptSuffix(ln); ok && !strings.ContainsAny(trimmed, " ") {
-			continue
-		}
-		out = append(out, ln)
-	}
-	// Trim leading/trailing blank lines.
-	joined := strings.Join(out, "\n")
-	return strings.Trim(joined, "\n")
+	return s.sess.RunExec(ctx, s.readInto, cmd)
 }
