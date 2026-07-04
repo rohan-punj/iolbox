@@ -18,6 +18,7 @@
   import { getEdgeParams } from "./floating";
   import { labStore } from "../labStore.svelte";
   import { watcherStore, LABELS } from "../watcherStore.svelte";
+  import { painterStore } from "../painterStore.svelte";
 
   let { id, source, target, selected, data }: EdgeProps = $props();
 
@@ -30,7 +31,7 @@
   // svelte-ignore state_referenced_locally
   const targetNode = useInternalNode(target);
 
-  type EndpointInfo = { name: string; iface: string; telnet?: number };
+  type EndpointInfo = { nodeId?: number; name: string; iface: string; telnet?: number };
   const info = $derived(
     (data as {
       linkId?: number;
@@ -80,6 +81,46 @@
   // R2.3 — hovering either chip glows the whole cable (same as hovering the
   // edge). `hot` mirrors the edge path's hover state to the chips and vice-versa.
   let hot = $state(false);
+
+  // WS5b — Topology Painter overlays. A snapshot (painterStore.result) drives
+  // per-endpoint STP badges (role/state) at the two link ends, red-dashed
+  // rendering for blocked links, and a routing best-path highlight/dim. All of
+  // this is gated on a snapshot being present; clearing it removes everything.
+  const stpSourceBadge = $derived.by(() => {
+    const src = info.source;
+    if (src?.nodeId === undefined) return null;
+    return painterStore.stpBadgeFor(src.nodeId, src.iface);
+  });
+  const stpTargetBadge = $derived.by(() => {
+    const tgt = info.target;
+    if (tgt?.nodeId === undefined) return null;
+    return painterStore.stpBadgeFor(tgt.nodeId, tgt.iface);
+  });
+  // A link renders BLOCKED (red dashed) when EITHER end's STP port is blocked.
+  const stpBlocked = $derived(
+    (stpSourceBadge?.blocked ?? false) || (stpTargetBadge?.blocked ?? false)
+  );
+  // The blocking reason to show in the popover (source end preferred).
+  const stpBlockReason = $derived(
+    stpSourceBadge?.blocked ? stpSourceBadge.reason
+      : stpTargetBadge?.blocked ? stpTargetBadge.reason
+      : undefined
+  );
+
+  // Routing best-path paint for THIS link, if any. When a routing snapshot is
+  // up, non-winning links dim; winning links glow + carry a metric label.
+  const routingPaint = $derived.by(() => {
+    const linkId = info.linkId;
+    if (linkId === undefined) return null;
+    return painterStore.routingPaintFor(linkId);
+  });
+  const routingActive = $derived(painterStore.isRouting);
+  const routingWinner = $derived(routingPaint !== null);
+  // Dim a link only while a routing paint is displayed and this link lost.
+  const routingDimmed = $derived(routingActive && !routingWinner);
+
+  // Blocked-port reason popover open state (clicking a blocked-port badge).
+  let reasonOpen = $state(false);
 
   // R2.x — PNetLab-style parallel-link fan-out. Each edge in a group of parallel
   // links (same unordered node pair) curves out symmetrically. The signed offset
@@ -226,8 +267,34 @@
       (selected ? " is-selected" : "") +
       (info.capture ? " is-capture" : "") +
       (glowing ? " is-traffic" : "") +
-      (hot ? " is-hot" : "")}
+      (hot ? " is-hot" : "") +
+      (routingWinner ? " is-bestpath" : "") +
+      (routingDimmed ? " is-dimmed" : "")}
   />
+
+  <!-- WS5b — STP blocked link: a red dashed overlay tracing this edge's own
+       curve. Rendered above the cable; non-interactive (the badge below owns
+       the click for the reason popover). -->
+  {#if stpBlocked}
+    <path class="stp-blocked" d={geom.path} />
+  {/if}
+
+  <!-- WS5b — routing best-path highlight: a bright accent underlay along the
+       winning edge, plus a direction arrow toward the next-hop endpoint. -->
+  {#if routingWinner}
+    <path class="bestpath-glow" d={geom.path} />
+    {#each [0, -0.9, -1.8] as begin (begin)}
+      <polygon class="bestpath-arrow" points="-1,-4.5 9,0 -1,4.5">
+        <animateMotion
+          dur="2.2s"
+          repeatCount="indefinite"
+          rotate="auto"
+          path={routingPaint?.toEndpoint === 0 ? geom.offsetPath(0, true) : geom.path}
+          begin={`${begin}s`}
+        />
+      </polygon>
+    {/each}
+  {/if}
   <!-- R2 — a wide invisible hover-catcher over THIS edge's own curve. Hovering
        it sets `hot`, which (a) glows this cable and (b) raises this edge's
        labels above sibling parallel edges (.slot-hot z-index). Because `hot`
@@ -288,6 +355,14 @@
       >
         <span class="chip-detail">{info.source.name}</span><span class="chip-sep">&nbsp;</span>{info.source.iface}
       </span>
+      {#if stpSourceBadge}
+        <button
+          class="stp-badge"
+          class:blocked={stpSourceBadge.blocked}
+          title={stpSourceBadge.blocked ? "Blocked port — click for why" : `${stpSourceBadge.role} · ${stpSourceBadge.state}`}
+          onclick={() => stpSourceBadge?.blocked && (reasonOpen = !reasonOpen)}
+        >{stpSourceBadge.role} {stpSourceBadge.state}</button>
+      {/if}
     </EdgeLabel>
   {/if}
 
@@ -303,6 +378,35 @@
       >
         <span class="chip-detail">{info.target.name}</span><span class="chip-sep">&nbsp;</span>{info.target.iface}
       </span>
+      {#if stpTargetBadge}
+        <button
+          class="stp-badge"
+          class:blocked={stpTargetBadge.blocked}
+          title={stpTargetBadge.blocked ? "Blocked port — click for why" : `${stpTargetBadge.role} · ${stpTargetBadge.state}`}
+          onclick={() => stpTargetBadge?.blocked && (reasonOpen = !reasonOpen)}
+        >{stpTargetBadge.role} {stpTargetBadge.state}</button>
+      {/if}
+    </EdgeLabel>
+  {/if}
+
+  <!-- WS5b — blocked-port reason popover, anchored at the link midpoint. Opens
+       when the user clicks a blocked STP badge; shows the parsed reason string
+       verbatim. Click the ✕ or the badge again to close. -->
+  {#if stpBlocked && reasonOpen && stpBlockReason}
+    <EdgeLabel x={geom.watcherChip.x} y={geom.watcherChip.y} class="stp-reason-slot">
+      <div class="stp-reason" role="dialog" aria-label="Blocked port reason">
+        <button class="stp-reason-close" aria-label="Close" onclick={() => (reasonOpen = false)}>✕</button>
+        <div class="stp-reason-title">Why is this port blocked?</div>
+        <div class="stp-reason-body">{stpBlockReason}</div>
+      </div>
+    </EdgeLabel>
+  {/if}
+
+  <!-- WS5b — routing best-path metric pill at the link midpoint (cost / FD /
+       AS-path), tinted to the best-path accent. -->
+  {#if routingWinner && routingPaint}
+    <EdgeLabel x={geom.watcherChip.x} y={geom.watcherChip.y} class="bestpath-pill-slot">
+      <span class="bestpath-pill">{routingPaint.label}</span>
     </EdgeLabel>
   {/if}
 
@@ -517,5 +621,146 @@
     .port-chip:hover {
       transform: scale(1.18);
     }
+  }
+
+  /* ── WS5b Topology Painter ─────────────────────────────────────────────── */
+
+  /* Blocked STP link: a red dashed overlay along the cable curve. */
+  .stp-blocked {
+    fill: none;
+    stroke: #e5484d;
+    stroke-width: 2.5;
+    stroke-dasharray: 7 6;
+    stroke-linecap: round;
+    pointer-events: none;
+    filter: drop-shadow(0 0 4px color-mix(in oklab, #e5484d 55%, transparent));
+  }
+
+  /* Routing best-path: a bright accent underlay + moving direction arrows. */
+  :global(.svelte-flow__edge .floating-edge.is-bestpath) {
+    stroke: var(--accent);
+    stroke-width: 3;
+  }
+  /* Losing links dim while a routing snapshot is displayed. */
+  :global(.svelte-flow__edge .floating-edge.is-dimmed) {
+    stroke: var(--cable);
+    opacity: 0.28;
+  }
+  .bestpath-glow {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 9;
+    stroke-linecap: round;
+    opacity: 0.22;
+    pointer-events: none;
+    filter: blur(2px);
+  }
+  .bestpath-arrow {
+    fill: var(--accent);
+    pointer-events: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bestpath-arrow {
+      display: none;
+    }
+  }
+
+  /* STP per-port badge: a compact role+state chip stacked under the port chip.
+     Blocked ports go red and are clickable (open the reason popover). */
+  .stp-badge {
+    all: unset;
+    box-sizing: border-box;
+    display: block;
+    margin-top: 2px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-align: center;
+    color: var(--ink);
+    background: color-mix(in oklab, var(--accent) 22%, var(--ground));
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 2px 4px;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .stp-badge.blocked {
+    color: #fff;
+    background: color-mix(in oklab, #e5484d 82%, var(--ground));
+    border-color: #e5484d;
+    cursor: pointer;
+  }
+  .stp-badge.blocked:hover {
+    background: #e5484d;
+  }
+
+  /* Blocked-port reason popover. */
+  :global(.svelte-flow__edge-label.stp-reason-slot) {
+    background: transparent;
+    padding: 0;
+    overflow: visible;
+    z-index: 50 !important;
+  }
+  .stp-reason {
+    position: relative;
+    width: 240px;
+    background: var(--tooltip-bg, var(--bg-2));
+    border: 1px solid #e5484d;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    padding: 10px 12px;
+    text-align: left;
+  }
+  .stp-reason-close {
+    all: unset;
+    box-sizing: border-box;
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    cursor: pointer;
+    color: var(--ink-3);
+    font-size: 11px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+  }
+  .stp-reason-close:hover {
+    color: var(--ink);
+    background: var(--bg-hover);
+  }
+  .stp-reason-title {
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    color: #e5484d;
+    margin-bottom: 4px;
+    padding-right: 16px;
+  }
+  .stp-reason-body {
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+    color: var(--ink);
+  }
+
+  /* Routing metric pill (cost / FD / AS-path). */
+  :global(.svelte-flow__edge-label.bestpath-pill-slot) {
+    background: transparent;
+    padding: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .bestpath-pill {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: 3px 7px;
+    white-space: nowrap;
+    background: color-mix(in oklab, var(--ground) 88%, transparent);
   }
 </style>

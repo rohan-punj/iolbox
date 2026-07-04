@@ -4,6 +4,7 @@
   import { iconSvg } from "../icons.svelte";
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
   import { watcherStore } from "../watcherStore.svelte";
+  import { painterStore } from "../painterStore.svelte";
 
   function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat", imageId?: string) {
     if (!e.dataTransfer) return;
@@ -174,6 +175,16 @@
       <circle cx="12" cy="12" r="3" />
     </svg>
     <span>Network watcher</span>
+  </button>
+  <button
+    class="action-row"
+    title="Topology Painter — snapshot live STP/OSPF/EIGRP/BGP decisions from the running nodes and paint them onto the links (root bridge, blocked ports, best-path)"
+    onclick={() => painterStore.togglePanel()}
+  >
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M18.37 2.63 14 7l-1.5-1.5a1.4 1.4 0 0 0-2 0l-1 1a1.4 1.4 0 0 0 0 2L11 10l-7 7v3h3l7-7 1.5 1.5a1.4 1.4 0 0 0 2 0l1-1a1.4 1.4 0 0 0 0-2L17 10l4.37-4.37a1.87 1.87 0 0 0-2.64-2.64Z" />
+    </svg>
+    <span>Topology painter</span>
   </button>
 
   <div class="section-title">Nodes</div>

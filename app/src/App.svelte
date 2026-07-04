@@ -12,6 +12,7 @@
   import LabBrowser from "./lib/components/LabBrowser.svelte";
   import SplitPane from "./lib/components/SplitPane.svelte";
   import WatcherPanel from "./lib/components/WatcherPanel.svelte";
+  import PainterPanel from "./lib/components/PainterPanel.svelte";
 
   let paletteWidth = $state(220);
   let inspectorWidth = $state(300);
@@ -66,6 +67,9 @@
              (under the top bar). Rendered inside canvas-area so it never
              overlaps the inspector/console panes. -->
         <WatcherPanel />
+        <!-- Topology Painter — sibling floating card. When the watcher card is
+             also open it stacks below it (offset) so both stay usable. -->
+        <PainterPanel />
       </div>
       {#if showConsole && !dockRight}
         <SplitPane

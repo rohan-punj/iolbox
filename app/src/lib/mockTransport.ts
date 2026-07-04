@@ -365,6 +365,14 @@ export class MockTransport implements Transport {
         return;
       }
 
+      case "painter.collect": {
+        const proto = String(args?.proto ?? "stp") as
+          | "stp" | "ospf" | "eigrp" | "bgp";
+        const dest = typeof args?.dest === "string" ? args.dest : "";
+        this.ok(id, this.mockPainter(proto, dest));
+        return;
+      }
+
       case "config.save":
       case "config.extract": {
         const ids: number[] = args?.nodes ?? [...this.nodes.keys()];
@@ -425,6 +433,144 @@ export class MockTransport implements Transport {
       default:
         this.err(id, "unsupported", `unknown op ${op}`);
     }
+  }
+
+  /** Dev-only synthetic painter.collect snapshot so the Topology Painter panel
+   *  + overlays are exercisable with no backend. Keyed off whatever lab is
+   *  loaded: only RUNNING IOL nodes get data; everything else returns a
+   *  running:false hint (never faked), matching the real contract. The
+   *  interface names use the painter's `Et0/0` form (interfaceNorm `et0/0`) so
+   *  the frontend canonicalizer is genuinely exercised against the lab doc's
+   *  short `e0/0` endpoints. */
+  private mockPainter(
+    proto: "stp" | "ospf" | "eigrp" | "bgp",
+    dest: string
+  ): unknown {
+    const iolIds = (this.lab?.nodes ?? [])
+      .filter((n) => n.kind === "iol")
+      .map((n) => n.id);
+    // Painter-style names from the lab doc's short endpoint names on THIS node.
+    const portsOf = (nodeId: number): { iface: string; norm: string }[] => {
+      const seen = new Set<string>();
+      const out: { iface: string; norm: string }[] = [];
+      for (const l of this.lab?.links ?? []) {
+        for (const e of l.endpoints) {
+          if (e.node !== nodeId) continue;
+          if (seen.has(e.interface)) continue;
+          seen.add(e.interface);
+          // e0/0 -> Et0/0 / et0/0 (only ethernet ports carry STP/OSPF here).
+          const mm = e.interface.match(/^e(\d+\/\d+)$/i);
+          if (!mm) continue;
+          out.push({ iface: `Et${mm[1]}`, norm: `et${mm[1]}` });
+        }
+      }
+      return out;
+    };
+    const running = (nodeId: number) => this.nodes.get(nodeId)?.state === "running";
+
+    const nodes = iolIds.map((nid, i) => {
+      if (!running(nid)) {
+        return { node: nid, running: false, hint: "start the lab — node is not running" };
+      }
+      const ports = portsOf(nid);
+      const base: Record<string, unknown> = { node: nid, running: true, hint: "" };
+      if (proto === "stp") {
+        const isRoot = i === 0; // lowest-index IOL node plays the root bridge.
+        const rootId = `32768.aabb.cc00.0100`;
+        base.stp = {
+          rootId,
+          bridgeId: isRoot ? rootId : `${32768 + nid}.aabb.cc00.0${nid}00`,
+          isRoot,
+          rootCost: isRoot ? 0 : 100,
+          rootPort: isRoot || ports.length === 0 ? "" : ports[0].iface,
+          ports: ports.map((p, pi) => {
+            // First port toward root = Root/FWD; a redundant 2nd port blocks.
+            const blocked = !isRoot && pi === 1;
+            const role = isRoot ? "Desg" : pi === 0 ? "Root" : blocked ? "Altn" : "Desg";
+            return {
+              interface: p.iface,
+              interfaceNorm: p.norm,
+              role,
+              state: blocked ? "BLK" : "FWD",
+              cost: 100,
+              prio: 128,
+              blocked,
+              ...(blocked
+                ? {
+                    reason:
+                      "Alternate port: a superior BPDU was received on the root " +
+                      "port, so the root is already reachable at lower cost. This " +
+                      "redundant port is blocked to break the loop.",
+                  }
+                : {}),
+            };
+          }),
+        };
+      } else if (proto === "ospf") {
+        // Neighbour on each ethernet port; a route toward dest via the first.
+        base.ospf = {
+          neighbors: ports.map((p, pi) => ({
+            neighborId: `10.0.0.${nid + 1}`,
+            state: "FULL",
+            role: pi === 0 && i === 0 ? "DR" : "DROTHER",
+            address: `10.${nid}.${pi}.2`,
+            interface: p.iface,
+            interfaceNorm: p.norm,
+          })),
+          ...(dest && ports.length && i !== 0
+            ? {
+                route: {
+                  prefix: dest,
+                  // Point at the lower-index node's advertised address so the
+                  // best-path resolver lights the edge toward it.
+                  nextHop: `10.${nid - 1}.0.2`,
+                  interface: ports[0].iface,
+                  interfaceNorm: ports[0].norm,
+                  cost: 10 * (i + 1),
+                },
+              }
+            : {}),
+        };
+      } else if (proto === "eigrp") {
+        base.eigrp = {
+          prefix: dest || "0.0.0.0/0",
+          fd: 3072 * (i + 1),
+          nextHop: i === 0 ? "" : `10.${nid - 1}.0.2`,
+          paths: ports.map((p, pi) => ({
+            nextHop: `10.${nid}.${pi}.2`,
+            interface: p.iface,
+            interfaceNorm: p.norm,
+            fd: 3072 * (i + 1),
+            rd: 2816 * (i + 1),
+            successor: pi === 0,
+            feasibleSuccessor: pi === 1,
+          })),
+        };
+      } else {
+        base.bgp = {
+          prefix: dest || "0.0.0.0/0",
+          bestNextHop: i === 0 ? "" : `10.${nid - 1}.0.2`,
+          reason:
+            i === 0
+              ? "Locally originated / best."
+              : "Best path: highest local-preference (150) beats the alternate (100).",
+          paths: [
+            {
+              nextHop: `10.${nid - 1}.0.2`,
+              asPath: `6500${nid}`,
+              origin: "i",
+              weight: 0,
+              localPref: 150,
+              med: 0,
+              best: true,
+            },
+          ],
+        };
+      }
+      return base;
+    });
+
+    return { proto, dest, nodes };
   }
 
   private statsTimer: ReturnType<typeof setInterval> | null = null;

@@ -16,6 +16,7 @@ import type {
   SupervisorEvent,
 } from "./protocol";
 import type { LabDocument, LabLink, LabNode } from "./labTypes";
+import type { PainterProto, PainterResult } from "./painterTypes";
 import { labToYaml, labFromText } from "./yaml";
 import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
@@ -216,6 +217,19 @@ export class SupervisorClient {
 
   configExtract(labId: string, nodes: number[] | null = null) {
     return this.call<ConfigResult>("config.extract", { labId, nodes });
+  }
+
+  /** Topology Painter (WS5): one-shot live scrape + parse of a protocol's
+   *  decision state across the running IOL nodes. `dest` is a prefix/host
+   *  STRING (required for eigrp/bgp, optional for ospf, ignored for stp);
+   *  `nodes` defaults to all running IOL nodes when omitted. */
+  painterCollect(
+    labId: string,
+    proto: PainterProto,
+    dest?: string,
+    nodes?: number[]
+  ) {
+    return this.call<PainterResult>("painter.collect", { labId, proto, dest, nodes });
   }
 
   status() {

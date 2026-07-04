@@ -4,11 +4,14 @@
   import { stateLabel } from "../nodeVisuals";
   import { iconSvg, defaultIconFor, iconRegistryVersion, isArtworkIcon, uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
+  import { painterStore } from "../painterStore.svelte";
   import NodeActions from "./NodeActions.svelte";
 
   let { id, data, selected }: NodeProps = $props();
 
   const nodeId = $derived(Number(id));
+  // WS5b — crown this node when an STP snapshot marks it the root bridge.
+  const isStpRoot = $derived(painterStore.stpRootNodeIds.includes(nodeId));
   const state = $derived(labStore.nodeStates[nodeId] ?? "stopped");
   // WS1: per-node action lock drives a progress overlay on the face.
   const isLocked = $derived(labStore.nodeLocks[nodeId] != null);
@@ -56,6 +59,9 @@
 
   <div class="face">
     <NodeActions {nodeId} {state} />
+    {#if isStpRoot}
+      <span class="stp-crown" title="STP root bridge" aria-label="STP root bridge">👑</span>
+    {/if}
     {#if isLocked}
       <span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>
     {/if}
@@ -169,6 +175,17 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  /* WS5b — STP root-bridge crown, pinned to the top-right of the face. */
+  .stp-crown {
+    position: absolute;
+    top: -10px;
+    right: -6px;
+    font-size: 16px;
+    line-height: 1;
+    z-index: 6;
+    pointer-events: none;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
   }
   .glyph :global(svg) {
     width: 30px;

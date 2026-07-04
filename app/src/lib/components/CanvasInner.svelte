@@ -144,6 +144,7 @@
     const node = labStore.lab.nodes.find((n) => n.id === nodeId);
     const running = labStore.nodeStates[nodeId] === "running";
     return {
+      nodeId,
       name: node?.name ?? `#${nodeId}`,
       iface,
       telnet: running ? labStore.consolePorts[nodeId] : undefined,
