@@ -28,44 +28,13 @@ func (c cmd) String() string {
 	return out
 }
 
-// natSetupCmds returns the ordered privileged commands to bring up a nat node's
-// tap: create the tap owned by us, address it as the gateway, bring it up,
-// enable IPv4 forwarding, and install the MASQUERADE + FORWARD-accept rules for
-// the pool out the VM's default-route interface. iface is the tap device name.
-func natSetupCmds(iface string, sub Subnet, defaultIface, owner string) []cmd {
-	return []cmd{
-		{[]string{"ip", "tuntap", "add", "dev", iface, "mode", "tap", "user", owner}},
-		{[]string{"ip", "addr", "add", sub.CIDR(), "dev", iface}},
-		{[]string{"ip", "link", "set", iface, "up"}},
-		{[]string{"sysctl", "-w", "net.ipv4.ip_forward=1"}},
-		{maskCmd(sub, defaultIface)},
-		{fwdOutCmd(sub, iface, defaultIface)},
-		{fwdInCmd(sub, iface, defaultIface)},
-	}
-}
-
-// natTeardownCmds reverses natSetupCmds: remove the iptables rules by exact -D
-// spec first (while the interfaces they name still exist), then delete the tap.
-// sysctl ip_forward is intentionally NOT reverted — other labs/nat nodes may
-// depend on it, and it is a harmless global once on.
-func natTeardownCmds(iface string, sub Subnet, defaultIface string) []cmd {
-	return []cmd{
-		{delRule(maskCmd(sub, defaultIface))},
-		{delRule(fwdOutCmd(sub, iface, defaultIface))},
-		{delRule(fwdInCmd(sub, iface, defaultIface))},
-		{[]string{"ip", "tuntap", "del", "dev", iface, "mode", "tap"}},
-	}
-}
-
-// --- bridge-fabric mode (P2) ---
-//
-// In bridge mode the nat tap is an L2 member of the link's Linux bridge
-// (br-<linkid>) and the gateway address + NAT live on the BRIDGE interface, not
-// the tap: a lab node reaches the gateway at L2 over the bridge, the kernel
-// answers ARP + routes + MASQUERADEs, and the userspace DHCP server reads/writes
-// the tap fd (it sees the broadcast DISCOVER/REQUEST the bridge floods). The tap
-// is created at Start (unbridged); attach/detach happen when the link is drawn/
-// removed, so a link drawn to a running nat hot-connects with no restart.
+// The nat tap is an L2 member of the link's Linux bridge (br-<linkid>) and the
+// gateway address + NAT live on the BRIDGE interface, not the tap: a lab node
+// reaches the gateway at L2 over the bridge, the kernel answers ARP + routes +
+// MASQUERADEs, and the userspace DHCP server reads/writes the tap fd (it sees the
+// broadcast DISCOVER/REQUEST the bridge floods). The tap is created at Start
+// (unbridged); attach/detach happen when the link is drawn/removed, so a link
+// drawn to a running nat hot-connects with no restart.
 
 // natBridgeTapCmds creates the nat tap owned by us and brings it up, but does NOT
 // address it or attach it to a bridge (that is natBridgeAttachCmds, run when the

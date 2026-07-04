@@ -21,10 +21,9 @@ import (
 // (persistent, owned by this uid, unbridged) and starts a netio<->tap iouyap for
 // it, so the pseudo-instance's /tmp/netio<uid>/<pseudo> socket exists when IOL
 // connects to it per its static NETMAP line. It then (re)attaches each fabric
-// IOL<->IOL link's two taps to their br-<linkid> bridge. Idempotent across
-// restarts and mid-session link.add: EnsureTap/EnsureBridge tolerate existing
-// objects, and an already-running tap bridge is left as-is. Called by
-// prepareLabDir after startBridges.
+// link's member taps to their br-<linkid> bridge. Idempotent across restarts
+// and mid-session link.add: EnsureTap/EnsureBridge tolerate existing objects,
+// and an already-running tap bridge is left as-is. Called by prepareLabDir.
 func (s *Server) startFabric(ll *loadedLab) error {
 	mgr := fabric.NewManager()
 	ctx := context.Background()

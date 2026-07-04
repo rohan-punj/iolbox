@@ -31,19 +31,14 @@ type Endpoint struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 
-	// mu guards cfg, udpConn, sendTo and the pump generation (pumpStop/pumpWG),
-	// so Rebind can swap the relay socket + restart the pumps while Close or a
-	// concurrent Rebind is possible. The tap fd, dhcp server, subnet and iptables
-	// rules are NOT touched by Rebind — only the UDP relay binding is.
+	// mu guards cfg, brName and the DHCP pump generation (pumpStop/pumpWG).
 	mu       sync.Mutex
 	cfg      Config
-	udpConn  *net.UDPConn // bound on ListenPort; sends to SendPort (legacy mode)
-	sendTo   *net.UDPAddr
-	pumpStop chan struct{}  // closed to stop the current pump generation
-	pumpWG   sync.WaitGroup // the current generation's pumps
+	pumpStop chan struct{}  // closed to stop the current DHCP pump generation
+	pumpWG   sync.WaitGroup // the current generation's pump
 
-	// brName is the link bridge this nat tap is currently attached to (bridge
-	// mode only; "" until AttachBridge). Guarded by mu.
+	// brName is the link bridge this nat tap is currently attached to ("" until
+	// AttachBridge). Guarded by mu.
 	brName string
 }
 
@@ -107,9 +102,10 @@ func runCmdsBestEffort(cmds []cmd) error {
 }
 
 // Start brings up the endpoint: runs the privileged setup commands, opens the
-// tap fd, binds the UDP relay socket, and launches the frame pumps (+ DHCP for
-// nat). On any failure it reverses whatever it already did. The returned
-// Endpoint owns an fd + goroutines and must be Closed to tear everything down.
+// tap fd (created unbridged — AttachBridge joins it to a link bridge later), and
+// launches the userspace DHCP server on the tap. On any failure it reverses
+// whatever it already did. The returned Endpoint owns an fd + goroutine and must
+// be Closed to tear everything down.
 func Start(cfg Config) (*Endpoint, error) {
 	dev, err := devName(cfg.Kind, cfg.NodeID)
 	if err != nil {
@@ -151,65 +147,27 @@ func Start(cfg Config) (*Endpoint, error) {
 	switch cfg.Kind {
 	case KindNAT:
 		sub := Subnet{Index: cfg.SubnetIndex}
-		if cfg.Bridged {
-			// Bridge mode (P2): create the tap unbridged, no gateway/NAT yet
-			// (AttachBridge does that when the link exists). The DHCP server runs
-			// on the tap fd; no relay socket, no UDP pumps.
-			if err := setupWithRetry(natBridgeTapCmds(dev, owner)); err != nil {
-				return nil, err
-			}
-			tap, oerr := openTap(dev)
-			if oerr != nil {
-				_ = runCmdsBestEffort(natBridgeTapDelCmds(dev))
-				return nil, oerr
-			}
-			e.tap = tap
-			e.dhcp = newDHCPServer(net.ParseIP(sub.GatewayIP()), sub)
-			e.startDHCPPump()
-			return e, nil
-		}
-		if err := setupWithRetry(natSetupCmds(dev, sub, cfg.DefaultIface, owner)); err != nil {
+		// Create the tap unbridged, with no gateway/NAT yet (AttachBridge wires
+		// those onto the link bridge when the link exists). The DHCP server runs
+		// directly on the tap fd; there is no relay socket.
+		if err := setupWithRetry(natBridgeTapCmds(dev, owner)); err != nil {
 			return nil, err
 		}
 		tap, oerr := openTap(dev)
 		if oerr != nil {
-			_ = runCmdsBestEffort(natTeardownCmds(dev, sub, cfg.DefaultIface))
+			_ = runCmdsBestEffort(natBridgeTapDelCmds(dev))
 			return nil, oerr
 		}
 		e.tap = tap
 		e.dhcp = newDHCPServer(net.ParseIP(sub.GatewayIP()), sub)
+		e.startDHCPPump()
+		return e, nil
 	default:
 		return nil, fmt.Errorf("extnet: unknown kind %q", cfg.Kind)
 	}
-
-	if err := e.bindRelay(); err != nil {
-		e.teardownDevice()
-		return nil, err
-	}
-
-	// Frame pumps: tap->relay and relay->tap. A nat endpoint also intercepts
-	// DHCP traffic on the tap side (the DHCP server both consumes client
-	// requests and injects replies straight to the tap).
-	e.startPumps()
-	return e, nil
 }
 
-// startPumps launches the tap<->relay pump pair against the CURRENT relay
-// socket, recording the generation's stop channel + waitgroup so Rebind/Close
-// can cycle it. Each pump captures its (stop, conn) so a rebind's new pumps and
-// the old ones never share a socket. Caller holds no lock; startPumps takes mu.
-func (e *Endpoint) startPumps() {
-	e.mu.Lock()
-	stop := make(chan struct{})
-	e.pumpStop = stop
-	conn := e.udpConn
-	e.pumpWG.Add(2)
-	e.mu.Unlock()
-	go func() { defer e.pumpWG.Done(); e.pumpTapToRelay(stop, conn) }()
-	go func() { defer e.pumpWG.Done(); e.pumpRelayToTap(stop, conn) }()
-}
-
-// startDHCPPump launches the bridge-mode DHCP loop: a single goroutine that
+// startDHCPPump launches the DHCP loop: a single goroutine that
 // reads frames off the tap fd (the bridge floods broadcast DISCOVER/REQUEST to
 // it), answers DHCP from the userspace server, and drops everything else (real
 // IP traffic and ARP are handled by the kernel bridge + gateway on br). No relay
@@ -299,13 +257,12 @@ func (e *Endpoint) DetachBridge() {
 	_ = runCmdsBestEffort(natBridgeDetachCmds(e.dev, br, sub, e.cfg.DefaultIface))
 }
 
-// stopPumps signals the current pump generation and waits for both pumps to
-// exit. It nudges the tap + relay read deadlines so the blocked reads observe
-// the stop promptly instead of after a full 500ms poll.
+// stopPumps signals the current pump generation and waits for it to exit. It
+// nudges the tap read deadline so the blocked read observes the stop promptly
+// instead of after a full 500ms poll.
 func (e *Endpoint) stopPumps() {
 	e.mu.Lock()
 	stop := e.pumpStop
-	conn := e.udpConn
 	e.pumpStop = nil
 	e.mu.Unlock()
 	if stop == nil {
@@ -315,171 +272,7 @@ func (e *Endpoint) stopPumps() {
 	if e.tap != nil {
 		_ = e.tap.SetReadDeadline(time.Now().Add(-time.Second))
 	}
-	if conn != nil {
-		_ = conn.SetReadDeadline(time.Now().Add(-time.Second))
-	}
 	e.pumpWG.Wait()
-}
-
-// Rebind re-points the relay UDP socket to new ports WITHOUT disturbing the tap,
-// DHCP server, subnet, or iptables rules. It exists because a nat/mgmt node can
-// be started before its link exists (the GUI auto-starts a NAT the instant it is
-// dropped on the canvas, so the endpoint first binds an EPHEMERAL relay port);
-// when the link is later drawn, the relay is created on the plan's deterministic
-// port and the endpoint must move its socket to match or the two never meet
-// (the DHCP DISCOVER lands on a dead port and the node never gets a lease). Also
-// covers a link reshaped/removed+readded after the endpoint started. Idempotent:
-// a no-op when already bound to these ports. Safe against a concurrent Close.
-func (e *Endpoint) Rebind(sendPort, listenPort int) error {
-	if e.isClosed() {
-		return nil
-	}
-	e.mu.Lock()
-	same := e.udpConn != nil && e.cfg.SendPort == sendPort && e.cfg.ListenPort == listenPort
-	e.mu.Unlock()
-	if same {
-		return nil
-	}
-	e.stopPumps()
-	e.mu.Lock()
-	if e.udpConn != nil {
-		_ = e.udpConn.Close()
-		e.udpConn = nil
-	}
-	e.cfg.SendPort = sendPort
-	e.cfg.ListenPort = listenPort
-	e.mu.Unlock()
-	if err := e.bindRelay(); err != nil {
-		return err
-	}
-	e.startPumps()
-	return nil
-}
-
-// Ports reports the relay ports this endpoint is currently bound to (SendPort =
-// where it sends tap frames, ListenPort = where it receives). Used by the server
-// to decide whether a Rebind is needed after a plan rebuild.
-func (e *Endpoint) Ports() (sendPort, listenPort int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.cfg.SendPort, e.cfg.ListenPort
-}
-
-// bindRelay binds the UDP socket on ListenPort (frames the relay delivers) and
-// resolves the SendPort target (frames we send to the relay). Takes mu to
-// publish the new socket + target atomically for a concurrent Rebind/Close.
-func (e *Endpoint) bindRelay() error {
-	e.mu.Lock()
-	host := e.cfg.resolvedHost()
-	listenPort := e.cfg.ListenPort
-	sendPort := e.cfg.SendPort
-	e.mu.Unlock()
-
-	laddr := &net.UDPAddr{IP: net.ParseIP(host), Port: listenPort}
-	conn, err := net.ListenUDP("udp", laddr)
-	if err != nil {
-		return fmt.Errorf("extnet: bind relay udp %s: %w", laddr, err)
-	}
-
-	e.mu.Lock()
-	e.udpConn = conn
-	e.sendTo = &net.UDPAddr{IP: net.ParseIP(host), Port: sendPort}
-	e.mu.Unlock()
-	return nil
-}
-
-// pumpTapToRelay reads ethernet frames off the tap (the kernel/NAT side —
-// un-NAT'd return traffic and ARP replies for the gateway IP) and forwards them
-// to the relay so the connected lab node sees them. conn/stop are this pump
-// generation's socket + stop channel (a Rebind starts a fresh generation with a
-// new socket), so this loop never touches e.udpConn after a swap.
-func (e *Endpoint) pumpTapToRelay(stop chan struct{}, conn *net.UDPConn) {
-	buf := make([]byte, frameMax)
-	for {
-		select {
-		case <-stop:
-			return
-		case <-e.closed:
-			return
-		default:
-		}
-		_ = e.tap.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		n, err := e.tap.Read(buf)
-		if err != nil {
-			if os.IsTimeout(err) {
-				continue
-			}
-			return
-		}
-		if n == 0 {
-			continue
-		}
-		e.mu.Lock()
-		sendTo := e.sendTo
-		e.mu.Unlock()
-		if _, err := conn.WriteToUDP(buf[:n], sendTo); err != nil {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			if e.isClosed() {
-				return
-			}
-		}
-	}
-}
-
-// pumpRelayToTap reads frames the lab node sent over the relay. A nat endpoint
-// first offers each frame to its DHCP server: a DHCP request is answered back
-// over the relay (toward the lab node) and NOT delivered to the tap, since the
-// exchange is between the lab node and our userspace server, not the kernel.
-// Every other frame (real IP traffic, ARP for the gateway) is written into the
-// tap so the kernel routes/NATs or answers it.
-func (e *Endpoint) pumpRelayToTap(stop chan struct{}, conn *net.UDPConn) {
-	buf := make([]byte, frameMax)
-	for {
-		select {
-		case <-stop:
-			return
-		case <-e.closed:
-			return
-		default:
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		n, _, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				select {
-				case <-stop:
-					return
-				default:
-					continue
-				}
-			}
-			return
-		}
-		if n == 0 {
-			continue
-		}
-		frame := buf[:n]
-		if e.dhcp != nil {
-			if reply, consumed := e.dhcp.consume(frame); consumed {
-				if reply != nil {
-					e.mu.Lock()
-					sendTo := e.sendTo
-					e.mu.Unlock()
-					_, _ = conn.WriteToUDP(reply, sendTo)
-				}
-				continue // DHCP handled in userspace; never touches the kernel
-			}
-		}
-		if _, err := e.tap.Write(frame); err != nil {
-			if e.isClosed() {
-				return
-			}
-		}
-	}
 }
 
 func (e *Endpoint) isClosed() bool {
@@ -491,52 +284,28 @@ func (e *Endpoint) isClosed() bool {
 	}
 }
 
-// Close stops the pumps, closes the tap + relay socket, and runs the teardown
-// commands (delete the tap, remove iptables rules by exact -D). Idempotent.
+// Close stops the DHCP pump, closes the tap, and runs the teardown commands
+// (delete the tap, remove iptables rules by exact -D). Idempotent.
 func (e *Endpoint) Close() error {
 	e.closeOnce.Do(func() {
 		close(e.closed)
-		// Stop the current pump generation (also nudges the tap+relay deadlines).
+		// Stop the current pump generation (also nudges the tap deadline).
 		e.stopPumps()
 		if e.tap != nil {
 			_ = e.tap.Close()
-		}
-		e.mu.Lock()
-		conn := e.udpConn
-		e.udpConn = nil
-		e.mu.Unlock()
-		if conn != nil {
-			_ = conn.Close()
 		}
 		e.runTeardown()
 	})
 	return nil
 }
 
-// teardownDevice runs only the privileged teardown (used on a Start failure
-// after the device is up but before pumps started).
-func (e *Endpoint) teardownDevice() {
-	if e.tap != nil {
-		_ = e.tap.Close()
-	}
-	if e.udpConn != nil {
-		_ = e.udpConn.Close()
-	}
-	e.runTeardown()
-}
-
 func (e *Endpoint) runTeardown() {
 	switch e.cfg.Kind {
 	case KindNAT:
-		if e.cfg.Bridged {
-			// Remove any bridge wiring (gateway/NAT rules + nomaster) then delete
-			// the tap. The bridge device itself is fabric-owned.
-			e.DetachBridge()
-			_ = runCmdsBestEffort(natBridgeTapDelCmds(e.dev))
-			return
-		}
-		sub := Subnet{Index: e.cfg.SubnetIndex}
-		_ = runCmdsBestEffort(natTeardownCmds(e.dev, sub, e.cfg.DefaultIface))
+		// Remove any bridge wiring (gateway/NAT rules + nomaster) then delete the
+		// tap. The bridge device itself is fabric-owned.
+		e.DetachBridge()
+		_ = runCmdsBestEffort(natBridgeTapDelCmds(e.dev))
 	}
 }
 

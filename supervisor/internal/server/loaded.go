@@ -22,45 +22,25 @@ type loadedLab struct {
 	captures map[int]int          // linkID -> capturePort
 	runDir   string
 
-	// bridge is the whole-lab bridged-link wiring (pseudo-instances + iouyap +
-	// relay pairing). It is (re)computed by prepareLabDir before every spawn so
-	// the NETMAP and the iouyap bridges agree; nil until first prepared.
-	bridge *bridgePlan
-	// bridges holds the live iouyap bridges started for this lab, keyed by netio
-	// socket path, so they can be Closed on stop (Linux only). Guarded by mu.
-	bridges map[string]*labBridge
-
-	// staticTaps is the whole-lab STATIC-TAP FABRIC: every fabric-eligible IOL
-	// interface's stable {tap, pseudo-instance, netio path} identity, keyed by
-	// node id then canonical interface string. Recomputed deterministically from
-	// the node set + adapter counts alone (never the link set) on every
-	// rebuildBridgePlan, so it never changes while a lab runs — which is what lets
-	// a link drawn to a running IOL be realised as a pure tap-to-bridge attach
-	// with no NETMAP re-read / node restart. See fabric.go (computeStaticTaps).
+	// staticTaps is the whole-lab STATIC-TAP FABRIC: every IOL interface's stable
+	// {tap, pseudo-instance, netio path} identity, keyed by node id then canonical
+	// interface string. Recomputed deterministically from the node set + adapter
+	// counts alone (never the link set) on every refreshFabric, so it never
+	// changes while a lab runs — which is what lets a link drawn to a running IOL
+	// be realised as a pure tap-to-bridge attach with no NETMAP re-read / node
+	// restart. See fabric.go (computeStaticTaps).
 	staticTaps map[int]map[string]ifaceTap
 	// tapBridges holds the live netio<->tap iouyap bridges (one per static tap),
 	// keyed by netio socket path, so they can be Closed on stop (Linux only).
 	// Guarded by mu.
 	tapBridges map[string]*labBridge
 	// fabricLinks records which link ids currently have a Linux bridge created +
-	// their endpoint taps attached (P1 IOL<->IOL fabric links). Guarded by mu.
+	// their endpoint taps attached. Guarded by mu.
 	fabricLinks map[int]bool
 	// bcaps holds the live bridge captures (tcpdump -i br-<linkid> -> pcapng TCP
-	// server) for fabric links that have an active capture, keyed by link id.
-	// Legacy links still capture via the relay tee. Guarded by mu.
+	// server) for links that have an active capture, keyed by link id. Guarded by
+	// mu.
 	bcaps map[int]*bcap.Capture
-	// assigns is each bridged link's STICKY data-plane identity (relay UDP port
-	// pair per endpoint + pseudo-instance per IOL endpoint), keyed by link id.
-	// Once assigned, a link keeps these values across every plan rebuild for the
-	// lab's lifetime; only a link removed from the doc (or reshaped) releases
-	// them. Without stickiness, rebuilds re-allocated in link-id order, so ANY
-	// change to the link set (a mid-session link.remove, say) shifted every
-	// later link's ports/pseudos — silently desyncing long-running endpoints
-	// whose configs were frozen at start (VPCS argv, NAT/MGMT endpoint, IOL
-	// NETMAPs written at earlier boots, stale iouyap bridges). Observed as "R1
-	// stops getting DHCP offers after some topology edits". Accessed only from
-	// the dispatch path (like doc); not guarded by mu.
-	assigns map[int]*linkAssign
 }
 
 // nodeRuntime is the runtime state of a single node.
@@ -98,8 +78,6 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		nodes:    make(map[int]*nodeRuntime),
 		captures: make(map[int]int),
 		runDir:   runDir,
-		bridges:  make(map[string]*labBridge),
-		assigns:  make(map[int]*linkAssign),
 
 		staticTaps:  make(map[int]map[string]ifaceTap),
 		tapBridges:  make(map[string]*labBridge),

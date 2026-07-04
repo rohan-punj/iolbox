@@ -66,17 +66,14 @@ func TestStartNatUnsupported(t *testing.T) {
 	}
 }
 
-// TestExtnetLinkIsBridged confirms a link touching a nat node is bridged (never
-// native), like any non-IOL endpoint.
-func TestExtnetLinkIsBridged(t *testing.T) {
+// TestNatLinkIsFabric confirms a link touching a nat node is realised on the
+// static-tap fabric (nat is a fabric node kind).
+func TestNatLinkIsFabric(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
 		Nodes: []lab.Node{iolNode(0), natNode(1)}}
-	isIOL := isIOLMap(doc)
 	natLink := lab.Link{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{
 		{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}}
-	// A nat endpoint is bridged intrinsically; capture-ready off proves the
-	// reason is the non-IOL endpoint, not capture-ready mode.
-	if wiringFor(&natLink, isIOL, false) != wiringBridged {
-		t.Fatal("nat link must be bridged")
+	if !isFabricLink(&natLink, fabricNodes(doc)) {
+		t.Fatal("nat link must be a fabric link")
 	}
 }

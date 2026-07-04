@@ -15,49 +15,31 @@ import (
 // prepareLabDir creates the shared lab directory and writes the whole-lab
 // artifacts every co-located IOL instance reads from its cwd:
 //
-//   - NETMAP  — one file describing every native same-host IOL<->IOL link
-//     (bridged links are excluded; see nativeLinkSpecs / wiringFor).
+//   - NETMAP  — a static-tap line for every IOL interface (see netmapFor).
 //   - iourc   — the runtime's IOU license, so all instances share one license.
 //   - nvram_<id> — per-IOL-node NVRAM with the node's startupConfig injected, so
 //     nodes boot pre-configured and IOS-XE PnP never engages (P0 correction #3).
 //
 // It is idempotent and safe to call before every (re)start; it only (re)writes
 // the shared files, never touching a node's runtime state. Called by startNodes
-// on Linux before spawning any node.
+// on Linux before spawning any node (after refreshFabric).
 func (s *Server) prepareLabDir(ll *loadedLab) error {
 	dir := ll.labDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "lab dir %s: %v", dir, err)
 	}
 
-	// Whole-lab NETMAP: native IOL<->IOL lines PLUS bridged-endpoint lines that
-	// point each bridged IOL interface at its iouyap pseudo-instance (the plan is
-	// already built by startNodes -> rebuildBridgePlan).
+	// Whole-lab static-tap NETMAP (topology-independent; already computed by
+	// startNodes -> refreshFabric).
 	netmapPath := filepath.Join(dir, "NETMAP")
 	if err := os.WriteFile(netmapPath, []byte(s.netmapFor(ll)), 0o644); err != nil {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "write NETMAP: %v", err)
 	}
 
-	// Start one iouyap netio<->UDP bridge per bridged IOL endpoint BEFORE any IOL
-	// spawns, so each pseudo-instance's /tmp/netio<uid>/<pseudo> socket exists
-	// when IOL connects to it per its NETMAP line. Idempotent across restarts.
-	if err := s.startBridges(ll); err != nil {
-		return err
-	}
-
-	// Realise the static-tap fabric: pre-create every fabric-eligible IOL
-	// interface's tap + netio<->tap iouyap (so its socket exists before IOL
-	// connects), and attach each fabric IOL<->IOL link's taps to its bridge. Must
-	// run before any IOL spawns, like startBridges.
+	// Realise the static-tap fabric: pre-create every IOL interface's tap +
+	// netio<->tap iouyap (so its socket exists before IOL connects), and attach
+	// each fabric link's member taps to its bridge. Must run before any IOL spawns.
 	if err := s.startFabric(ll); err != nil {
-		return err
-	}
-
-	// And the UDP relay for every bridged link, so those links carry traffic
-	// from the moment the nodes boot (capture.start only ADDS a tee to an
-	// already-running relay's config via restart; it must not be what brings
-	// the link up in the first place).
-	if err := s.startLinkRelays(ll); err != nil {
 		return err
 	}
 

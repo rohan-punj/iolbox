@@ -63,58 +63,19 @@ type ifaceTap struct {
 	netioPath string       // netioPathFor(uid, pseudo)
 }
 
-// ifaceKey identifies one node interface by (node id, canonical interface name).
-type ifaceKey struct {
-	node  int
-	iface string
-}
-
-// legacyBridgedIfaces returns the set of IOL interfaces that are endpoints of a
-// LEGACY bridged link (VPCS/NAT/segment/capture) and therefore must NOT get a
-// static tap — their NETMAP line points at the legacy iouyap-UDP pseudo-instance
-// instead, and a static tap would double-wire the port. Interface names are
-// normalised to netmap's canonical "e0/0" form so they match computeStaticTaps.
-func legacyBridgedIfaces(doc *lab.Lab, isIOL map[int]bool, captureReady bool) map[ifaceKey]bool {
-	fabricOK := fabricNodes(doc)
-	out := make(map[ifaceKey]bool)
-	for i := range doc.Links {
-		l := &doc.Links[i]
-		if isFabricLink(l, fabricOK) {
-			continue
-		}
-		if wiringFor(l, isIOL, captureReady) != wiringBridged {
-			continue // native (legacy) links carry no bridged pseudo either
-		}
-		for _, ep := range l.Endpoints {
-			if !isIOL[ep.Node] {
-				continue
-			}
-			ifc, err := netmap.ParseIface(ep.Interface)
-			if err != nil {
-				continue
-			}
-			out[ifaceKey{ep.Node, ifc.String()}] = true
-		}
-	}
-	return out
-}
-
 // computeStaticTaps builds the whole-lab static-tap fabric identities for every
-// fabric-eligible IOL interface. It is DETERMINISTIC (nodes in id order,
-// interfaces in enumeration order) and depends only on the node set + adapter
-// counts + which interfaces are on legacy links — never on the fabric link set —
-// so the identity of a given interface is stable across rebuilds.
+// IOL interface. It is DETERMINISTIC (nodes in id order, interfaces in
+// enumeration order) and depends only on the node set + adapter counts — never
+// on the link set — so the identity of a given interface is stable across
+// rebuilds, which is what lets a link drawn to a running IOL be a pure
+// tap-to-bridge attach with no NETMAP re-read / node restart.
 //
-// P1 enumerates ETHERNET interfaces only (the IOL<->IOL L2 path the spike
+// It enumerates ETHERNET interfaces only (the IOL<->IOL L2 path the spike
 // proved); serial-interface taps are a later refinement. Pseudo-instances are
 // drawn from netmap's reserved pool, skipping real instance ids; if the pool is
 // exhausted the remaining interfaces are left unwired (bounded only in
 // pathologically large labs).
 func computeStaticTaps(doc *lab.Lab, uid int) map[int]map[string]ifaceTap {
-	isIOL := isIOLMap(doc)
-	captureReady := doc.CaptureReadyEnabled()
-	legacy := legacyBridgedIfaces(doc, isIOL, captureReady)
-
 	nodes := make([]lab.Node, len(doc.Nodes))
 	copy(nodes, doc.Nodes)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
@@ -143,9 +104,6 @@ func computeStaticTaps(doc *lab.Lab, uid int) map[int]map[string]ifaceTap {
 		eth := intOr(n.Ethernet, 1)
 		for _, ifc := range netmap.IfacesForCounts(eth, 0) {
 			key := ifc.String()
-			if legacy[ifaceKey{n.ID, key}] {
-				continue // on a legacy link -> old iouyap-UDP path, no static tap
-			}
 			name, err := fabric.TapName(inst, ifc.Index())
 			if err != nil {
 				continue // name too long (pathological instance/port); skip

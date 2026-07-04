@@ -39,52 +39,6 @@ func TestParseIfaceErrors(t *testing.T) {
 	}
 }
 
-func TestBuildNETMAP(t *testing.T) {
-	// Node 0 e0/0 <-> node 1 e0/0 (index 0 both) as p2p.
-	// A segment link and a vpcs endpoint must NOT produce NETMAP lines.
-	links := []LinkSpec{
-		{P2P: true, Endpoints: []EndpointSpec{
-			{NodeID: 0, Interface: "e0/0", IsIOL: true},
-			{NodeID: 1, Interface: "e0/0", IsIOL: true},
-		}},
-		{P2P: true, Endpoints: []EndpointSpec{
-			{NodeID: 1, Interface: "s1/2", IsIOL: true}, // index 18
-			{NodeID: 2, Interface: "s1/3", IsIOL: true}, // index 19
-		}},
-		{P2P: false, Endpoints: []EndpointSpec{ // segment => no line
-			{NodeID: 0, Interface: "e0/1", IsIOL: true},
-			{NodeID: 1, Interface: "e0/1", IsIOL: true},
-		}},
-		{P2P: true, Endpoints: []EndpointSpec{ // vpcs side => not a pair
-			{NodeID: 0, Interface: "e0/2", IsIOL: true},
-			{NodeID: 3, Interface: "eth0", IsIOL: false},
-		}},
-	}
-	got := Build(links)
-	// The NETMAP node id is the IOL *instance* id = nodeID+1 (IOL rejects 0), and
-	// the interface token is IOL's adapter/port form: e0/0 -> 0/0, s1/2 -> 1/2.
-	// So lab nodes 0,1 -> instances 1,2 and nodes 1,2 -> instances 2,3.
-	want := "1:0/0 2:0/0\n2:1/2 3:1/3\n"
-	if got != want {
-		t.Fatalf("NETMAP mismatch:\n got %q\nwant %q", got, want)
-	}
-}
-
-// TestBuildMatchesP0Format pins the exact NETMAP line format the P0 manual test
-// used to carry traffic between two real IOL 17.18.02 instances. Lab node ids
-// 0 and 1 map to IOL instances 1 and 2, producing "1:0/0 2:0/0".
-func TestBuildMatchesP0Format(t *testing.T) {
-	links := []LinkSpec{
-		{P2P: true, Endpoints: []EndpointSpec{
-			{NodeID: 0, Interface: "e0/0", IsIOL: true},
-			{NodeID: 1, Interface: "e0/0", IsIOL: true},
-		}},
-	}
-	if got := Build(links); got != "1:0/0 2:0/0\n" {
-		t.Fatalf("P0 NETMAP format mismatch: got %q want %q", got, "1:0/0 2:0/0\n")
-	}
-}
-
 // TestAllocPseudoInstances checks the reserved pseudo-instance pool: ids start
 // at PseudoInstanceBase, are handed out ascending, and never collide with a real
 // instance id already in use.
@@ -117,23 +71,6 @@ func TestAllocPseudoInstances(t *testing.T) {
 	// Exhaustion: asking for more than the pool can supply errors.
 	if _, err := AllocPseudoInstances(nil, MaxIOLInstance); err == nil {
 		t.Fatal("expected pool exhaustion error")
-	}
-}
-
-// TestBuildBridgedLines confirms a bridged IOL endpoint produces the
-// "<realInstance>:<iface> <pseudoInstance>:0/0" NETMAP line, alongside native
-// lines, sorted.
-func TestBuildBridgedLines(t *testing.T) {
-	native := []LinkSpec{{P2P: true, Endpoints: []EndpointSpec{
-		{NodeID: 0, Interface: "e0/0", IsIOL: true},
-		{NodeID: 1, Interface: "e0/0", IsIOL: true},
-	}}}
-	// Lab node 0 -> instance 1; bridged interface e0/1 -> pseudo-instance 500.
-	bridged := []BridgedEndpoint{{NodeID: 0, Interface: "e0/1", PseudoInstance: 500}}
-	got := Build(native, bridged...)
-	want := "1:0/0 2:0/0\n1:0/1 500:0/0\n"
-	if got != want {
-		t.Fatalf("bridged NETMAP:\n got %q\nwant %q", got, want)
 	}
 }
 

@@ -178,73 +178,6 @@ func ParseIface(s string) (Iface, error) {
 	return Iface{Type: t, Adapter: adapter, Port: port}, nil
 }
 
-// Entry is one endpoint of a NETMAP connection.
-type Entry struct {
-	NodeID int
-	Iface  Iface
-}
-
-// String renders "<instance>:<adapter>/<port>", the IOL NETMAP interface token
-// (e.g. "2:0/0" for lab node 1 -> IOL instance 2, Ethernet0/0). The NETMAP node
-// id is the IOL *instance* id (InstanceID(NodeID)), not the raw lab node id, so
-// it matches the argv positional and nvram filename. This is the format real
-// IOL accepts; see the package doc and docs/p0-spike.md.
-func (e Entry) String() string {
-	return fmt.Sprintf("%d:%d/%d", InstanceID(e.NodeID), e.Iface.Adapter, e.Iface.Port)
-}
-
-// LinkSpec is the minimal link description Build needs: whether it is a direct
-// p2p pairing and its endpoints. This keeps netmap free of a dependency on the
-// lab package (avoiding an import cycle, since lab.Validate uses ParseIface).
-type LinkSpec struct {
-	// P2P is true for a direct IOL-to-IOL pairing; segment links are false
-	// because the userspace hub handles flooding (no NETMAP line).
-	P2P bool
-	// Endpoints are (nodeID, interface) pairs.
-	Endpoints []EndpointSpec
-}
-
-// EndpointSpec is one side of a LinkSpec.
-type EndpointSpec struct {
-	NodeID int
-	// Interface is the raw IOL interface string, e.g. "e0/0".
-	Interface string
-	// IsIOL marks IOL endpoints; only IOL-to-IOL pairs produce NETMAP lines.
-	IsIOL bool
-}
-
-// BridgedEndpoint is one IOL endpoint of a bridged link: the real node's IOL
-// interface, plus the pseudo-instance id that iouyap owns for it. The bridged
-// endpoint's NETMAP line points the real IOL interface at the pseudo-instance's
-// port 0/0, so IOL sends that interface's frames to /tmp/netio<uid>/<pseudo>
-// (the iouyap socket) instead of a peer IOL. See docs/p0-spike.md "IOL netio
-// socket convention".
-type BridgedEndpoint struct {
-	// NodeID is the real IOL lab node id (its NETMAP id is InstanceID(NodeID)).
-	NodeID int
-	// Interface is the real IOL interface string, e.g. "e0/1".
-	Interface string
-	// PseudoInstance is the reserved instance id iouyap binds for this endpoint.
-	PseudoInstance int
-}
-
-// bridgedLine renders one bridged endpoint's NETMAP line:
-//
-//	<realInstance>:<adapter>/<port> <pseudoInstance>:0/0
-//
-// IOL treats the right-hand id like any peer instance and writes this
-// interface's frames to that instance's netio socket path — which is the iouyap
-// bridge, not a peer IOL. Returns ("", false) if the interface is unparseable
-// (validation catches that earlier).
-func bridgedLine(be BridgedEndpoint) (string, bool) {
-	ifc, err := ParseIface(be.Interface)
-	if err != nil {
-		return "", false
-	}
-	real := Entry{NodeID: be.NodeID, Iface: ifc}
-	return fmt.Sprintf("%s %d:0/0", real.String(), be.PseudoInstance), true
-}
-
 // IfacesForCounts returns every interface a node with ethGroups Ethernet
 // adapter groups and serialGroups Serial adapter groups exposes at boot, in
 // deterministic order: all Ethernet interfaces first (adapter-major,
@@ -295,58 +228,21 @@ type StaticEntry struct {
 //
 //	<InstanceID>:<adapter>/<port> <PseudoInstance>:0/0
 //
-// This is the same wire format as bridgedLine; the difference is purely in
-// intent (every interface gets one, at boot, regardless of links) rather than
-// in the line's shape. Unlike bridgedLine/Entry.String, e.InstanceID is used
-// as-is (it is already an IOL instance id, not a raw node id needing the
-// InstanceID(nodeID) mapping), so this does not go through Entry at all.
+// This wires one interface at boot regardless of links (the topology-independent
+// NETMAP that makes hot-connect work). e.InstanceID is used as-is (it is already
+// an IOL instance id, not a raw node id needing the InstanceID(nodeID) mapping).
 func staticLine(e StaticEntry) string {
 	return fmt.Sprintf("%d:%d/%d %d:0/0", e.InstanceID, e.Iface.Adapter, e.Iface.Port, e.PseudoInstance)
 }
 
 // BuildStatic produces the static NETMAP file content from a flat list of
-// StaticEntry: one line per entry, in the same
-// "<InstanceID>:<adapter>/<port> <PseudoInstance>:0/0" format Build's bridged
-// lines use, sorted for deterministic output. Returns "" for no entries.
+// StaticEntry: one line per entry, in the
+// "<InstanceID>:<adapter>/<port> <PseudoInstance>:0/0" format IOL accepts,
+// sorted for deterministic output. Returns "" for no entries.
 func BuildStatic(entries []StaticEntry) string {
 	lines := make([]string, 0, len(entries))
 	for _, e := range entries {
 		lines = append(lines, staticLine(e))
-	}
-	sort.Strings(lines)
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
-// Build produces the NETMAP file content from native IOL-to-IOL p2p pairings and
-// bridged IOL endpoints. Native lines wire two real IOL instances directly;
-// bridged lines point a real IOL interface at an iouyap-owned pseudo-instance.
-// VPCS endpoints and segment links contribute no native line (the relay layer
-// handles those). Lines are sorted for deterministic output.
-func Build(links []LinkSpec, bridged ...BridgedEndpoint) string {
-	var lines []string
-	for _, link := range links {
-		var iol []Entry
-		for _, ep := range link.Endpoints {
-			if !ep.IsIOL {
-				continue
-			}
-			ifc, err := ParseIface(ep.Interface)
-			if err != nil {
-				continue // validation catches this earlier
-			}
-			iol = append(iol, Entry{NodeID: ep.NodeID, Iface: ifc})
-		}
-		if link.P2P && len(iol) == 2 {
-			lines = append(lines, iol[0].String()+" "+iol[1].String())
-		}
-	}
-	for _, be := range bridged {
-		if line, ok := bridgedLine(be); ok {
-			lines = append(lines, line)
-		}
 	}
 	sort.Strings(lines)
 	if len(lines) == 0 {

@@ -134,15 +134,15 @@ func (s Spec) Environ() []string {
 // number of PCs the process hosts (default 1).
 //
 // UDP tunnel: vpcs speaks the UDP tunnel protocol natively (it never speaks IOL
-// netio), so a VPCS<->IOL link connects vpcs's UDP tunnel straight to the
-// supervisor's relay (the IOL side reaches the same relay through an iouyap
-// netio<->UDP bridge). The port pairing (from server.bridgePlan.vpcsUDPFor):
+// netio), so its frames go to a per-VPCS udp<->tap shim (internal/vtap) whose
+// tap joins the link's Linux bridge. The port pairing (VPCSUDPLocal/Remote =
+// the shim's [vpcsBind, shimBind] from server.setupVPCSFabric):
 //
-//   - -s <localUdp>  : the port vpcs BINDS to receive frames the relay forwards
-//     to it — i.e. the relay endpoint's RemotePort for this VPCS.
-//   - -c <remoteUdp> : the port vpcs SENDS frames to — the relay endpoint's
-//     receiving LocalPort.
-//   - -t 127.0.0.1   : the tunnel peer host (the relay runs on loopback).
+//   - -s <localUdp>  : the port vpcs BINDS to receive frames the shim forwards
+//     to it (VPCSUDPLocal).
+//   - -c <remoteUdp> : the port vpcs SENDS frames to — the shim's bind port
+//     (VPCSUDPRemote).
+//   - -t 127.0.0.1   : the tunnel peer host (the shim runs on loopback).
 //
 // When no UDP tunnel is wired (VPCSUDPLocal/Remote == 0) the -s/-c/-t flags are
 // omitted and the PC is unconnected.

@@ -32,7 +32,8 @@ type Lab struct {
 // CaptureReadyEnabled reports whether capture-ready wiring is on. It is the
 // default: a nil flag counts as enabled, so pre-existing labs (and the GUI,
 // which only sends the field when the user turns it off) get capturable
-// inter-IOL links. See CaptureReady and server.wiringFor.
+// inter-IOL links. See CaptureReady. (In the static-tap fabric every link is
+// capturable regardless, so this flag is now vestigial.)
 func (l *Lab) CaptureReadyEnabled() bool {
 	return l.CaptureReady == nil || *l.CaptureReady
 }

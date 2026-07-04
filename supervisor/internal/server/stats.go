@@ -15,49 +15,37 @@ import (
 // event ballooning when a link briefly touches many protocols.
 const maxProtos = 6
 
-// maxProtosDir caps how many per-direction entries a link.stats event carries.
-// The directional label space is small (transport/routing labels plus the
-// overlapping DOT1Q), so this is a generous safety cap rather than a top-N cut
-// the GUI depends on; unlike maxProtos the directional map is not required to
-// sum to FPS (DOT1Q overlaps), so no meaning is lost by keeping all labels.
-const maxProtosDir = 12
-
-// statsInterval is how often the server samples per-link relay counters and
-// emits link.stats events. 2s balances responsive traffic-driven link glow in
-// the GUI against event volume.
+// statsInterval is how often the server samples per-link tap counters and emits
+// link.stats events. 2s balances responsive traffic-driven link glow in the GUI
+// against event volume.
 const statsInterval = 2 * time.Second
 
-// statsLoop polls the relay manager every statsInterval and emits a link.stats
-// event for each bridged link that forwarded traffic during the interval. It is
-// the server-side owner of throughput derivation: the relay package only
-// exposes monotonic Stats() counters (no server import), and this loop turns
-// two consecutive samples into per-second rates.
+// statsLoop samples every fabric link's endpoint-tap netdev counters (plus
+// per-protocol counts from any active bridge capture) every statsInterval and
+// emits a link.stats event for each link that forwarded traffic during the
+// interval. It is the server-side owner of throughput derivation, turning two
+// consecutive cumulative samples into per-second rates.
 //
 // A link.stats event is emitted for a link ONLY when its forwarded count
 // changed since the previous tick (i.e. the per-interval delta is nonzero), so
 // idle links stay quiet and the GUI can drive link glow purely off these
-// events. Native (non-bridged) links have no relay and never appear here.
+// events.
 //
 // The loop is tied to ctx (the server's ListenAndServe lifetime), so it exits
-// with the server and leaks no goroutine. Relays that disappear between ticks
-// are pruned from the baseline so a restarted relay (counters reset to 0) is
-// not misread as negative throughput.
+// with the server and leaks no goroutine. Links that disappear between ticks
+// are pruned from the baseline so a restarted link (counters reset to 0) is not
+// misread as negative throughput.
 func (s *Server) statsLoop(ctx context.Context) {
 	ticker := time.NewTicker(statsInterval)
 	defer ticker.Stop()
 
-	// last holds the previous tick's cumulative frame/byte counts per link,
-	// plus the per-proto cumulative counts so the next tick can diff them into
-	// per-proto fps. protos is nil until a link reports any protocol traffic.
+	// flast holds the previous tick's cumulative frame/byte counts per fabric
+	// link, plus the per-proto cumulative counts so the next tick can diff them
+	// into per-proto fps. protos is nil until a link reports protocol traffic.
 	type sample struct {
 		frames, bytes uint64
 		protos        map[string]uint64
-		protosDir     [2]map[string]uint64
 	}
-	last := make(map[int]sample)
-	// flast is the separate baseline for FABRIC links (polled from tap netdev
-	// counters + active bridge captures, not the relay). Link ids are disjoint
-	// from relay ids (a link is fabric OR legacy-relay, never both).
 	flast := make(map[int]sample)
 
 	// Host resource monitor: sample the runtime VM's CPU/RAM/disk each tick and
@@ -83,33 +71,10 @@ func (s *Server) statsLoop(ctx context.Context) {
 				})
 			}
 
-			cur := s.relays.Stats()
-			// Prune links whose relay went away, so a same-id relay started
-			// later begins from a fresh zero baseline.
-			for id := range last {
-				if _, ok := cur[id]; !ok {
-					delete(last, id)
-				}
-			}
-			for id, st := range cur {
-				prev := last[id]
-				last[id] = sample{frames: st.Frames, bytes: st.Bytes, protos: st.Protos, protosDir: st.ProtosDir}
-				fps, bps, emit := linkRate(prev.frames, prev.bytes, st.Frames, st.Bytes, statsInterval)
-				if !emit {
-					continue
-				}
-				// Derive the per-proto and per-direction breakdowns over the same
-				// interval and baseline (a link-wide counter reset re-baselines
-				// both maps too).
-				protos := protoRates(prev.protos, st.Protos, statsInterval)
-				protosDir := protoDirRates(prev.protosDir, st.ProtosDir, statsInterval)
-				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos, ProtosDir: protosDir})
-			}
-
-			// Fabric links (P4): no relay to poll — derive throughput from the
-			// endpoint taps' netdev counters (always-on link glow) plus per-proto
-			// from an active bridge capture. Directional breakdown isn't attributed
-			// (tcpdump-on-bridge doesn't split by source), so ProtosDir is omitted.
+			// Fabric links: derive throughput from the endpoint taps' netdev
+			// counters (always-on link glow) plus per-proto from an active bridge
+			// capture. Directional breakdown isn't attributed (tcpdump-on-bridge
+			// doesn't split by source), so ProtosDir is omitted.
 			s.mu.Lock()
 			ll := s.lab
 			s.mu.Unlock()
@@ -203,73 +168,6 @@ func protoRates(prev, cur map[string]uint64, interval time.Duration) map[string]
 	out := make(map[string]float64, len(entries))
 	for _, e := range entries {
 		out[e.label] = e.fps
-	}
-	return out
-}
-
-// protoDirRates diffs two cumulative per-direction per-protocol snapshots into
-// per-second rates over the interval, returning a map keyed by protocol label
-// whose value is [fps sourced from endpoint 0, fps from endpoint 1]. Endpoint
-// order matches the lab link's doc endpoints order. A label is emitted when
-// EITHER direction has a nonzero rate this tick; a direction whose counter went
-// backwards (relay restart) or didn't advance contributes 0 for that side.
-// Rates are rounded to one decimal like linkRate. The result is capped to
-// maxProtosDir labels by peak per-direction fps (ties broken by label) purely as
-// a safety bound. Returns nil when there's nothing to report so the field is
-// omitted from the event. Note DOT1Q overlaps the primary labels here, so this
-// map does not sum to FPS.
-func protoDirRates(prev, cur [2]map[string]uint64, interval time.Duration) map[string][2]float64 {
-	if len(cur[0]) == 0 && len(cur[1]) == 0 {
-		return nil
-	}
-	secs := interval.Seconds()
-	// rate diffs one direction's cumulative counter for a label into fps, or 0
-	// when idle or reset (re-baselined by the caller storing cur).
-	rate := func(p, c uint64) float64 {
-		if c < p || c == p {
-			return 0
-		}
-		return math.Round(float64(c-p)/secs*10) / 10
-	}
-	// Union of labels seen in either direction this tick.
-	seen := make(map[string]struct{}, len(cur[0])+len(cur[1]))
-	for label := range cur[0] {
-		seen[label] = struct{}{}
-	}
-	for label := range cur[1] {
-		seen[label] = struct{}{}
-	}
-	type entry struct {
-		label string
-		v     [2]float64
-	}
-	entries := make([]entry, 0, len(seen))
-	for label := range seen {
-		v0 := rate(prev[0][label], cur[0][label])
-		v1 := rate(prev[1][label], cur[1][label])
-		if v0 == 0 && v1 == 0 {
-			continue
-		}
-		entries = append(entries, entry{label, [2]float64{v0, v1}})
-	}
-	if len(entries) == 0 {
-		return nil
-	}
-	// Sort by peak direction fps desc, then label asc, so the safety cap and
-	// map contents are deterministic across ticks with identical traffic.
-	sort.Slice(entries, func(i, j int) bool {
-		pi, pj := math.Max(entries[i].v[0], entries[i].v[1]), math.Max(entries[j].v[0], entries[j].v[1])
-		if pi != pj {
-			return pi > pj
-		}
-		return entries[i].label < entries[j].label
-	})
-	if len(entries) > maxProtosDir {
-		entries = entries[:maxProtosDir]
-	}
-	out := make(map[string][2]float64, len(entries))
-	for _, e := range entries {
-		out[e.label] = e.v
 	}
 	return out
 }

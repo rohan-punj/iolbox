@@ -1,8 +1,9 @@
 // Package server binds the control protocol to a TCP listener and orchestrates
 // the lab: it holds loaded lab state, allocates console/capture ports, wires
-// links via the relay manager, and spawns nodes. It runs on any OS (node/relay
-// have Linux-only cores with stubs), so the control plane logic is testable on
-// the dev box; the data plane only functions inside the Linux runtime.
+// links via the static-tap Linux-bridge fabric, and spawns nodes. It runs on
+// any OS (node/fabric have Linux-only cores with stubs), so the control plane
+// logic is testable on the dev box; the data plane only functions inside the
+// Linux runtime.
 package server
 
 import (
@@ -16,7 +17,6 @@ import (
 	"github.com/rohanpunj/iolab/supervisor/internal/image"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
-	"github.com/rohanpunj/iolab/supervisor/internal/relay"
 )
 
 // Config configures a Server.
@@ -40,8 +40,8 @@ type Config struct {
 	// set 0.0.0.0 so a native telnet client on the GUI host can dial
 	// <vm-ip>:<consolePort> directly — same trust boundary as -ws-addr.
 	ConsoleBind string
-	// CaptureBind is the host each link's pcapng tee listener binds (see
-	// relay.Config.CaptureBind). Default loopback (the wsbridge dials via
+	// CaptureBind is the host each link's pcapng capture listener binds (the
+	// tcpdump-on-bridge bcap server). Default loopback (the wsbridge dials via
 	// loopback); set 0.0.0.0 so a native Wireshark on the GUI host can attach
 	// with `wireshark -k -i TCP@<vm-ip>:<capturePort>`. Set via -capture-bind.
 	CaptureBind string
@@ -53,9 +53,8 @@ type Config struct {
 
 // Server is the supervisor control server.
 type Server struct {
-	cfg    Config
-	disp   *protocol.Dispatcher
-	relays *relay.Manager
+	cfg  Config
+	disp *protocol.Dispatcher
 
 	consolePorts *node.PortAllocator
 	capturePorts *node.PortAllocator
@@ -96,7 +95,6 @@ func New(cfg Config) *Server {
 	s := &Server{
 		cfg:          cfg,
 		disp:         protocol.NewDispatcher(),
-		relays:       relay.NewManager(),
 		consolePorts: node.NewPortAllocator(9000, 1000),
 		capturePorts: node.NewPortAllocator(5500, 1000),
 		udpPorts:     node.NewPortAllocator(10000, 20000),
@@ -290,15 +288,14 @@ func (s *Server) ServeConn(ctx context.Context, rwc io.ReadWriteCloser) {
 	}
 }
 
-// shutdown stops all relays and nodes on server exit.
+// shutdown stops all nodes and tears down the fabric on server exit.
 func (s *Server) shutdown() {
-	s.relays.StopAll()
 	s.mu.Lock()
 	ll := s.lab
 	s.mu.Unlock()
 	if ll != nil {
 		ll.stopAll()
-		s.stopBridges(ll)
+		s.teardownFabric(ll)
 	}
 }
 

@@ -6,36 +6,20 @@ import (
 	"fmt"
 )
 
-// DefaultHost is used when Config.Host is empty. The bridge, IOL, and the
-// relay all run inside the same runtime, so loopback is the normal case;
-// Host exists mainly for the cross-host relay scenario described in
-// docs/p0-spike.md correction #2, where the UDP side may need to reach a
-// peer supervisor's relay over a real interface.
-const DefaultHost = "127.0.0.1"
-
-// Config configures one Bridge: the IOL netio unix-domain socket on one side
-// and the UDP relay endpoint on the other.
+// Config configures one netio<->tap bridge: the IOL netio unix-domain socket on
+// one side and a Linux tap device on the other.
 type Config struct {
 	// NetioPath is the filesystem path of the unix-domain datagram socket
 	// IOL connects to for this link's interface (per its NETMAP entry).
 	NetioPath string
-	// UDPLocal is the local UDP port this bridge binds to receive frames
-	// forwarded by the relay.
-	UDPLocal int
-	// UDPRemote is the relay's UDP port this bridge forwards frames to.
-	UDPRemote int
-	// Host is the address for both the UDPLocal bind and the UDPRemote
-	// peer. Defaults to DefaultHost ("127.0.0.1") when empty.
-	Host string
 
 	// The netio header (see HeaderSize) exists only on the unix-socket side
-	// of this bridge. On netio->UDP the header is stripped, so the UDP mesh
-	// (relay, VPCS, capture tee) carries raw ethernet frames. On UDP->netio
-	// a fresh header is constructed from the three fields below, addressing
-	// the frame to the REAL local IOL instance+interface this bridge serves
-	// — not the pseudo-instance — because IOL drops any datagram whose dst
-	// fields don't name one of its own interfaces (P0 root cause of the
-	// bridged-link failures, docs/p0-spike.md "netio header layout").
+	// of this bridge. On netio->tap the header is stripped, so the tap carries
+	// raw ethernet frames. On tap->netio a fresh header is constructed from the
+	// three fields below, addressing the frame to the REAL local IOL
+	// instance+interface this bridge serves — not the pseudo-instance — because
+	// IOL drops any datagram whose dst fields don't name one of its own
+	// interfaces (P0 root cause, docs/p0-spike.md "netio header layout").
 
 	// LocalInstance is the IOL instance id of the node this bridge serves
 	// (netmap.InstanceID of its lab node id). It becomes dst_id on every
@@ -54,43 +38,9 @@ type Config struct {
 	PseudoInstance int
 }
 
-// resolvedHost returns cfg.Host, defaulting to DefaultHost.
-func (c Config) resolvedHost() string {
-	if c.Host == "" {
-		return DefaultHost
-	}
-	return c.Host
-}
-
-// validate checks the config fields that are meaningful on every platform.
-// Platform-specific New implementations call this before touching sockets.
-func (c Config) validate() error {
-	if c.NetioPath == "" {
-		return errors.New("iouyap: NetioPath is required")
-	}
-	if c.UDPLocal <= 0 || c.UDPLocal > 65535 {
-		return fmt.Errorf("iouyap: invalid UDPLocal port %d", c.UDPLocal)
-	}
-	if c.UDPRemote <= 0 || c.UDPRemote > 65535 {
-		return fmt.Errorf("iouyap: invalid UDPRemote port %d", c.UDPRemote)
-	}
-	if c.LocalInstance < 1 || c.LocalInstance > 1024 {
-		return fmt.Errorf("iouyap: invalid LocalInstance %d (IOL accepts 1-1024)", c.LocalInstance)
-	}
-	if c.PseudoInstance < 1 || c.PseudoInstance > 1024 {
-		return fmt.Errorf("iouyap: invalid PseudoInstance %d (IOL accepts 1-1024)", c.PseudoInstance)
-	}
-	if c.LocalAdapter < 0 || c.LocalAdapter > 15 || c.LocalPort < 0 || c.LocalPort > 15 {
-		return fmt.Errorf("iouyap: interface %d/%d outside the 0-15 nibble range of the netio port byte",
-			c.LocalAdapter, c.LocalPort)
-	}
-	return nil
-}
-
-// validateTap checks the config fields relevant to tap-mode bridges
-// (TapBridge): everything validate checks except UDPLocal/UDPRemote, since
-// tap mode has no UDP side at all — the frame's other end is a Linux tap
-// device, not a UDP relay.
+// validateTap checks the config fields relevant to the netio<->tap bridge
+// (TapBridge). There is no UDP side — the frame's other end is a Linux tap
+// device.
 func (c Config) validateTap() error {
 	if c.NetioPath == "" {
 		return errors.New("iouyap: NetioPath is required")

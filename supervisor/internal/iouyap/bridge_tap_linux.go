@@ -41,8 +41,7 @@ type TapBridge struct {
 // stale socket file first) and attaches to the existing persistent tap device
 // named tapName. It does not start pumping; call Run for that.
 //
-// cfg is validated with validateTap, not validate: tap mode has no UDP side,
-// so cfg.UDPLocal/cfg.UDPRemote are ignored even if set.
+// cfg is validated with validateTap (tap mode has no UDP side).
 func NewTap(cfg Config, tapName string) (*TapBridge, error) {
 	if err := cfg.validateTap(); err != nil {
 		return nil, err

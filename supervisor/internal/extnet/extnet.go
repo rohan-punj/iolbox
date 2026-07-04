@@ -106,22 +106,12 @@ func (s Subnet) PoolEnd() string   { return fmt.Sprintf("172.31.%d.199", s.Index
 // 15-char IFNAMSIZ limit: "iolnat" + up to a few digits fits.
 func tapName(nodeID int) string { return fmt.Sprintf("iolnat%d", nodeID) }
 
-// Config describes one external-net endpoint to bring up. The server fills it
-// from the lab node + the node's relay endpoint (the same UDP port pairing VPCS
-// uses: the endpoint SENDS frames to SendPort — the relay's receiving LocalPort
-// — and LISTENS on ListenPort — the relay's delivery RemotePort).
+// Config describes one nat endpoint to bring up. The endpoint's tap joins the
+// link's Linux bridge (br-<linkid>) via AttachBridge; the kernel switches lab
+// frames to it, and the userspace DHCP server runs directly on the tap fd.
 type Config struct {
 	Kind   Kind
 	NodeID int
-
-	// SendPort/ListenPort tie this endpoint to its link's relay, exactly like
-	// VPCS: SendPort is the relay's receiving LocalPort (we send tap frames to
-	// it); ListenPort is the relay's delivery RemotePort (we bind it to receive
-	// frames the relay forwards, then write them into the tap).
-	SendPort   int
-	ListenPort int
-	// Host is the relay host; empty defaults to 127.0.0.1.
-	Host string
 
 	// SubnetIndex is the <n> in 172.31.<n>.0/24 (nat only), allocated by the
 	// server so multiple nat nodes never collide.
@@ -129,21 +119,6 @@ type Config struct {
 	// DefaultIface is the VM's default-route interface, out which nat MASQUERADEs
 	// (nat only). Resolved by the server via DefaultRouteIface.
 	DefaultIface string
-
-	// Bridged selects the P2 static-tap bridge-fabric data plane (nat only): the
-	// tap is created unbridged at Start with NO relay/UDP pumps, the DHCP server
-	// runs directly on the tap fd, and AttachBridge/DetachBridge wire the gateway
-	// + NAT onto the link bridge when the link is drawn/removed. When false the
-	// endpoint uses the legacy UDP-relay pumps (mgmt, and nat until migrated).
-	Bridged bool
-}
-
-// resolvedHost returns Config.Host, defaulting to loopback.
-func (c Config) resolvedHost() string {
-	if c.Host == "" {
-		return "127.0.0.1"
-	}
-	return c.Host
 }
 
 // Capabilities reports which external-net node kinds the runtime supports,

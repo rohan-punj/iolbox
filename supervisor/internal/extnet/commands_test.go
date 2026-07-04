@@ -16,46 +16,64 @@ func joinCmds(cmds []cmd) string {
 	return b.String()
 }
 
-// TestNatSetupCommands pins the exact privileged sequence a nat node runs: tap
-// create (owned by us), gateway address, up, ip_forward, MASQUERADE + FORWARD
-// pair — all scoped to the node's own subnet and the VM default iface.
-func TestNatSetupCommands(t *testing.T) {
-	sub := Subnet{Index: 4}
-	got := joinCmds(natSetupCmds("iolnat9", sub, "ens160", "iolab"))
+// TestNatBridgeTapCommands pins the at-Start tap creation: create the tap owned
+// by us and bring it up, UNBRIDGED and unaddressed (attach happens at link time).
+func TestNatBridgeTapCommands(t *testing.T) {
+	got := joinCmds(natBridgeTapCmds("iolnat9", "iolab"))
 	for _, want := range []string{
 		"ip tuntap add dev iolnat9 mode tap user iolab",
-		"ip addr add 172.31.4.1/24 dev iolnat9",
 		"ip link set iolnat9 up",
-		"sysctl -w net.ipv4.ip_forward=1",
-		"iptables -t nat -A POSTROUTING -s 172.31.4.0/24 -o ens160 -j MASQUERADE",
-		"iptables -A FORWARD -i iolnat9 -o ens160 -s 172.31.4.0/24 -j ACCEPT",
-		"iptables -A FORWARD -i ens160 -o iolnat9 -d 172.31.4.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("nat setup missing %q in:\n%s", want, got)
+			t.Fatalf("nat tap setup missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "master") || strings.Contains(got, "addr add") {
+		t.Fatalf("tap must be created unbridged/unaddressed:\n%s", got)
+	}
+}
+
+// TestNatBridgeAttachCommands pins the at-link-draw sequence: attach the tap to
+// the link bridge, put the gateway address + NAT on the BRIDGE iface, enable
+// forwarding, and install MASQUERADE + the FORWARD pair scoped to the subnet.
+func TestNatBridgeAttachCommands(t *testing.T) {
+	sub := Subnet{Index: 4}
+	got := joinCmds(natBridgeAttachCmds("iolnat9", "iolbr7", sub, "ens160"))
+	for _, want := range []string{
+		"ip link set iolnat9 master iolbr7",
+		"ip addr add 172.31.4.1/24 dev iolbr7",
+		"sysctl -w net.ipv4.ip_forward=1",
+		"iptables -t nat -A POSTROUTING -s 172.31.4.0/24 -o ens160 -j MASQUERADE",
+		"iptables -A FORWARD -i iolbr7 -o ens160 -s 172.31.4.0/24 -j ACCEPT",
+		"iptables -A FORWARD -i ens160 -o iolbr7 -d 172.31.4.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("nat bridge attach missing %q in:\n%s", want, got)
 		}
 	}
 }
 
-// TestNatTeardownMirrorsSetup confirms every iptables teardown rule is the exact
-// -D inverse of a setup -A rule (so teardown removes precisely what setup added),
-// and that the tap is deleted.
-func TestNatTeardownMirrorsSetup(t *testing.T) {
+// TestNatBridgeDetachMirrorsAttach confirms every detach rule is the exact -D
+// inverse of an attach -A rule, the gateway address is removed, and the tap is
+// detached (nomaster) — the bridge device itself is fabric-owned, not deleted here.
+func TestNatBridgeDetachMirrorsAttach(t *testing.T) {
 	sub := Subnet{Index: 4}
-	got := joinCmds(natTeardownCmds("iolnat9", sub, "ens160"))
+	got := joinCmds(natBridgeDetachCmds("iolnat9", "iolbr7", sub, "ens160"))
 	for _, want := range []string{
 		"iptables -t nat -D POSTROUTING -s 172.31.4.0/24 -o ens160 -j MASQUERADE",
-		"iptables -D FORWARD -i iolnat9 -o ens160 -s 172.31.4.0/24 -j ACCEPT",
-		"iptables -D FORWARD -i ens160 -o iolnat9 -d 172.31.4.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT",
-		"ip tuntap del dev iolnat9 mode tap",
+		"iptables -D FORWARD -i iolbr7 -o ens160 -s 172.31.4.0/24 -j ACCEPT",
+		"iptables -D FORWARD -i ens160 -o iolbr7 -d 172.31.4.0/24 -m state --state RELATED,ESTABLISHED -j ACCEPT",
+		"ip addr del 172.31.4.1/24 dev iolbr7",
+		"ip link set iolnat9 nomaster",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("nat teardown missing %q in:\n%s", want, got)
+			t.Fatalf("nat bridge detach missing %q in:\n%s", want, got)
 		}
 	}
-	// ip_forward is deliberately NOT reverted (shared global).
-	if strings.Contains(got, "ip_forward") {
-		t.Fatalf("teardown must not revert ip_forward:\n%s", got)
+	// ip_forward is deliberately NOT reverted (shared global); the bridge is not
+	// deleted here (fabric-owned).
+	if strings.Contains(got, "ip_forward") || strings.Contains(got, "link delete iolbr7") {
+		t.Fatalf("detach must not revert ip_forward or delete the bridge:\n%s", got)
 	}
 }
 

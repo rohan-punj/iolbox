@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
-	"github.com/rohanpunj/iolab/supervisor/internal/relay"
 )
 
 // decode unmarshals raw args into v, returning a schema_invalid protocol error
@@ -33,8 +31,8 @@ func (s *Server) handleHello(raw json.RawMessage) (any, error) {
 	if err := decode(raw, &args); err != nil {
 		return nil, err
 	}
-	// Base features are always present; nat/mgmt are advertised ("natgw"/"mgmt")
-	// only when the runtime detected support at startup (see extnet.Detect).
+	// Base features are always present; nat is advertised ("natgw") only when the
+	// runtime detected support at startup (see extnet.Detect).
 	features := []string{"nvram", "capture", "i386"}
 	features = append(features, s.caps.GateFeatures()...)
 	return protocol.HelloResult{
@@ -137,28 +135,18 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	// loading a new lab over a running one orphans the old nodes: they keep
 	// running as untracked supervisor children (observed: stranded IOL holding
 	// gigabytes of RAM and spinning VPCS), because nothing else ever holds a
-	// handle to them again. Then release its console ports, stop its link
-	// relays, and release its capture + bridge-plan UDP ports — the old lab is
-	// dropped without a plan rebuild, so nothing else would ever return those
-	// ports to the allocators (leaked across every lab switch before this).
+	// handle to them again. Then tear down its fabric (taps/bridges/shims),
+	// release its console ports, and release its capture ports — the old lab is
+	// dropped without a rebuild, so nothing else would ever return those ports.
 	if old != nil {
 		for id := range old.nodes {
 			s.stopNode(old, id)
 		}
-		s.stopBridges(old)
+		s.teardownFabric(old)
 		for _, nr := range old.nodes {
 			s.consolePorts.Release(nr.consolePort)
 		}
 		s.releaseCaptures(old, false)
-		if old.bridge != nil {
-			for _, bl := range old.bridge.links {
-				_ = s.relays.Stop(bl.linkID)
-			}
-			for _, port := range old.bridge.udpPorts() {
-				s.udpPorts.Release(port)
-			}
-			old.bridge = nil
-		}
 	}
 
 	return protocol.LabLoadResult{LabID: doc.ID, Nodes: nodes, Warnings: warnings}, nil
@@ -229,39 +217,26 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 	for _, id := range ids {
 		s.stopNode(ll, id)
 	}
-	// A full lab stop tears down the iouyap bridges too (per-node stop leaves them
-	// up; they restart idempotently on the next spawn), and releases every armed
-	// capture: the tee'd relays are stopped so the TCP capture ports actually
-	// free, capture.stopped is emitted per link, and the ports return to the
-	// allocator. Links whose doc still says capture.enabled re-arm automatically
-	// on the next lab start (see armDocCaptures), with a fresh capture.started.
+	// A full lab stop tears down the fabric too (taps/bridges/netio<->tap iouyaps/
+	// VPCS shims; per-node stop leaves them up and they restart idempotently on
+	// the next spawn), and releases every armed capture: the bridge captures are
+	// stopped so the TCP capture ports actually free, capture.stopped is emitted
+	// per link, and the ports return to the allocator. Links whose doc still says
+	// capture.enabled re-arm automatically on the next lab start (see
+	// armDocCaptures), with a fresh capture.started.
 	if all {
-		s.stopBridges(ll)
+		s.teardownFabric(ll)
 		s.releaseCaptures(ll, true)
-		// Stop EVERY bridged-link relay, not just the captured ones
-		// releaseCaptures handles: lab.stop previously left the UDP pump
-		// goroutine + bound socket of every non-captured bridged link running
-		// (e.g. every capture-ready IOL<->IOL link), leaking one spinning relay
-		// per link on each start/stop cycle — the supervisor sat at tens of % CPU
-		// with no lab running. The plan is kept so a restart reuses the same
-		// wiring; startLinkRelays does Stop-then-Start per link, and the next
-		// start's rebuildBridgePlan refreshes the ports.
-		if ll.bridge != nil {
-			for _, bl := range ll.bridge.links {
-				_ = s.relays.Stop(bl.linkID)
-			}
-		}
 	}
 	return protocol.StartResult{Started: []protocol.StartedNode{}}, nil
 }
 
 // handleLabReap is the GUI "Force clean": it force-stops all runtime state
-// regardless of tracking so orphans (leaked relays, nodes the GUI still thinks
-// are running, a spinning console after an odd teardown) can be cleared from the
-// GUI in one click. It stops every node of the loaded lab, tears down its
-// iouyap bridges and captures, and stops EVERY relay in the manager
-// (relays.StopAll) — including any not reachable from the current plan. Unlike
-// lab.stop it takes no labId and never errors on a mismatch.
+// regardless of tracking so orphans (nodes the GUI still thinks are running, a
+// spinning console after an odd teardown) can be cleared from the GUI in one
+// click. It stops every node of the loaded lab and tears down its fabric
+// (taps/bridges/shims) and captures. Unlike lab.stop it takes no labId and
+// never errors on a mismatch.
 func (s *Server) handleLabReap(_ json.RawMessage) (any, error) {
 	s.mu.Lock()
 	ll := s.lab
@@ -272,12 +247,9 @@ func (s *Server) handleLabReap(_ json.RawMessage) (any, error) {
 			s.stopNode(ll, id)
 			reaped++
 		}
-		s.stopBridges(ll)
+		s.teardownFabric(ll)
 		s.releaseCaptures(ll, true)
 	}
-	// Stop every relay the manager still holds, even ones no longer in any
-	// plan — the backstop that guarantees no relay pump/socket survives a reap.
-	s.relays.StopAll()
 	return protocol.ReapResult{Reaped: reaped}, nil
 }
 
@@ -362,24 +334,21 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 // startupConfig injected. IOL reads all of these from its cwd at boot, so they
 // must exist first. prepareLabDir is a no-op off Linux.
 func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
-	// Auto-arm capture for every doc link with capture.enabled BEFORE the bridge
-	// plan is built, so the plan's relay configs carry a pcapng tee port and the
-	// relays started below listen from the first packet. Without this, a lab
-	// (re)started with capture enabled in its doc was bridged (wiringFor honours
-	// the doc) but ll.captures was empty, so the relay got NO tee port and
-	// /capture/{id} 404'd forever — "enable capture and restart the lab" never
-	// worked. Ports persist across per-node restarts (armDocCaptures only arms
-	// missing links) and are released by lab.stop / capture.stop / lab.load.
+	// Auto-arm capture for every doc link with capture.enabled BEFORE the fabric
+	// is realised, so startFabric can start a bridge capture on its port the
+	// moment the link's bridge is up. Without this, a lab (re)started with capture
+	// enabled in its doc had an empty ll.captures, so /capture/{id} 404'd forever
+	// — "enable capture and restart the lab" never worked. Ports persist across
+	// per-node restarts (armDocCaptures only arms missing links) and are released
+	// by lab.stop / capture.stop / lab.load.
 	if err := s.armDocCaptures(ll); err != nil {
 		return nil, err
 	}
-	// (Re)compute the whole-lab bridge plan (pseudo-instances + relay/iouyap
-	// pairing) first: prepareLabDir's NETMAP and the iouyap bridges both derive
-	// from it, so it must exist before either. This is pure (no sockets) and runs
-	// on every platform so control-plane tests see the same NETMAP.
-	if err := s.rebuildBridgePlan(ll); err != nil {
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
+	// (Re)compute the whole-lab static-tap fabric first: prepareLabDir's NETMAP
+	// and the netio<->tap iouyaps both derive from it, so it must exist before
+	// either. It is deterministic and runs on every platform so control-plane
+	// tests see the same NETMAP.
+	s.refreshFabric(ll)
 	if err := s.prepareLabDir(ll); err != nil {
 		return nil, err
 	}
@@ -417,10 +386,10 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 			continue
 		}
 
-		// FABRIC VPCS: bring up its udp<->tap shim BEFORE buildSpec, so VPCS is
-		// launched with argv pointing at the shim's ports. A VPCS on a legacy link
-		// (segment/capture) keeps the relay path (nr.vtap stays nil).
-		if docNode.Kind == lab.KindVPCS && !s.nodeOnLegacyLink(ll, docNode.ID) {
+		// VPCS: bring up its udp<->tap shim BEFORE buildSpec, so VPCS is launched
+		// with argv pointing at the shim's ports. Its tap is bridge-attached at
+		// link time (hot-connect).
+		if docNode.Kind == lab.KindVPCS {
 			if err := s.setupVPCSFabric(ll, nr, docNode); err != nil {
 				return nil, err
 			}
@@ -478,23 +447,10 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 			"node %d: not in a startable state", n.ID)
 	}
 
+	// A NAT node uses the static-tap bridge data plane: tap created unbridged,
+	// gateway/NAT wired onto the link bridge by AttachBridge (so a NAT dropped
+	// before its link is drawn still hot-connects).
 	cfg := extnet.Config{Kind: extnet.Kind(n.Kind), NodeID: n.ID}
-	// A NAT node on a fabric link (P2) uses the static-tap bridge data plane: no
-	// relay ports, tap created unbridged, gateway/NAT wired onto the link bridge
-	// by AttachBridge. mgmt (and a NAT not on a fabric link) keep the legacy relay
-	// pumps, pairing against the plan's relay endpoint for this node's link.
-	// A NAT defaults to the bridge data plane (the common IOL<->NAT case, and it
-	// lets a NAT dropped before its link is drawn still hot-connect). It falls
-	// back to the legacy relay ONLY when it is currently on a legacy link (a
-	// VPCS<->NAT link, until P3 moves VPCS onto the fabric too).
-	bridged := n.Kind == lab.KindNAT && !s.nodeOnLegacyLink(ll, n.ID)
-	cfg.Bridged = bridged
-	if !bridged && ll.bridge != nil {
-		if send, listen, ok := ll.bridge.extnetUDPFor(n.ID); ok {
-			cfg.SendPort = send
-			cfg.ListenPort = listen
-		}
-	}
 
 	switch n.Kind {
 	case lab.KindNAT:
@@ -525,36 +481,12 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	}
 	nr.extnet = ep
 	nr.machine.To(node.StateRunning)
-	// If this NAT is on a fabric link, attach it now (its bridge was created by
-	// startFabric before this node started). No-op for legacy/mgmt endpoints or a
-	// NAT whose link isn't drawn yet — link.add attaches it then.
-	if cfg.Bridged {
-		if err := s.attachFabricForNode(ll, n.ID); err != nil {
-			return protocol.StartedNode{}, err
-		}
+	// Attach this NAT to its link bridge now (created by startFabric before this
+	// node started). No-op if its link isn't drawn yet — link.add attaches it then.
+	if err := s.attachFabricForNode(ll, n.ID); err != nil {
+		return protocol.StartedNode{}, err
 	}
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
-}
-
-// nodeOnLegacyLink reports whether a node is an endpoint of a current LEGACY
-// (non-fabric) link — a segment link, a capture link, or a link to an mgmt node.
-// Used to keep a NAT/VPCS on the legacy relay data plane in that case; an
-// unlinked node, or one whose links are all fabric-eligible, takes the bridge
-// data plane (so it can hot-connect).
-func (s *Server) nodeOnLegacyLink(ll *loadedLab, nodeID int) bool {
-	fabricOK := fabricNodes(ll.doc)
-	for i := range ll.doc.Links {
-		l := &ll.doc.Links[i]
-		if isFabricLink(l, fabricOK) {
-			continue
-		}
-		for _, ep := range l.Endpoints {
-			if ep.Node == nodeID {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // buildSpec assembles a node.Spec from the lab node + runtime state.
@@ -585,19 +517,11 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 	case lab.KindVPCS:
 		spec.VPCSCount = 1
 		if nr.vtap != nil {
-			// FABRIC VPCS: the PC's UDP tunnel points at its udp<->tap shim, not
-			// the relay. vtapPorts = [vpcsBind, shimBind]: VPCS binds vpcsBind (-s)
-			// and sends to shimBind (-c, the shim's bind port).
+			// The PC's UDP tunnel points at its udp<->tap shim. vtapPorts =
+			// [vpcsBind, shimBind]: VPCS binds vpcsBind (-s) and sends to shimBind
+			// (-c, the shim's bind port).
 			spec.VPCSUDPLocal = nr.vtapPorts[0]
 			spec.VPCSUDPRemote = nr.vtapPorts[1]
-		} else if ll.bridge != nil {
-			// LEGACY VPCS: wire the PC's UDP tunnel to the relay if it is a
-			// bridged-link endpoint in the plan (IOL side reaches the same relay
-			// via iouyap).
-			if send, listen, ok := ll.bridge.vpcsUDPFor(n.ID); ok {
-				spec.VPCSUDPLocal = listen // VPCS binds the relay's delivery port (-s)
-				spec.VPCSUDPRemote = send  // VPCS sends to the relay's receiving port (-c)
-			}
 		}
 	}
 	return spec, nil
@@ -609,8 +533,8 @@ func (s *Server) stopNode(ll *loadedLab, id int) {
 		return
 	}
 	if nr.extnet != nil {
-		// nat/mgmt: Close deletes the tap/macvtap and removes the iptables rules
-		// (nat) by exact -D spec, then release the subnet index back to the pool.
+		// nat: Close deletes the tap and removes the iptables rules by exact -D
+		// spec, then release the subnet index back to the pool.
 		_ = nr.extnet.Close()
 		nr.extnet = nil
 		if nr.natSubnet != 0 {
@@ -680,8 +604,8 @@ func (s *Server) handleNodeAdd(raw json.RawMessage) (any, error) {
 
 // handleNodeRemove is node.add's inverse for GUI deletes: stop the node (full
 // runtime cleanup), drop it and every link touching it from the loaded doc,
-// stop those links' relays, release its console port, and rebuild the bridge
-// plan so the remaining wiring stays consistent.
+// detach those links' fabric bridges, release its console port, and refresh the
+// fabric so the remaining wiring stays consistent.
 func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
 	var args protocol.NodeArgs
 	if err := decode(raw, &args); err != nil {
@@ -699,8 +623,10 @@ func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
 	s.consolePorts.Release(nr.consolePort)
 	delete(ll.nodes, args.Node)
 
+	fabricOK := fabricNodes(ll.doc)
 	kept := ll.doc.Links[:0]
-	for _, l := range ll.doc.Links {
+	for i := range ll.doc.Links {
+		l := &ll.doc.Links[i]
 		touches := false
 		for _, ep := range l.Endpoints {
 			if ep.Node == args.Node {
@@ -709,9 +635,11 @@ func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
 			}
 		}
 		if touches {
-			_ = s.relays.Stop(l.ID)
+			if isFabricLink(l, fabricOK) {
+				s.detachFabricLink(ll, l)
+			}
 		} else {
-			kept = append(kept, l)
+			kept = append(kept, *l)
 		}
 	}
 	ll.doc.Links = kept
@@ -722,9 +650,7 @@ func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
 		}
 	}
 	ll.doc.Nodes = nodes
-	if err := s.rebuildBridgePlan(ll); err != nil {
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
+	s.refreshFabric(ll)
 	s.emit(protocol.EventNodeState, protocol.NodeStateData{Node: args.Node, State: "stopped"})
 	return protocol.NodeArgs{LabID: ll.doc.ID, Node: args.Node}, nil
 }
@@ -768,10 +694,9 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 
-	// Keep the LOADED doc in sync (upsert by link id): the bridge plan, NAT/VPCS
-	// port lookups and future rebuilds all derive from ll.doc.Links, so a link
-	// that only lived in the GUI's copy never got relay ports — a NAT or VPCS
-	// connected mid-session couldn't carry traffic until the next lab.load.
+	// Keep the LOADED doc in sync (upsert by link id): the fabric and future
+	// refreshes all derive from ll.doc.Links, so a link that only lived in the
+	// GUI's copy would never be wired until the next lab.load.
 	replaced := false
 	for i := range ll.doc.Links {
 		if ll.doc.Links[i].ID == args.Link.ID {
@@ -784,88 +709,19 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 		ll.doc.Links = append(ll.doc.Links, args.Link)
 	}
 
-	// Fabric IOL<->IOL link: the HOT-CONNECT path. Every IOL interface already has
-	// its own static tap (created at boot, topology-independent NETMAP), so wiring
-	// this link is a pure runtime bridge-attach that never touches a running IOL —
-	// no relay, no rebuild-driven port churn, no restart. Recompute the plan (so a
-	// newly reconnected interface gets/keeps its static tap) then ensure the
-	// bridge + attach both taps (both idempotent).
-	if isFabricLink(&args.Link, fabricNodes(ll.doc)) {
-		if err := s.rebuildBridgePlan(ll); err != nil {
-			return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-		}
-		if err := s.startFabric(ll); err != nil {
-			return nil, err
-		}
-		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
-		return protocol.LinkData{Link: args.Link.ID}, nil
-	}
-
-	// Native same-host IOL<->IOL links are realized through the whole-lab
-	// NETMAP, which IOL reads once at boot from the shared lab dir. There is no
-	// runtime relay to start for them: they come up when the NETMAP (written by
-	// prepareLabDir before spawn) already contains the line and both endpoints
-	// are running. A link.add for a native link that wasn't in the NETMAP at
-	// boot needs a restart to take effect; we still report link.up so the GUI
-	// reflects intent.
-	if wiringFor(&args.Link, isIOLMap(ll.doc), ll.doc.CaptureReadyEnabled()) == wiringNative {
-		s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
-		return protocol.LinkData{Link: args.Link.ID}, nil
-	}
-
-	// Bridged link: rebuild the plan so THIS link gets its relay ports/pseudo
-	// instances (deterministic link-id-ordered allocation — unchanged links get
-	// the same ports back, the same mid-session idiom capture.start uses), make
-	// sure iouyap sockets exist for any newly bridged IOL endpoint (no-op for
-	// ones already up; the IOL side still needs a node restart to re-read its
-	// NETMAP), then start (or restart) this link's UDP relay.
-	if err := s.rebuildBridgePlan(ll); err != nil {
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
-	if err := s.startBridges(ll); err != nil {
+	// The HOT-CONNECT path. Every interface already has its own static tap
+	// (created at boot, topology-independent NETMAP), so wiring this link is a
+	// pure runtime bridge-attach that never touches a running node — no relay, no
+	// port churn, no restart. Refresh the fabric (so a newly reconnected interface
+	// gets/keeps its static tap) then ensure the bridge + attach every member's
+	// tap (both idempotent). An unlinked node whose tap isn't up yet is attached
+	// by startFabric.
+	s.refreshFabric(ll)
+	if err := s.startFabric(ll); err != nil {
 		return nil, err
 	}
-	cfg, err := s.relayConfigFor(ll, args.Link.ID)
-	if err != nil {
-		return nil, err
-	}
-	_ = s.relays.Stop(args.Link.ID)
-	if _, err := s.relays.Start(cfg); err != nil {
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
-	// Re-point any already-running nat/mgmt endpoint on this link to the plan's
-	// relay ports. A NAT the GUI auto-started the instant it was dropped (before
-	// its link existed) first bound an EPHEMERAL relay port; without this the new
-	// relay would forward DHCP to the plan port while the endpoint listens on the
-	// stale ephemeral one — the node never gets a lease. Rebind is idempotent, so
-	// this is a no-op for IOL/VPCS endpoints and for a NAT already on-port.
-	s.resyncExtnetPorts(ll, &args.Link)
 	s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})
 	return protocol.LinkData{Link: args.Link.ID}, nil
-}
-
-// resyncExtnetPorts rebinds every running nat/mgmt endpoint that is an endpoint
-// of the given link to the UDP relay ports the CURRENT plan assigns it, so the
-// endpoint's socket always matches the relay forwarding to it. Called after any
-// (re)build of a link's relay (link.add today). Safe to call with a link that
-// has no extnet endpoints — it simply finds none to rebind.
-func (s *Server) resyncExtnetPorts(ll *loadedLab, link *lab.Link) {
-	if ll.bridge == nil {
-		return
-	}
-	for _, ep := range link.Endpoints {
-		nr := ll.get(ep.Node)
-		if nr == nil || nr.extnet == nil {
-			continue
-		}
-		send, listen, ok := ll.bridge.extnetUDPFor(ep.Node)
-		if !ok {
-			continue
-		}
-		if err := nr.extnet.Rebind(send, listen); err != nil {
-			log.Printf("extnet node %d: rebind to relay ports send=%d listen=%d: %v", ep.Node, send, listen, err)
-		}
-	}
 }
 
 func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
@@ -877,15 +733,14 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = s.relays.Stop(args.Link.ID)
-	// If this was a fabric link, detach its taps + delete its bridge (the taps
-	// persist — the interfaces are unconnected again, still tap-ready for a future
-	// hot-connect). Classify from the CURRENT doc before we drop the link.
+	// Detach the fabric link's taps + delete its bridge (the taps persist — the
+	// interfaces are unconnected again, still tap-ready for a future hot-connect).
+	// Classify from the CURRENT doc before we drop the link.
 	if isFabricLink(&args.Link, fabricNodes(ll.doc)) {
 		s.detachFabricLink(ll, &args.Link)
 	}
-	// Mirror the removal into the loaded doc + plan (see handleLinkAdd's upsert)
-	// so the wiring a later start/rebuild derives never resurrects this link.
+	// Mirror the removal into the loaded doc (see handleLinkAdd's upsert) so the
+	// wiring a later start/refresh derives never resurrects this link.
 	kept := ll.doc.Links[:0]
 	for _, l := range ll.doc.Links {
 		if l.ID != args.Link.ID {
@@ -893,35 +748,9 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 		}
 	}
 	ll.doc.Links = kept
-	if err := s.rebuildBridgePlan(ll); err != nil {
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
+	s.refreshFabric(ll)
 	s.emit(protocol.EventLinkDown, protocol.LinkData{Link: args.Link.ID})
 	return protocol.LinkData{Link: args.Link.ID}, nil
-}
-
-// relayConfigFor returns the relay.Config for a BRIDGED link, sourced from the
-// whole-lab bridge plan so the relay's UDP ports match the iouyap netio<->UDP
-// bridges (IOL endpoints) and the VPCS UDP tunnel ports. Native same-host
-// IOL<->IOL links never reach here — they are wired via the whole-lab NETMAP
-// (see wiringFor / netmapFor). The plan carries the pcapng CapturePort for any
-// link with an active capture intent (ll.captures), so the returned config tees
-// automatically when capture is on.
-//
-// The plan is (re)built lazily if absent (e.g. link.add before lab.start) using
-// the current capture intents, so a relay started here always agrees with the
-// pseudo-instance NETMAP and the iouyap bridges.
-func (s *Server) relayConfigFor(ll *loadedLab, linkID int) (relay.Config, error) {
-	if ll.bridge == nil {
-		if err := s.rebuildBridgePlan(ll); err != nil {
-			return relay.Config{}, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-		}
-	}
-	cfg, ok := ll.bridge.relayConfigFor(linkID)
-	if !ok {
-		return relay.Config{}, protocol.Errorf(protocol.CodeBadRequest, "link %d is not a bridged link", linkID)
-	}
-	return cfg, nil
 }
 
 func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
@@ -939,9 +768,9 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 	}
 	// Reuse an already-armed port (doc auto-arm at lab start, or a repeated
 	// capture.start): allocating a fresh one would orphan the old port without
-	// release AND leave GUI/native clients pointing at a dead tee. wasArmed
-	// gates the rollback paths below so a pre-existing port is never released
-	// by a failed re-request.
+	// release AND leave GUI/native clients pointing at a dead capture. wasArmed
+	// gates the rollback path so a pre-existing port is never released by a
+	// failed re-request.
 	ll.mu.Lock()
 	port, wasArmed := ll.captures[link.ID]
 	ll.mu.Unlock()
@@ -953,69 +782,15 @@ func (s *Server) handleCaptureStart(raw json.RawMessage) (any, error) {
 		}
 	}
 
-	// FABRIC link: there is no relay to tee. Capture the link's Linux bridge with
-	// tcpdump and serve it as pcapng on the same port model (the GUI /capture/<id>
-	// path reads ll.captures[link] unchanged). Every fabric link is capturable
-	// live with no node restart — including plain IOL<->IOL, which the relay model
-	// never could.
-	if isFabricLink(link, fabricNodes(ll.doc)) {
-		actual, err := s.startBridgeCapture(ll, link.ID, port)
-		if err != nil {
-			if !wasArmed {
-				s.capturePorts.Release(port)
-			}
-			return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-		}
-		ll.mu.Lock()
-		ll.captures[link.ID] = actual
-		ll.mu.Unlock()
-		s.emit(protocol.EventCaptureStarted, protocol.CaptureData{Link: link.ID, CapturePort: actual})
-		res := protocol.CaptureResult{Link: link.ID, CapturePort: actual}
-		if args.Mode == "file" {
-			res.File = args.File
-		}
-		return res, nil
-	}
-	// Record the capture intent, then rebuild the plan so this link becomes
-	// bridged with a pcapng tee on its relay. NOTE: an IOL<->IOL link that booted
-	// NATIVE (no bridging) only routes through the relay/tee after the affected
-	// IOL nodes RESTART to re-read the NETMAP (now pointing at iouyap
-	// pseudo-instances) — NETMAP is read once at boot. A link that was already
-	// bridged (VPCS, segment) picks up the tee immediately on relay restart.
-	ll.mu.Lock()
-	ll.captures[link.ID] = port
-	ll.mu.Unlock()
-	if err := s.rebuildBridgePlan(ll); err != nil {
-		if !wasArmed {
-			ll.mu.Lock()
-			delete(ll.captures, link.ID)
-			ll.mu.Unlock()
-			s.capturePorts.Release(port)
-		}
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
-	// Restart iouyap bridges so a newly-bridged IOL endpoint's netio socket
-	// exists for when its node restarts (no-op off Linux / for already-bridged
-	// links whose sockets are up).
-	if err := s.startBridges(ll); err != nil {
-		return nil, err
-	}
-	// Re-create the relay with a tee on the capture port.
-	_ = s.relays.Stop(link.ID)
-	cfg, err := s.relayConfigFor(ll, link.ID)
-	if err != nil {
-		return nil, err
-	}
-	r, err := s.relays.Start(cfg)
+	// Capture the link's Linux bridge with tcpdump and serve it as pcapng on the
+	// port model the GUI /capture/<id> path reads (ll.captures[link]). Every link
+	// is capturable live with no node restart.
+	actual, err := s.startBridgeCapture(ll, link.ID, port)
 	if err != nil {
 		if !wasArmed {
 			s.capturePorts.Release(port)
 		}
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
-	actual := port
-	if cp := r.CapturePort(); cp != 0 {
-		actual = cp
 	}
 	ll.mu.Lock()
 	ll.captures[link.ID] = actual
@@ -1044,40 +819,18 @@ func (s *Server) handleCaptureStop(raw json.RawMessage) (any, error) {
 	if ok {
 		s.capturePorts.Release(port)
 	}
-	// FABRIC link: stop its tcpdump/pcapng bridge capture; nothing else to do (no
-	// relay to rebuild).
-	if link := ll.findLink(args.Link); link != nil && isFabricLink(link, fabricNodes(ll.doc)) {
-		s.stopBridgeCapture(ll, args.Link)
-		s.emit(protocol.EventCaptureStopped, protocol.CaptureData{Link: args.Link, CapturePort: port})
-		return protocol.CaptureResult{Link: args.Link, CapturePort: port}, nil
-	}
-	// Rebuild the plan without this link's tee. In capture-ready mode (the
-	// default) an IOL<->IOL link stays bridged, so it simply gets a fresh relay
-	// without the tee below — no restart, and still live-capturable again later.
-	// With capture-ready OFF the link reverts to native (wiringFor flips back
-	// once capture is off); its relay is torn down and traffic returns to native
-	// netio only after the affected nodes restart to re-read the NETMAP.
-	// VPCS/segment links always stay bridged and get a fresh relay without the tee.
-	_ = s.relays.Stop(args.Link)
-	if err := s.rebuildBridgePlan(ll); err != nil {
-		return nil, protocol.Errorf(protocol.CodeBadRequest, "%v", err)
-	}
-	if link := ll.findLink(args.Link); link != nil && wiringFor(link, isIOLMap(ll.doc), ll.doc.CaptureReadyEnabled()) == wiringBridged {
-		if cfg, ok := ll.bridge.relayConfigFor(args.Link); ok {
-			_, _ = s.relays.Start(cfg)
-		}
-	}
+	// Stop the link's tcpdump/pcapng bridge capture; nothing else to do.
+	s.stopBridgeCapture(ll, args.Link)
 	s.emit(protocol.EventCaptureStopped, protocol.CaptureData{Link: args.Link, CapturePort: port})
 	return protocol.CaptureResult{Link: args.Link, CapturePort: port}, nil
 }
 
 // armDocCaptures allocates a capture port for every doc link with
 // capture.enabled that has no runtime capture yet, recording it in ll.captures
-// so the next bridge-plan rebuild gives that link's relay a pcapng tee. Links
-// already armed (capture.start, or a previous lab start) keep their port.
-// Called by startNodes BEFORE rebuildBridgePlan — the whole point is that the
-// plan sees the ports. On allocator exhaustion the newly armed links are rolled
-// back and the start fails.
+// so startFabric can auto-start a bridge capture on it once the link's bridge is
+// up. Links already armed (capture.start, or a previous lab start) keep their
+// port. Called by startNodes BEFORE startFabric. On allocator exhaustion the
+// newly armed links are rolled back and the start fails.
 func (s *Server) armDocCaptures(ll *loadedLab) error {
 	ll.mu.Lock()
 	defer ll.mu.Unlock()
@@ -1105,11 +858,11 @@ func (s *Server) armDocCaptures(ll *loadedLab) error {
 }
 
 // releaseCaptures returns every armed capture port to the allocator and clears
-// the lab's capture bookkeeping. When emitStops is true it also stops each
-// tee'd relay (so the TCP capture port actually frees before the port is
-// reused) and emits capture.stopped per link — the full-lab-stop behaviour.
-// With emitStops false it is the silent cleanup path for a lab being replaced
-// by lab.load (its relays are stopped wholesale by the caller).
+// the lab's capture bookkeeping, and emits capture.stopped per link when
+// emitStops is true (the full-lab-stop behaviour). With emitStops false it is
+// the silent cleanup path for a lab being replaced by lab.load. The bridge
+// captures themselves are stopped by teardownFabric, which every caller runs
+// first.
 func (s *Server) releaseCaptures(ll *loadedLab, emitStops bool) {
 	ll.mu.Lock()
 	captures := make(map[int]int, len(ll.captures))
@@ -1119,9 +872,6 @@ func (s *Server) releaseCaptures(ll *loadedLab, emitStops bool) {
 	ll.captures = make(map[int]int)
 	ll.mu.Unlock()
 	for link, port := range captures {
-		if emitStops {
-			_ = s.relays.Stop(link)
-		}
 		s.capturePorts.Release(port)
 		if emitStops {
 			s.emit(protocol.EventCaptureStopped, protocol.CaptureData{Link: link, CapturePort: port})
@@ -1206,23 +956,13 @@ func intOr(p *int, def int) int {
 	return *p
 }
 
-// netmapFor renders the whole-lab NETMAP: a native IOL<->IOL line for every
-// natively-wired link (see nativeLinkSpecs / wiringFor) PLUS a bridged line for
-// every bridged IOL endpoint (capture/VPCS/segment/cross-host), pointing that
-// interface at the iouyap-owned pseudo-instance from the lab's bridge plan. It
-// is written once, into the shared lab dir, before any IOL node spawns (Linux
-// prepareLabDir). The plan must be built first (prepareLabDir does that); if it
-// is nil (no bridged links, or off-Linux tests), only native lines are emitted.
+// netmapFor renders the whole-lab NETMAP: a static-tap line for every IOL
+// interface, pointing it at its own pseudo-instance/tap whether or not a link
+// exists for it — the topology-independent NETMAP that makes hot-connect work
+// (IOL reads NETMAP once at boot, so a link drawn later must not require a new
+// line). It is written once, into the shared lab dir, before any IOL node spawns
+// (Linux prepareLabDir); the fabric must be refreshed first (prepareLabDir's
+// caller does that).
 func (s *Server) netmapFor(ll *loadedLab) string {
-	var bridged []netmap.BridgedEndpoint
-	if ll.bridge != nil {
-		bridged = ll.bridge.bridgedEndpointsForNetmap()
-	}
-	// Legacy native + iouyap-UDP-bridged lines, PLUS a static-tap line for every
-	// fabric-eligible IOL interface (the static fabric points each such interface
-	// at its own pseudo-instance/tap, whether or not a link exists for it — the
-	// topology-independent NETMAP that makes hot-connect work).
-	legacy := netmap.Build(nativeLinkSpecs(ll.doc), bridged...)
-	static := netmap.BuildStatic(staticNetmapEntries(ll.staticTaps))
-	return legacy + static
+	return netmap.BuildStatic(staticNetmapEntries(ll.staticTaps))
 }
