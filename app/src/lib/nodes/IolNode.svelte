@@ -47,6 +47,7 @@
   class:drop-target={isDropTarget}
   class:linking={isLinkSource}
   class:locked={isLocked}
+  class:stp-root={isStpRoot}
   data-state={state}
   ondblclick={onDblClick}
   role="button"
@@ -214,6 +215,41 @@
   .node.artwork.drop-target .face {
     border-color: var(--accent);
     box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 34%, transparent);
+  }
+  /* WS5b — golden glow around the STP ROOT bridge (in addition to the crown),
+     so the elected root reads at a glance. A gentle pulse draws the eye. Placed
+     after selection/drop rules so it wins when the root is also selected. Both
+     the tiled and the full-bleed artwork face get it (artwork resets box-shadow,
+     so it's re-asserted). --stp-gold is a warm gold that reads on both themes. */
+  .node.stp-root {
+    --stp-gold: #ffcf3f;
+  }
+  .node.stp-root .face,
+  .node.artwork.stp-root .face {
+    border-color: var(--stp-gold);
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--stp-gold) 55%, transparent),
+      0 0 18px 5px color-mix(in oklab, var(--stp-gold) 45%, transparent);
+    animation: stp-root-glow 1.8s ease-in-out infinite;
+  }
+  @keyframes stp-root-glow {
+    0%,
+    100% {
+      box-shadow:
+        0 0 0 3px color-mix(in oklab, var(--stp-gold) 50%, transparent),
+        0 0 14px 3px color-mix(in oklab, var(--stp-gold) 35%, transparent);
+    }
+    50% {
+      box-shadow:
+        0 0 0 3px color-mix(in oklab, var(--stp-gold) 72%, transparent),
+        0 0 26px 9px color-mix(in oklab, var(--stp-gold) 58%, transparent);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .node.stp-root .face,
+    .node.artwork.stp-root .face {
+      animation: none;
+    }
   }
   /* Status LED — now an inline dot at the head of the name chip (was a
      face-corner dot). Same state colors + pulse; the face corner is left to the

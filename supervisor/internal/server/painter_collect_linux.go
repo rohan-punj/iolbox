@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/painter"
@@ -35,29 +36,50 @@ func (s *Server) painterCollect(ctx context.Context, ll *loadedLab, args protoco
 		}
 	}
 
-	for _, id := range ids {
+	// Gather every node CONCURRENTLY, then return the assembled result in ONE
+	// pass so the frontend paints the whole topology collectively instead of a
+	// slow node-by-node dribble. Each node has its OWN console hub, so scraping
+	// them in parallel is safe (no cross-node turn contention) and collapses
+	// N serial console scrapes (~N seconds) into ~one scrape of wall-clock.
+	// Results go into a pre-sized slice by index so order is preserved without
+	// locking; a bounded worker count stops a huge lab from opening hundreds of
+	// console sessions at once.
+	nodes := make([]protocol.PainterNode, len(ids))
+	const maxConcurrent = 16
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	for i, id := range ids {
 		pn := protocol.PainterNode{Node: id}
 
 		// Only IOL nodes have an IOS console to scrape.
 		if dn := ll.findNode(id); dn == nil || dn.Kind != lab.KindIOL {
 			pn.Hint = "node has no IOS console"
-			res.Nodes = append(res.Nodes, pn)
+			nodes[i] = pn
 			continue
 		}
 
 		nr := ll.get(id)
 		if nr == nil || nr.proc == nil {
 			pn.Hint = "node is not running — start the lab to paint live protocol state"
-			res.Nodes = append(res.Nodes, pn)
+			nodes[i] = pn
 			continue
 		}
 		pn.Running = true
 
-		if err := s.collectNode(ctx, ll, id, proto, args.Dest, args.VLAN, &pn); err != nil {
-			pn.Hint = "could not read live protocol state (still converging or console busy)"
-		}
-		res.Nodes = append(res.Nodes, pn)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i, id int, pn protocol.PainterNode) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := s.collectNode(ctx, ll, id, proto, args.Dest, args.VLAN, &pn); err != nil {
+				pn.Hint = "could not read live protocol state (still converging or console busy)"
+			}
+			nodes[i] = pn // distinct index per goroutine -> no lock needed
+		}(i, id, pn)
 	}
+	wg.Wait()
+
+	res.Nodes = nodes
 	return res, nil
 }
 
