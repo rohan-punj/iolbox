@@ -281,8 +281,13 @@ type wsControlClient struct {
 	ws *controlWSClient
 }
 
+// imageRegisterTimeout bounds image.register, which sha256s + scans a
+// multi-hundred-MB IOL image inside the slow QEMU-TCG guest — far longer than
+// the default control-request timeout, so a big image doesn't time out.
+const imageRegisterTimeout = 5 * time.Minute
+
 func (c *wsControlClient) registerImage(guestPath string) error {
-	_, err := c.ws.request("image.register", map[string]string{"path": guestPath})
+	_, err := c.ws.requestTimeout("image.register", map[string]string{"path": guestPath}, imageRegisterTimeout)
 	return err
 }
 

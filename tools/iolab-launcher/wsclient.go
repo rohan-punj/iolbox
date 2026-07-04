@@ -307,6 +307,14 @@ func (c *controlWSClient) Close() error {
 // envelope, ignoring any frame (event or otherwise) whose id doesn't match.
 // Enforces a per-request read deadline.
 func (c *controlWSClient) request(op string, args any) (json.RawMessage, error) {
+	return c.requestTimeout(op, args, c.timeout)
+}
+
+// requestTimeout is request with an explicit per-call read/write deadline.
+// Slow verbs need far more than the default: image.register sha256s and
+// scans a ~300 MB IOL image, and inside the QEMU-TCG guest (emulated CPU)
+// that runs well past the 15s default — see imageRegisterTimeout.
+func (c *controlWSClient) requestTimeout(op string, args any, to time.Duration) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -321,12 +329,12 @@ func (c *controlWSClient) request(op string, args any) (json.RawMessage, error) 
 	if err != nil {
 		return nil, fmt.Errorf("ws request: mask key: %w", err)
 	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(to))
 	if err := writeTextFrame(c.conn, buf, maskKey); err != nil {
 		return nil, fmt.Errorf("ws request: write: %w", err)
 	}
 
-	deadline := time.Now().Add(c.timeout)
+	deadline := time.Now().Add(to)
 	for {
 		_ = c.conn.SetReadDeadline(deadline)
 		opcode, payload, err := readFrame(c.br)
@@ -338,7 +346,7 @@ func (c *controlWSClient) request(op string, args any) (json.RawMessage, error) 
 			// Reply with a pong carrying the same payload, then keep waiting.
 			pongMask, merr := newMaskKey()
 			if merr == nil {
-				_ = c.conn.SetWriteDeadline(time.Now().Add(c.timeout))
+				_ = c.conn.SetWriteDeadline(time.Now().Add(to))
 				_ = writeControlFrame(c.conn, wsOpPong, payload, pongMask)
 			}
 			continue
