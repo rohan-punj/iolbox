@@ -61,11 +61,33 @@ export const PROTO_ORDER: ProtoKey[] = [
   "stp", "cdp", "lldp", "vxlan", "gre", "ipsec", "radius", "tacacs", "dot1q",
 ];
 
+/** Packet-type subtypes per protocol key, mirroring the backend
+ *  ClassifyDetailed subtype vocabulary EXACTLY (see docs/protocol.md
+ *  link.stats protosSubtypeDir). Only keys with a meaningful sub-discriminator
+ *  appear here; a row whose proto isn't listed shows no subtype dropdown.
+ *  `ping` and `icmp` share the ICMP subtype set (both back onto the PING/ICMP
+ *  labels). The strings must match the backend byte-for-byte — they key into
+ *  protosSubtypeDir[label][subtype]. */
+export const SUBTYPES: Partial<Record<ProtoKey, string[]>> = {
+  ping: ["echo-request", "echo-reply", "unreachable", "time-exceeded", "redirect", "other"],
+  icmp: ["echo-request", "echo-reply", "unreachable", "time-exceeded", "redirect", "other"],
+  bgp: ["open", "update", "notification", "keepalive", "route-refresh"],
+  ospf: ["hello", "db-desc", "ls-request", "ls-update", "ls-ack"],
+  eigrp: ["hello", "update", "query", "reply", "request"],
+  arp: ["request", "reply"],
+};
+
 export interface WatcherRow {
   id: string;
   proto: ProtoKey;
   color: string;
+  /** Chosen packet type within the protocol, or "any" (no subtype filter).
+   *  Only meaningful when SUBTYPES[proto] exists. */
+  subtype: string;
 }
+
+/** Sentinel subtype meaning "no subtype filter" (match the whole protocol). */
+export const SUBTYPE_ANY = "any";
 
 /** Four visually-distinct overlay colours (purple/cyan/amber/green) — chosen
  *  to read clearly as dashed strokes over the cable colour and against both
@@ -79,9 +101,12 @@ function newRowId(): string {
 }
 
 /** Shape of one link.stats sample as read by matchFor — the fields the
- *  watcher needs, independent of how labStore stores the rest of the entry. */
+ *  watcher needs, independent of how labStore stores the rest of the entry.
+ *  `protosSubtypeDir` (label → subtype → [ep0,ep1] fps) is consulted only when
+ *  a row picks a specific subtype; "any" rows match off protosDir alone. */
 export interface StatsForMatch {
   protosDir?: Record<string, [number, number]>;
+  protosSubtypeDir?: Record<string, Record<string, [number, number]>>;
 }
 
 export interface RowMatch {
@@ -97,7 +122,7 @@ class WatcherStore {
    *  panelOpen — the user can close the panel while leaving the watch running,
    *  or open the panel to edit rows without redrawing overlays yet. */
   running = $state(false);
-  rows = $state<WatcherRow[]>([{ id: newRowId(), proto: "all", color: PALETTE[0] }]);
+  rows = $state<WatcherRow[]>([{ id: newRowId(), proto: "all", color: PALETTE[0], subtype: SUBTYPE_ANY }]);
 
   get canAddRow(): boolean {
     return this.rows.length < MAX_ROWS;
@@ -113,7 +138,7 @@ class WatcherStore {
 
   addRow() {
     if (!this.canAddRow) return;
-    this.rows = [...this.rows, { id: newRowId(), proto: "all", color: this.nextFreeColor() }];
+    this.rows = [...this.rows, { id: newRowId(), proto: "all", color: this.nextFreeColor(), subtype: SUBTYPE_ANY }];
   }
 
   removeRow(id: string) {
@@ -123,7 +148,19 @@ class WatcherStore {
 
   setProto(id: string, proto: ProtoKey) {
     const row = this.rows.find((r) => r.id === id);
-    if (row) row.proto = proto;
+    if (row) {
+      row.proto = proto;
+      // A stale subtype from the previous protocol would never match — reset to
+      // "any" whenever the protocol changes.
+      row.subtype = SUBTYPE_ANY;
+    }
+  }
+
+  /** Set a row's packet-type subtype filter (or SUBTYPE_ANY). No-op if the
+   *  row's protocol has no subtypes — the dropdown isn't shown in that case. */
+  setSubtype(id: string, subtype: string) {
+    const row = this.rows.find((r) => r.id === id);
+    if (row) row.subtype = subtype;
   }
 
   /** Set a row's overlay colour (native colour-picker input in the panel).
@@ -152,19 +189,41 @@ class WatcherStore {
    *  direction(s). "All traffic" (labels === null) matches as soon as ANY
    *  label carries traffic in that direction — an entry only appears in
    *  protosDir when its fps is nonzero (backend contract), so presence alone
-   *  is enough; no need to re-check the fps values here. */
+   *  is enough; no need to re-check the fps values here.
+   *
+   *  When a row picks a specific packet-type subtype (row.subtype !== "any"),
+   *  the match is drawn from protosSubtypeDir instead: the row matches a
+   *  direction only if one of the row's labels carries THAT subtype in that
+   *  direction. A subtype-filtered row on a sample with no protosSubtypeDir
+   *  (older supervisor, or that subtype simply absent) matches nothing — we
+   *  never silently widen a subtype filter back to the whole protocol. */
   matchFor(stats: StatsForMatch | null | undefined): RowMatch[] {
     if (!stats?.protosDir) return [];
     const dir = stats.protosDir;
+    const subDir = stats.protosSubtypeDir;
     const out: RowMatch[] = [];
     for (const row of this.rows) {
       const spec = LABELS[row.proto].labels;
+      const filterSub = row.subtype !== SUBTYPE_ANY && SUBTYPES[row.proto] !== undefined;
       let dir0 = false;
       let dir1 = false;
-      for (const [label, [f0, f1]] of Object.entries(dir)) {
-        if (spec && !spec.includes(label)) continue;
-        if (f0 > 0) dir0 = true;
-        if (f1 > 0) dir1 = true;
+      if (filterSub) {
+        // Subtype filter: consult protosSubtypeDir[label][subtype] for each of
+        // the row's labels. Absent entry → no match (nonzero-only contract).
+        if (subDir) {
+          for (const label of spec ?? []) {
+            const st = subDir[label]?.[row.subtype];
+            if (!st) continue;
+            if (st[0] > 0) dir0 = true;
+            if (st[1] > 0) dir1 = true;
+          }
+        }
+      } else {
+        for (const [label, [f0, f1]] of Object.entries(dir)) {
+          if (spec && !spec.includes(label)) continue;
+          if (f0 > 0) dir0 = true;
+          if (f1 > 0) dir1 = true;
+        }
       }
       if (dir0 || dir1) out.push({ row, dir0, dir1 });
     }

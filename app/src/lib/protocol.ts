@@ -69,7 +69,10 @@ export interface LogEvent {
  *  capped at 6 by the sender — optional so older supervisors keep working.
  *  `protosDir` is the directional variant: per label, [fps of frames sourced
  *  from the link's doc endpoints[0], fps sourced from endpoints[1]] — nonzero
- *  labels only. Drives the watcher's directional dash overlays. */
+ *  labels only. Drives the watcher's directional dash overlays.
+ *  `protosSubtypeDir` is the same directional breakdown one level deeper:
+ *  label → subtype (e.g. BGP "keepalive", ICMP "echo-request") → [ep0, ep1]
+ *  fps — nonzero only. Lets the watcher filter by packet type. */
 export interface LinkStatsEvent {
   event: "link.stats";
   data: {
@@ -78,6 +81,7 @@ export interface LinkStatsEvent {
     bps: number;
     protos?: Record<string, number>;
     protosDir?: Record<string, [number, number]>;
+    protosSubtypeDir?: Record<string, Record<string, [number, number]>>;
   };
 }
 /** Runtime VM resource utilisation, pushed every ~2s for the host monitor. */

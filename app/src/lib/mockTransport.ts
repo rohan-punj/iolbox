@@ -451,6 +451,11 @@ export class MockTransport implements Transport {
       1: { PING: [1, 1] },
     };
     const DEMO_DIR_DEFAULT: Record<string, [number, number]> = { CDP: [0.1, 0.1], ICMP: [1, 1] };
+    // Per-subtype demo split so the packet-type dropdown is exercisable in dev:
+    // link 1's PING is half echo-request / half echo-reply, one per direction.
+    const DEMO_SUBDIR: Record<number, Record<string, Record<string, [number, number]>>> = {
+      1: { PING: { "echo-request": [1, 0], "echo-reply": [0, 1] } },
+    };
     this.statsTimer = setInterval(() => {
       for (const l of this.lab?.links ?? []) {
         // Links with a scripted demo mix emit even when "native" (the seeded
@@ -472,6 +477,7 @@ export class MockTransport implements Transport {
             bps: Math.round(fps * (64 + Math.random() * 1400)),
             protos,
             protosDir,
+            protosSubtypeDir: DEMO_SUBDIR[l.id],
           },
         } as SupervisorEvent);
       }

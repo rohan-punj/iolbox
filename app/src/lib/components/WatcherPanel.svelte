@@ -3,7 +3,14 @@
   // canvas: up to 4 protocol filter rows (colour + protocol picker) and a
   // Start/Stop toggle. All state lives in watcherStore; FloatingEdge reads the
   // same store to draw the directional overlays, so this panel is pure chrome.
-  import { watcherStore, LABELS, PROTO_ORDER, type ProtoKey } from "../watcherStore.svelte";
+  import {
+    watcherStore,
+    LABELS,
+    PROTO_ORDER,
+    SUBTYPES,
+    SUBTYPE_ANY,
+    type ProtoKey,
+  } from "../watcherStore.svelte";
 
   const rows = $derived(watcherStore.rows);
   const running = $derived(watcherStore.running);
@@ -50,6 +57,7 @@
 
     <div class="wp-body">
       {#each rows as row (row.id)}
+        <div class="wp-row-group">
         <div class="wp-row">
           <!-- Row swatch opens a 16-colour preset popover (plus a native-input
                "custom" cell) anchored right next to it. -->
@@ -97,6 +105,22 @@
               <option value={key}>{LABELS[key].name}</option>
             {/each}
           </select>
+          <!-- Subtype (packet-type) dropdown — only for protocols that have a
+               sub-discriminator (BGP/ICMP/OSPF/EIGRP/ARP). Defaults to "any". -->
+          {#if SUBTYPES[row.proto]}
+            <select
+              class="wp-select wp-subtype"
+              value={row.subtype}
+              aria-label="Packet type"
+              title="Packet type (subtype filter)"
+              onchange={(e) => watcherStore.setSubtype(row.id, (e.currentTarget as HTMLSelectElement).value)}
+            >
+              <option value={SUBTYPE_ANY}>any</option>
+              {#each SUBTYPES[row.proto] ?? [] as st (st)}
+                <option value={st}>{st}</option>
+              {/each}
+            </select>
+          {/if}
           {#if rows.length > 1}
             <button
               class="wp-remove"
@@ -105,6 +129,35 @@
               onclick={() => watcherStore.removeRow(row.id)}
             >✕</button>
           {/if}
+        </div>
+
+        <!-- Flow filters (src IP / dst IP / port). Rendered disabled: the
+             backend `flows` per-tuple counter was deferred, so wiring these
+             would silently no-op. Kept visible to match the reference UI and
+             signal the capability is planned. -->
+        <div class="wp-flow" title="Flow filters coming in a later build">
+          <input
+            class="wp-flow-input"
+            type="text"
+            placeholder="src IP"
+            aria-label="Source IP (coming soon)"
+            disabled
+          />
+          <input
+            class="wp-flow-input"
+            type="text"
+            placeholder="dst IP"
+            aria-label="Destination IP (coming soon)"
+            disabled
+          />
+          <input
+            class="wp-flow-input wp-flow-port"
+            type="text"
+            placeholder="port"
+            aria-label="Port (coming soon)"
+            disabled
+          />
+        </div>
         </div>
       {/each}
 
@@ -178,10 +231,55 @@
     gap: 6px;
     padding: 8px 10px;
   }
+  /* One filter = a protocol/subtype line stacked over its (disabled) flow line;
+     rows separate with a hairline so the pairing reads clearly. */
+  .wp-row-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .wp-row-group + .wp-row-group {
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
   .wp-row {
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+  /* Subtype select is secondary — narrower + slightly dimmer than the protocol
+     picker so the protocol stays the row's primary control. */
+  .wp-select.wp-subtype {
+    flex: 0 1 88px;
+    color: var(--ink-2);
+  }
+  /* Flow filters (src/dst/port), disabled until the backend flow table lands.
+     Aligned under the protocol row, indented past the swatch. */
+  .wp-flow {
+    display: flex;
+    gap: 6px;
+    padding-left: 24px;
+  }
+  .wp-flow-input {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-xs);
+    color: var(--ink);
+    background: var(--bg-1);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 3px 6px;
+  }
+  .wp-flow-port {
+    flex: 0 0 52px;
+  }
+  .wp-flow-input:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    background: var(--bg-2);
+  }
+  .wp-flow-input::placeholder {
+    color: var(--ink-3);
   }
   /* Row swatch: a round dot showing the current colour; clicking toggles the
      preset popover anchored to it. */

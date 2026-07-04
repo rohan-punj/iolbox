@@ -70,13 +70,16 @@ class LabStore {
    *  these to drive the traffic glow; entries older than ~5s are treated stale.
    *  `protos` (Network Watcher) is the optional per-protocol fps breakdown;
    *  `protosDir` the directional one ([from endpoints[0], from endpoints[1]]
-   *  fps per label) that drives the watcher's animated dash overlays. */
+   *  fps per label) that drives the watcher's animated dash overlays.
+   *  `protosSubtypeDir` drills one level deeper — label → subtype → directional
+   *  fps — so the watcher can filter by packet type (e.g. BGP keepalive). */
   linkStats = $state<Record<number, {
     fps: number;
     bps: number;
     ts: number;
     protos?: Record<string, number>;
     protosDir?: Record<string, [number, number]>;
+    protosSubtypeDir?: Record<string, Record<string, [number, number]>>;
   }>>({});
   /** Latest runtime-VM resource sample (host.stats), or null until the first
    *  event. Drives the left-pane host monitor. */
@@ -331,6 +334,7 @@ class LabStore {
             ts: Date.now(),
             protos: evt.data.protos,
             protosDir: evt.data.protosDir,
+            protosSubtypeDir: evt.data.protosSubtypeDir,
           },
         };
         break;
