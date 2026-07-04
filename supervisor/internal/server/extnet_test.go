@@ -72,9 +72,11 @@ func TestStartNatUnsupported(t *testing.T) {
 // like VPCS: it gets relay UDP ports (no pseudo-instance, not marked vpcs), and
 // extnetUDPFor maps send=relay.LocalPort / listen=relay.RemotePort.
 func TestBridgePlanExtnetUDP(t *testing.T) {
+	// capture forces the legacy relay path (a plain p2p link between two fabric
+	// kinds — VPCS and NAT — is on the static-tap fabric now).
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
 		Nodes: []lab.Node{vpcsNode(0), natNode(1)},
-		Links: []lab.Link{{ID: 5, Type: lab.LinkP2P,
+		Links: []lab.Link{{ID: 5, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true},
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "eth0"}, {Node: 1, Interface: "eth0"}}}},
 	}
 	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{}, nil)

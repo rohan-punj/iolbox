@@ -8,6 +8,7 @@ import (
 	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
+	"github.com/rohanpunj/iolab/supervisor/internal/vtap"
 )
 
 // loadedLab holds runtime state for one loaded lab: the document, per-node
@@ -74,6 +75,16 @@ type nodeRuntime struct {
 	// natSubnet is the allocated 172.31.<n>.0/24 index for a nat node (0 until
 	// started / for non-nat nodes), released back to the server on stop.
 	natSubnet int
+
+	// vtap is the running UDP<->tap shim for a FABRIC VPCS node (nil for legacy
+	// VPCS and non-VPCS nodes). VPCS speaks UDP; the shim bridges its UDP tunnel
+	// to a tap that joins the link bridge, so a VPCS on the fabric hot-connects
+	// like an IOL. vtapName is its tap device; vtapPorts is [vpcsBind, shimBind]
+	// (the udp port pair), held so buildSpec can pass them to VPCS's -s/-c and
+	// stop can release them.
+	vtap      *vtap.Shim
+	vtapName  string
+	vtapPorts [2]int
 }
 
 func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
@@ -132,6 +143,13 @@ func (ll *loadedLab) stopAll() {
 	for _, nr := range nodes {
 		if nr.proc != nil {
 			_ = nr.proc.Stop()
+		}
+		if nr.vtap != nil {
+			// Stop the VPCS shim's pump goroutines. The tap device + udp ports are
+			// reclaimed by teardownFabric / stopNode (mirrors extnet, whose subnet
+			// index is likewise released by stopNode not here).
+			_ = nr.vtap.Close()
+			nr.vtap = nil
 		}
 		if nr.extnet != nil {
 			_ = nr.extnet.Close()

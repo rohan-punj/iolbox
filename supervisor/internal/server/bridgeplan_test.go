@@ -92,9 +92,11 @@ func TestBridgePlanCapturedIOLtoIOL(t *testing.T) {
 // bridged (pseudo-instance + iouyap), the VPCS endpoint speaks UDP natively with
 // send=relay.LocalPort / listen=relay.RemotePort.
 func TestBridgePlanVPCStoIOL(t *testing.T) {
+	// capture forces the legacy relay path (a plain p2p VPCS<->IOL link is on the
+	// static-tap fabric now, so it wouldn't appear in the relay plan).
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
 		Nodes: []lab.Node{iolNode(0), vpcsNode(1)},
-		Links: []lab.Link{{ID: 3, Type: lab.LinkP2P,
+		Links: []lab.Link{{ID: 3, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true},
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 1, Interface: "eth0"}}}},
 	}
 	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{}, nil)
@@ -181,9 +183,10 @@ func TestNetmapIncludesBridgedLines(t *testing.T) {
 // restarts: rebuilding the plan releases the previous plan's ports so a second
 // build reuses the same low ports.
 func TestBridgePlanReleasesPortsOnRebuild(t *testing.T) {
+	// capture forces the legacy relay path (see TestBridgePlanVPCStoIOL).
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
 		Nodes: []lab.Node{iolNode(0), vpcsNode(1)},
-		Links: []lab.Link{{ID: 0, Type: lab.LinkP2P,
+		Links: []lab.Link{{ID: 0, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true},
 			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}}},
 	}
 	s := newTestServer()
@@ -219,10 +222,12 @@ func TestBridgePlanReleasesPortsOnRebuild(t *testing.T) {
 func TestStickyAssignmentsAcrossLinkRemoval(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
 		Nodes: []lab.Node{iolNode(0), vpcsNode(1), vpcsNode(2), vpcsNode(3), vpcsNode(4)},
+		// capture forces the legacy relay path (plain p2p VPCS<->IOL is on the
+		// fabric now); sticky assignments still protect that path until P5.
 		Links: []lab.Link{
-			{ID: 0, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
-			{ID: 1, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
-			{ID: 2, Type: lab.LinkP2P, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/2"}, {Node: 3, Interface: "eth0"}}},
+			{ID: 0, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true}, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}},
+			{ID: 1, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true}, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 2, Interface: "eth0"}}},
+			{ID: 2, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true}, Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/2"}, {Node: 3, Interface: "eth0"}}},
 		},
 	}
 	s := newTestServer()
@@ -274,7 +279,7 @@ func TestStickyAssignmentsAcrossLinkRemoval(t *testing.T) {
 		t.Fatal("removed link 1's assignment must be released")
 	}
 	// And a NEW legacy link picks up fresh (recycled) resources without error.
-	ll.doc.Links = append(ll.doc.Links, lab.Link{ID: 9, Type: lab.LinkP2P,
+	ll.doc.Links = append(ll.doc.Links, lab.Link{ID: 9, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true},
 		Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/3"}, {Node: 4, Interface: "eth0"}}})
 	if err := s.rebuildBridgePlan(ll); err != nil {
 		t.Fatal(err)

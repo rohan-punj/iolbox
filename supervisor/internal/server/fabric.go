@@ -2,6 +2,7 @@ package server
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/fabric"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
@@ -36,12 +37,13 @@ func isFabricLink(l *lab.Link, fabricOK map[int]bool) bool {
 }
 
 // fabricNodes returns the set of node ids whose kind is realised by the static-
-// tap fabric: IOL (P1) and NAT (P2). VPCS/mgmt stay on the legacy relay path.
+// tap fabric: IOL (P1), NAT (P2) and VPCS (P3). mgmt stays on the legacy relay
+// path (macvtap, not a bridge tap).
 func fabricNodes(doc *lab.Lab) map[int]bool {
 	out := make(map[int]bool, len(doc.Nodes))
 	for i := range doc.Nodes {
 		switch doc.Nodes[i].Kind {
-		case lab.KindIOL, lab.KindNAT:
+		case lab.KindIOL, lab.KindNAT, lab.KindVPCS:
 			out[doc.Nodes[i].ID] = true
 		}
 	}
@@ -200,6 +202,12 @@ func staticNetmapEntries(taps map[int]map[string]ifaceTap) []netmap.StaticEntry 
 		}
 	}
 	return out
+}
+
+// vtapDevName returns the tap device name for a fabric VPCS node's udp<->tap
+// shim. Bounded to the 15-char IFNAMSIZ limit: "iolvpc" + a few digits fits.
+func vtapDevName(nodeID int) string {
+	return "iolvpc" + strconv.Itoa(nodeID)
 }
 
 // tapForEndpoint looks up the static tap identity for a link endpoint, or false

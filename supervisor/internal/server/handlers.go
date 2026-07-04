@@ -417,6 +417,15 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 			continue
 		}
 
+		// FABRIC VPCS: bring up its udp<->tap shim BEFORE buildSpec, so VPCS is
+		// launched with argv pointing at the shim's ports. A VPCS on a legacy link
+		// (segment/capture) keeps the relay path (nr.vtap stays nil).
+		if docNode.Kind == lab.KindVPCS && !s.nodeOnLegacyLink(ll, docNode.ID) {
+			if err := s.setupVPCSFabric(ll, nr, docNode); err != nil {
+				return nil, err
+			}
+		}
+
 		spec, err := s.buildSpec(ll, docNode, nr)
 		if err != nil {
 			return nil, err
@@ -431,6 +440,14 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		// pty->telnet bridge accepts clients immediately, buffering the live
 		// pty stream. Flip to running and announce the console.
 		nr.machine.To(node.StateRunning)
+		// Attach a fabric VPCS's tap to its link bridge now (its bridge was created
+		// by startFabric before this node started). No-op for IOL / legacy VPCS /
+		// an unlinked VPCS — link.add attaches it then.
+		if nr.vtap != nil {
+			if err := s.attachFabricForNode(ll, id); err != nil {
+				return nil, err
+			}
+		}
 		s.emit(protocol.EventNodeConsole, protocol.NodeConsoleData{Node: id, ConsolePort: nr.consolePort})
 		out.Started = append(out.Started, protocol.StartedNode{
 			Node:        id,
@@ -470,7 +487,7 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	// lets a NAT dropped before its link is drawn still hot-connect). It falls
 	// back to the legacy relay ONLY when it is currently on a legacy link (a
 	// VPCS<->NAT link, until P3 moves VPCS onto the fabric too).
-	bridged := n.Kind == lab.KindNAT && !s.natOnLegacyLink(ll, n.ID)
+	bridged := n.Kind == lab.KindNAT && !s.nodeOnLegacyLink(ll, n.ID)
 	cfg.Bridged = bridged
 	if !bridged && ll.bridge != nil {
 		if send, listen, ok := ll.bridge.extnetUDPFor(n.ID); ok {
@@ -526,11 +543,12 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
 }
 
-// natOnLegacyLink reports whether a node is an endpoint of a current LEGACY
-// (non-fabric) link — e.g. a VPCS<->NAT link. Used to keep such a NAT on the
-// legacy relay data plane; an unlinked NAT or an IOL<->NAT NAT is not "on a
-// legacy link" and so takes the bridge data plane.
-func (s *Server) natOnLegacyLink(ll *loadedLab, nodeID int) bool {
+// nodeOnLegacyLink reports whether a node is an endpoint of a current LEGACY
+// (non-fabric) link — a segment link, a capture link, or a link to an mgmt node.
+// Used to keep a NAT/VPCS on the legacy relay data plane in that case; an
+// unlinked node, or one whose links are all fabric-eligible, takes the bridge
+// data plane (so it can hot-connect).
+func (s *Server) nodeOnLegacyLink(ll *loadedLab, nodeID int) bool {
 	fabricOK := fabricNodes(ll.doc)
 	for i := range ll.doc.Links {
 		l := &ll.doc.Links[i]
@@ -573,9 +591,16 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 		spec.NVRAMKiB = node.NVRAMKiBFor(len(effectiveStartupConfig(n)))
 	case lab.KindVPCS:
 		spec.VPCSCount = 1
-		// Wire the PC's UDP tunnel to the relay if this VPCS is a bridged-link
-		// endpoint in the plan (the IOL side reaches the same relay via iouyap).
-		if ll.bridge != nil {
+		if nr.vtap != nil {
+			// FABRIC VPCS: the PC's UDP tunnel points at its udp<->tap shim, not
+			// the relay. vtapPorts = [vpcsBind, shimBind]: VPCS binds vpcsBind (-s)
+			// and sends to shimBind (-c, the shim's bind port).
+			spec.VPCSUDPLocal = nr.vtapPorts[0]
+			spec.VPCSUDPRemote = nr.vtapPorts[1]
+		} else if ll.bridge != nil {
+			// LEGACY VPCS: wire the PC's UDP tunnel to the relay if it is a
+			// bridged-link endpoint in the plan (IOL side reaches the same relay
+			// via iouyap).
 			if send, listen, ok := ll.bridge.vpcsUDPFor(n.ID); ok {
 				spec.VPCSUDPLocal = listen // VPCS binds the relay's delivery port (-s)
 				spec.VPCSUDPRemote = send  // VPCS sends to the relay's receiving port (-c)
@@ -607,6 +632,10 @@ func (s *Server) stopNode(ll *loadedLab, id int) {
 		nr.proc = nil
 	} else {
 		nr.machine.To(node.StateStopped)
+	}
+	// Fabric VPCS: stop its shim, delete its tap, release its udp ports.
+	if nr.vtap != nil || nr.vtapName != "" {
+		s.teardownVPCS(nr)
 	}
 }
 

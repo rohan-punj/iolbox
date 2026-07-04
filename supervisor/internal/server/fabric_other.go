@@ -13,3 +13,6 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error   { return n
 func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error { return nil }
 func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link)         {}
 func (s *Server) teardownFabric(ll *loadedLab)                        {}
+
+func (s *Server) setupVPCSFabric(ll *loadedLab, nr *nodeRuntime, n *lab.Node) error { return nil }
+func (s *Server) teardownVPCS(nr *nodeRuntime)                                      {}

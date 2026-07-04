@@ -10,6 +10,7 @@ import (
 	"github.com/rohanpunj/iolab/supervisor/internal/iouyap"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolab/supervisor/internal/vtap"
 )
 
 // startFabric realises the static-tap fabric for the current plan, BEFORE any
@@ -92,11 +93,12 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric bridge %s: %v", br, err)
 	}
 	for _, ep := range l.Endpoints {
-		// IOL endpoint: attach its static tap. NAT endpoint: hand the bridge to
-		// its extnet endpoint, which attaches its own tap + moves the gateway/NAT
-		// onto the bridge. A NAT not yet started is skipped here — startExtnetNode
-		// attaches it when it comes up (this whole function is idempotent).
-		if node := ll.findNode(ep.Node); node != nil && node.Kind == lab.KindNAT {
+		node := ll.findNode(ep.Node)
+		switch {
+		case node != nil && node.Kind == lab.KindNAT:
+			// NAT: hand the bridge to its extnet endpoint, which attaches its own
+			// tap + moves the gateway/NAT onto the bridge. A NAT not yet started is
+			// skipped — startExtnetNode attaches it when it comes up (idempotent).
 			nr := ll.get(ep.Node)
 			if nr == nil || nr.extnet == nil {
 				continue
@@ -104,15 +106,26 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 			if err := nr.extnet.AttachBridge(br); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric nat %d attach %s: %v", ep.Node, br, err)
 			}
-			continue
-		}
-		t, ok := tapForEndpoint(ll.staticTaps, ep)
-		if !ok {
-			return protocol.Errorf(protocol.CodeNodeSpawnFailed,
-				"fabric link %d: no static tap for node %d %s", l.ID, ep.Node, ep.Interface)
-		}
-		if err := mgr.Attach(ctx, br, t.tapName); err != nil {
-			return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric attach %s->%s: %v", t.tapName, br, err)
+		case node != nil && node.Kind == lab.KindVPCS:
+			// VPCS: attach its shim's tap. Not-yet-started VPCS is skipped —
+			// startNodes attaches it when it comes up (idempotent).
+			nr := ll.get(ep.Node)
+			if nr == nil || nr.vtap == nil || nr.vtapName == "" {
+				continue
+			}
+			if err := mgr.Attach(ctx, br, nr.vtapName); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric vpcs attach %s->%s: %v", nr.vtapName, br, err)
+			}
+		default:
+			// IOL: attach its static tap.
+			t, ok := tapForEndpoint(ll.staticTaps, ep)
+			if !ok {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed,
+					"fabric link %d: no static tap for node %d %s", l.ID, ep.Node, ep.Interface)
+			}
+			if err := mgr.Attach(ctx, br, t.tapName); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric attach %s->%s: %v", t.tapName, br, err)
+			}
 		}
 	}
 	ll.mu.Lock()
@@ -147,16 +160,22 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	for _, ep := range l.Endpoints {
-		// NAT endpoint: unwire its gateway/NAT + detach its tap via extnet (must
-		// happen while the bridge still exists). IOL endpoint: detach its tap.
-		if node := ll.findNode(ep.Node); node != nil && node.Kind == lab.KindNAT {
+		node := ll.findNode(ep.Node)
+		switch {
+		case node != nil && node.Kind == lab.KindNAT:
+			// NAT: unwire its gateway/NAT + detach its tap via extnet (must happen
+			// while the bridge still exists).
 			if nr := ll.get(ep.Node); nr != nil && nr.extnet != nil {
 				nr.extnet.DetachBridge()
 			}
-			continue
-		}
-		if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
-			_ = mgr.Detach(ctx, t.tapName)
+		case node != nil && node.Kind == lab.KindVPCS:
+			if nr := ll.get(ep.Node); nr != nil && nr.vtapName != "" {
+				_ = mgr.Detach(ctx, nr.vtapName)
+			}
+		default:
+			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+				_ = mgr.Detach(ctx, t.tapName)
+			}
 		}
 	}
 	if br, err := fabric.BridgeName(l.ID); err == nil {
@@ -167,10 +186,70 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 	ll.mu.Unlock()
 }
 
+// setupVPCSFabric brings up a fabric VPCS node's udp<->tap shim BEFORE the VPCS
+// process spawns: it allocates the udp port pair (vpcsBind, shimBind), creates
+// the tap (unbridged) and starts the shim. buildSpec then launches VPCS with -s
+// vpcsBind / -c shimBind; the tap is bridge-attached at link time (hot-connect).
+// Idempotent per node.
+func (s *Server) setupVPCSFabric(ll *loadedLab, nr *nodeRuntime, n *lab.Node) error {
+	if nr.vtap != nil {
+		return nil
+	}
+	vpcsBind, err := s.udpPorts.Next()
+	if err != nil {
+		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "vpcs %d: udp port: %v", n.ID, err)
+	}
+	shimBind, err := s.udpPorts.Next()
+	if err != nil {
+		s.udpPorts.Release(vpcsBind)
+		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "vpcs %d: udp port: %v", n.ID, err)
+	}
+	tapName := vtapDevName(n.ID)
+	mgr := fabric.NewManager()
+	ctx := context.Background()
+	if err := mgr.EnsureTap(ctx, tapName, currentUID()); err != nil {
+		s.udpPorts.Release(vpcsBind)
+		s.udpPorts.Release(shimBind)
+		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "vpcs %d tap %s: %v", n.ID, tapName, err)
+	}
+	shim, err := vtap.Start(tapName, shimBind, vpcsBind)
+	if err != nil {
+		_ = mgr.DeleteTap(ctx, tapName)
+		s.udpPorts.Release(vpcsBind)
+		s.udpPorts.Release(shimBind)
+		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "vpcs %d shim: %v", n.ID, err)
+	}
+	nr.vtap = shim
+	nr.vtapName = tapName
+	nr.vtapPorts = [2]int{vpcsBind, shimBind}
+	return nil
+}
+
+// teardownVPCS stops a fabric VPCS node's shim, deletes its tap and releases its
+// udp ports. Idempotent (nil/zero guards), so stopNode and teardownFabric can
+// both call it.
+func (s *Server) teardownVPCS(nr *nodeRuntime) {
+	if nr.vtap != nil {
+		_ = nr.vtap.Close()
+		nr.vtap = nil
+	}
+	if nr.vtapName != "" {
+		_ = fabric.NewManager().DeleteTap(context.Background(), nr.vtapName)
+		nr.vtapName = ""
+	}
+	if nr.vtapPorts[0] != 0 {
+		s.udpPorts.Release(nr.vtapPorts[0])
+	}
+	if nr.vtapPorts[1] != 0 {
+		s.udpPorts.Release(nr.vtapPorts[1])
+	}
+	nr.vtapPorts = [2]int{}
+}
+
 // teardownFabric closes every netio<->tap iouyap, deletes every fabric bridge,
-// and removes every static tap. Called on full lab teardown (stopBridges), so no
-// fabric kernel objects or pump goroutines leak. Taps/bridges are recreated
-// idempotently on the next start.
+// removes every static tap, and tears down any fabric VPCS shims/taps. Called on
+// full lab teardown (stopBridges), so no fabric kernel objects or pump goroutines
+// leak. Taps/bridges are recreated idempotently on the next start.
 func (s *Server) teardownFabric(ll *loadedLab) {
 	ll.mu.Lock()
 	tbs := ll.tapBridges
@@ -178,6 +257,10 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	links := ll.fabricLinks
 	ll.fabricLinks = make(map[int]bool)
 	taps := ll.staticTaps
+	nodes := make([]*nodeRuntime, 0, len(ll.nodes))
+	for _, nr := range ll.nodes {
+		nodes = append(nodes, nr)
+	}
 	ll.mu.Unlock()
 
 	for _, b := range tbs {
@@ -193,6 +276,11 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	for _, m := range taps {
 		for _, t := range m {
 			_ = mgr.DeleteTap(ctx, t.tapName)
+		}
+	}
+	for _, nr := range nodes {
+		if nr.vtap != nil || nr.vtapName != "" {
+			s.teardownVPCS(nr)
 		}
 	}
 }
