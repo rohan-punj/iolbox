@@ -40,7 +40,7 @@
       convertEol: true,
       fontFamily:
         '"Cascadia Code","JetBrains Mono",ui-monospace,"SF Mono",Consolas,monospace',
-      fontSize: 13,
+      fontSize: consoleUiStore.fontSize,
       lineHeight: 1.25,
       cursorBlink: true,
       theme: termTheme(),
@@ -124,6 +124,19 @@
   $effect(() => {
     void themeStore.current;
     if (term) term.options.theme = termTheme();
+  });
+
+  // Apply the shared console font size live (A-/A+ control) and refit so the
+  // grid reflows to the new cell metrics; re-send NAWS so the node wraps to the
+  // new column count. Runs on every fontSize change, for every open terminal.
+  $effect(() => {
+    const px = consoleUiStore.fontSize;
+    if (!term) return;
+    term.options.fontSize = px;
+    queueMicrotask(() => {
+      fit?.fit();
+      if (term) realConsole?.sendResize(term.cols, term.rows);
+    });
   });
 
   // Collapse the reconnect backoff the moment this node reports running: its

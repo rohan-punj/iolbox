@@ -11,6 +11,28 @@ export type ConsoleMode = "web" | "native";
 const SIDE_KEY = "iolab.console.dockSide";
 const COLOR_KEY = "iolab.console.colorize";
 const MODE_KEY = "iolab.console.mode";
+const FONT_KEY = "iolab.console.fontSize";
+
+/** Console terminal font size bounds + default. 15 (not xterm's tiny default)
+ *  reads comfortably on a HiDPI laptop; the A-/A+ control walks this range. */
+export const FONT_MIN = 9;
+export const FONT_MAX = 24;
+export const FONT_DEFAULT = 15;
+
+function clampFont(n: number): number {
+  if (!Number.isFinite(n)) return FONT_DEFAULT;
+  return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(n)));
+}
+
+function initialFontSize(): number {
+  try {
+    const saved = localStorage.getItem(FONT_KEY);
+    if (saved != null) return clampFont(Number(saved));
+  } catch {
+    /* localStorage may be unavailable */
+  }
+  return FONT_DEFAULT;
+}
 
 function initialSide(): DockSide {
   try {
@@ -44,11 +66,28 @@ class ConsoleUiStore {
   colorize = $state(true);
   /** Global console-open mode (web tab vs native telnet client). Default web. */
   consoleMode = $state<ConsoleMode>("web");
+  /** Terminal font size (px), shared by every console terminal, persisted. */
+  fontSize = $state(FONT_DEFAULT);
 
   constructor() {
     this.dockSide = initialSide();
     this.colorize = initialColorize();
     this.consoleMode = initialMode();
+    this.fontSize = initialFontSize();
+  }
+
+  setFontSize(px: number) {
+    this.fontSize = clampFont(px);
+    try {
+      localStorage.setItem(FONT_KEY, String(this.fontSize));
+    } catch {
+      /* ignore persistence failure */
+    }
+  }
+
+  /** Grow/shrink the console font by delta px (used by the A-/A+ control). */
+  bumpFontSize(delta: number) {
+    this.setFontSize(this.fontSize + delta);
   }
 
   setConsoleMode(mode: ConsoleMode) {

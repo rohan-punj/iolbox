@@ -1,6 +1,6 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
-  import { consoleUiStore } from "../consoleUiStore.svelte";
+  import { consoleUiStore, FONT_MIN, FONT_MAX } from "../consoleUiStore.svelte";
   import ConsoleTerm from "./ConsoleTerm.svelte";
   import CaptureTerm from "./CaptureTerm.svelte";
 
@@ -212,6 +212,22 @@
             {a?.host}:{a?.port}
           </button>
         {/if}
+        <div class="font-ctl" title="Console text size ({consoleUiStore.fontSize}px)">
+          <button
+            class="dock-icon font-btn"
+            title="Smaller console text"
+            aria-label="Decrease console text size"
+            disabled={consoleUiStore.fontSize <= FONT_MIN}
+            onclick={() => consoleUiStore.bumpFontSize(-1)}
+          >A−</button>
+          <button
+            class="dock-icon font-btn"
+            title="Larger console text"
+            aria-label="Increase console text size"
+            disabled={consoleUiStore.fontSize >= FONT_MAX}
+            onclick={() => consoleUiStore.bumpFontSize(1)}
+          >A+</button>
+        </div>
         <button
           class="dock-icon"
           class:on={consoleUiStore.colorize}
@@ -467,6 +483,22 @@
   .dock-icon:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+  /* A-/A+ console font-size control: a tight pair of text buttons. */
+  .font-ctl {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+  }
+  .font-btn {
+    font: 600 11px/1 ui-monospace, monospace;
+    min-width: 20px;
+  }
+  .font-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+    background: none;
+    color: var(--text-tertiary);
   }
   .dock-icon.on {
     color: var(--accent);
