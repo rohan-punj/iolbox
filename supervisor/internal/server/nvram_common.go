@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 )
 
 // nvramFilename returns the NVRAM filename IOL reads/writes in its cwd for the

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/image"
+	"github.com/rohanpunj/iolbox/supervisor/internal/image"
 )
 
 // The image registry (s.images) is in-memory only, so a supervisor restart or

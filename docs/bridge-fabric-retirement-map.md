@@ -5,10 +5,10 @@ design) and `docs/architecture.md` (the current UDP-tunnel design being
 replaced). This document is the file+line-anchored inventory the migration
 design's "~44 touchpoints" estimate refers to, produced by reading the actual
 `internal/relay`, `internal/iouyap`, `internal/netmap`, `internal/extnet`, and
-`internal/server` packages as they exist today (repo `iolab`, no branch info
+`internal/server` packages as they exist today (repo `iolbox`, no branch info
 available — read-only pass, not committed).
 
-All paths below are relative to `J:\Claude code\iolab\supervisor\` unless
+All paths below are relative to `J:\Claude code\iolbox\supervisor\` unless
 stated otherwise.
 
 ---

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 )
 
 // labBridge is one running netio<->tap iouyap bridge tracked in a lab's

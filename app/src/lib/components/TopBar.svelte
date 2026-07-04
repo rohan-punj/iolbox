@@ -57,7 +57,7 @@
   }
   const safeName = () => (labStore.lab.name || "lab").replace(/[^\w.-]+/g, "_");
 
-  // Export the current doc as a downloadable .yml file (iolab's native format).
+  // Export the current doc as a downloadable .yml file (iolbox's native format).
   function exportYaml() {
     download(labToYaml($state.snapshot(labStore.lab)), `${safeName()}.yml`, "text/yaml");
   }
@@ -80,7 +80,7 @@
         if (!confirm("The current lab hasn't been saved. Discard it and import this file?")) return;
       }
       // A YAML file is either a containerlab topology (has a top-level
-      // `topology:` key) or a native iolab lab; JSON is a legacy iolab lab.
+      // `topology:` key) or a native iolbox lab; JSON is a legacy iolbox lab.
       const isJson = text.trimStart().startsWith("{");
       const parsed = isJson ? null : (yamlLoad(text) as Record<string, unknown> | null);
       if (parsed && typeof parsed === "object" && "topology" in parsed) {

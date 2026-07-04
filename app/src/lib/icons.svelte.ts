@@ -239,7 +239,7 @@ export function registerCustomIcon(opts: {
 /**
  * Import an icon file. In the desktop (Tauri) build this calls the `import_icon`
  * command, which persists the file into the per-user library
- * (%APPDATA%\iolab\icons) and returns { key, href }. In the browser/mock build
+ * (%APPDATA%\iolbox\icons) and returns { key, href }. In the browser/mock build
  * (or if the command is unavailable) it falls back to reading the File into a
  * data URL and registering it in-memory.
  *
@@ -269,7 +269,7 @@ export async function importIconFromFile(file: File): Promise<string | null> {
     return res.key;
   } catch {
     // TODO(desktop): implement the `import_icon` Tauri command in src-tauri so
-    // custom icons persist to %APPDATA%\iolab\icons across sessions. Until then
+    // custom icons persist to %APPDATA%\iolbox\icons across sessions. Until then
     // this in-memory browser fallback keeps the feature fully functional in dev.
     const href = await readFileAsDataUrl(file);
     return registerCustomIcon({ name: file.name, kind, href });

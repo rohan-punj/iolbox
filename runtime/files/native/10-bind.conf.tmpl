@@ -1,4 +1,4 @@
-# Drop-in for /etc/systemd/system/iolab-supervisor.service.d/10-bind.conf
+# Drop-in for /etc/systemd/system/iolbox-supervisor.service.d/10-bind.conf
 #
 # Installed by install.sh (never hand-edit the stock unit file shipped in
 # this tarball — see runtime/README.md's WSL/VMware equivalent for why the
@@ -12,14 +12,14 @@
 # the base unit's ExecStart= is NOT replaced automatically by a drop-in,
 # it would otherwise just append.
 [Service]
-EnvironmentFile=/etc/iolab/bind.env
+EnvironmentFile=/etc/iolbox/bind.env
 ExecStart=
-ExecStart=/opt/iolab/supervisor \
+ExecStart=/opt/iolbox/supervisor \
     -control-addr 127.0.0.1:4000 \
-    -ws-addr ${IOLAB_WS_ADDR} \
-    -console-bind ${IOLAB_CONSOLE_BIND} \
-    -capture-bind ${IOLAB_CAPTURE_BIND} \
-    -image-dir /opt/iolab/images \
-    -run-dir /opt/iolab/run \
-    -labs-dir /opt/iolab/labs \
-    -iourc /opt/iolab/iourc
+    -ws-addr ${IOLBOX_WS_ADDR} \
+    -console-bind ${IOLBOX_CONSOLE_BIND} \
+    -capture-bind ${IOLBOX_CAPTURE_BIND} \
+    -image-dir /opt/iolbox/images \
+    -run-dir /opt/iolbox/run \
+    -labs-dir /opt/iolbox/labs \
+    -iourc /opt/iolbox/iourc

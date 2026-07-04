@@ -1,7 +1,7 @@
-# iolab — Docker runtime
+# iolbox — Docker runtime
 
 This packages the same Linux runtime described in `runtime/README.md` (IOL +
-VPCS control plane, the `iolab` supervisor binary, the embedded GUI) as a
+VPCS control plane, the `iolbox` supervisor binary, the embedded GUI) as a
 **container** instead of a WSL2 import tarball or VMware appliance. One
 supervisor binary, one package set, one behavior contract across all three —
 see `runtime/README.md`'s "one rootfs, two packages" framing; this is a third
@@ -27,7 +27,7 @@ Then build the image. **Build context must be the repo root**, not
 `docker/`, because the Dockerfile copies that binary in:
 
 ```sh
-docker build -f docker/Dockerfile -t iolab:latest .
+docker build -f docker/Dockerfile -t iolbox:latest .
 ```
 
 or, using the compose file (which already sets `context: ..` for you):
@@ -51,14 +51,14 @@ docker compose -f docker/compose.yml up -d
 ## Sizing (vCPU / RAM)
 
 `docker/compose.yml` sets `cpus:` and `mem_limit:` from `docker/.env`
-(`IOLAB_VCPUS=4`, `IOLAB_RAM_MB=4096`), which mirrors `runtime/resources.env`
-— the single source of truth for vCPU/RAM across every iolab deployment
+(`IOLBOX_VCPUS=4`, `IOLBOX_RAM_MB=4096`), which mirrors `runtime/resources.env`
+— the single source of truth for vCPU/RAM across every iolbox deployment
 target (VMware appliance, OVA, Proxmox LXC, this container, and the Windows
 QEMU launcher's own flag defaults). Edit `docker/.env` and re-run `docker
 compose -f docker/compose.yml up -d` to change it, or override inline:
 
 ```sh
-IOLAB_RAM_MB=8192 docker compose -f docker/compose.yml up -d
+IOLBOX_RAM_MB=8192 docker compose -f docker/compose.yml up -d
 ```
 
 Native telnet consoles and Wireshark capture tees also work directly against
@@ -81,7 +81,7 @@ docker compose -f docker/compose.yml up -d --build
 ```
 
 Uploaded images, saved labs, and the generated iourc license all live in
-named volumes (`iolab-images`, `iolab-labs`, `iolab-state`) that are **not**
+named volumes (`iolbox-images`, `iolbox-labs`, `iolbox-state`) that are **not**
 removed by `up -d --build` or a plain `docker compose down` — only
 `docker compose down -v` deletes them. Recreating the container (new image,
 new container ID) is safe and expected on every upgrade.
@@ -107,7 +107,7 @@ to a public interface.
 IOL's license file (`iourc`) is generated once, at first container start,
 from this instance's `hostid` + hostname (`supervisor -gen-iourc`, the same
 mechanism `runtime/files/firstboot-iourc.sh` uses for the appliance). The
-container's `hostname` is pinned to `iolab` in `compose.yml`, but hostname
+container's `hostname` is pinned to `iolbox` in `compose.yml`, but hostname
 alone is **not enough** to keep the license stable:
 
 `supervisor`'s `hostID()` (see `supervisor/cmd/supervisor/main.go`) shells
@@ -122,7 +122,7 @@ simple restart-in-place, which keeps the same network namespace and would
 have hidden this).
 
 `docker/entrypoint.sh` handles this by generating `/etc/hostid` once and
-persisting **both** it and the resulting `iourc` in the `iolab-state` named
+persisting **both** it and the resulting `iourc` in the `iolbox-state` named
 volume, restoring them on every subsequent start before the supervisor
 runs. This was chosen over baking a hostid into the image itself, because a
 baked-in value would be identical across every user's container — the exact
@@ -173,12 +173,12 @@ diffs, both documented again inline in `docker/Dockerfile`:
   kickoff doc / a Linux builder with internet access):
   - `docker compose -f docker/compose.yml config` — validates YAML +
     interpolation.
-  - `docker build -f docker/Dockerfile -t iolab:test .` — real build,
+  - `docker build -f docker/Dockerfile -t iolbox:test .` — real build,
     including the vpcs source build and the i386 multiarch apt install.
   - `hadolint docker/Dockerfile`, if available.
   - Boot smoke: bring the container up, confirm the GUI loads at `:4001`,
     start an IOL node with an uploaded image, confirm the console (telnet)
     and a capture tee (Wireshark) both work host-side, then
     `docker compose down && up` and confirm the same iourc/hostid persist
-    (`docker exec iolab cat /etc/hostid` before/after; the license should
+    (`docker exec iolbox cat /etc/hostid` before/after; the license should
     keep validating without a re-flag from IOL).

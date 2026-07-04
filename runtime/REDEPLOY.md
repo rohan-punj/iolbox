@@ -27,12 +27,12 @@ Fastest path for an already-running container: push just the binary and
 restart the unit — no re-`pct create` needed.
 
 ```sh
-pct push <vmid> supervisor/bin/supervisor-linux-amd64 /opt/iolab/supervisor
-pct exec <vmid> -- chmod 0755 /opt/iolab/supervisor
-pct exec <vmid> -- systemctl restart iolab-supervisor
+pct push <vmid> supervisor/bin/supervisor-linux-amd64 /opt/iolbox/supervisor
+pct exec <vmid> -- chmod 0755 /opt/iolbox/supervisor
+pct exec <vmid> -- systemctl restart iolbox-supervisor
 ```
 
-To deploy a fresh container from a new template instead (new `iolab-ct-<ver>.tar.zst`
+To deploy a fresh container from a new template instead (new `iolbox-ct-<ver>.tar.zst`
 built by `pack-lxc.sh`), follow `runtime/files/lxc/pct-create.md` (same doc is
 also shipped as `SETUP.md` inside the tarball).
 
@@ -47,17 +47,17 @@ sudo ./pack-vmware.sh --build-dir build --version <ver>
 ```
 
 Then on the Windows side: stop the running VM, replace the old
-`iolab-appliance.vmdk`/`.vmx` (or the versioned pair) in place, and:
+`iolbox-appliance.vmdk`/`.vmx` (or the versioned pair) in place, and:
 
 ```powershell
-vmrun -T ws start "iolab-appliance.vmx" nogui
-vmrun -T ws getGuestIPAddress "iolab-appliance.vmx" -wait
+vmrun -T ws start "iolbox-appliance.vmx" nogui
+vmrun -T ws getGuestIPAddress "iolbox-appliance.vmx" -wait
 # browse to http://<that-ip>:4001 and check the Palette footer's build line
 ```
 
 ## QEMU (bundled `qemu-system-x86_64.exe` via `tools/iolab-launcher`)
 
-The launcher attaches `iolab-disk.qcow2` with `snapshot=on` — every launch
+The launcher attaches `iolbox-disk.qcow2` with `snapshot=on` — every launch
 already boots a fresh copy-on-write overlay off the golden disk, so a
 redeploy is just: rebuild the qcow2, drop it next to the launcher exe, and
 relaunch (no persistent guest state to worry about; `images\` and `labs\`
@@ -66,33 +66,33 @@ live on the Windows side and are unaffected).
 ```sh
 cd runtime
 sudo ./pack-qemu.sh --build-dir build --version <ver>
-# -> runtime/build/iolab-disk-<ver>.qcow2
+# -> runtime/build/iolbox-disk-<ver>.qcow2
 ```
 
 ```powershell
 # stop the launcher if running, then:
-copy runtime\build\iolab-disk-<ver>.qcow2 <launcher-dir>\iolab-disk.qcow2
-# relaunch iolab-launcher.exe
+copy runtime\build\iolbox-disk-<ver>.qcow2 <launcher-dir>\iolbox-disk.qcow2
+# relaunch iolbox-launcher.exe
 ```
 
 ## Native (systemd Linux server / cloud VM / on-prem hypervisor guest)
 
-`install.sh` (from `pack-native.sh`'s `iolab-server-<ver>.tar.gz`) is meant
+`install.sh` (from `pack-native.sh`'s `iolbox-server-<ver>.tar.gz`) is meant
 to also be re-run for an upgrade — it copies binaries/units in place and
 (re)starts the service:
 
 ```sh
-tar xzf iolab-server-<ver>.tar.gz
-cd iolab-server-<ver>
+tar xzf iolbox-server-<ver>.tar.gz
+cd iolbox-server-<ver>
 sudo ./install.sh            # same flags as the original install (--bind etc.)
 ```
 
 Or, for a binary-only bump without re-running the full installer:
 
 ```sh
-sudo cp supervisor/bin/supervisor-linux-amd64 /opt/iolab/supervisor
-sudo chmod 0755 /opt/iolab/supervisor
-sudo systemctl restart iolab-supervisor
+sudo cp supervisor/bin/supervisor-linux-amd64 /opt/iolbox/supervisor
+sudo chmod 0755 /opt/iolbox/supervisor
+sudo systemctl restart iolbox-supervisor
 ```
 
 ## OVA (any OVF-importing hypervisor)
@@ -102,7 +102,7 @@ Like VMware, this is a whole-disk artifact — rebuild and re-import:
 ```sh
 cd runtime
 sudo ./pack-ova.sh --build-dir build --version <ver>
-# -> runtime/build/iolab-appliance-<ver>.ova
+# -> runtime/build/iolbox-appliance-<ver>.ova
 ```
 
 Import the new OVA in place of the old one (exact steps are
@@ -111,13 +111,13 @@ importer).
 
 ## WSL2
 
-`iolab-rootfs.tar` (from `pack-wsl.sh` / `build-all.sh`) becomes a WSL distro
+`iolbox-rootfs.tar` (from `pack-wsl.sh` / `build-all.sh`) becomes a WSL distro
 via `wsl --import`. To redeploy, unregister the old distro and re-import:
 
 ```powershell
-wsl --unregister iolab
-wsl --import iolab C:\Users\<you>\iolab-wsl runtime\build\iolab-rootfs.tar
-wsl -d iolab -- systemctl status iolab-supervisor.service
+wsl --unregister iolbox
+wsl --import iolbox C:\Users\<you>\iolbox-wsl runtime\build\iolbox-rootfs.tar
+wsl -d iolbox -- systemctl status iolbox-supervisor.service
 # browse to http://localhost:4001
 ```
 
@@ -131,7 +131,7 @@ recreate the container — see `docker/README.md` for the full build story:
 
 ```sh
 bash build-release.sh   # repo root, refreshes supervisor/bin/supervisor-linux-amd64
-docker build -f docker/Dockerfile -t iolab:latest .
+docker build -f docker/Dockerfile -t iolbox:latest .
 docker compose -f docker/compose.yml up -d --build
 ```
 

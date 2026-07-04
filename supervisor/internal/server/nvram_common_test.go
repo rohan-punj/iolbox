@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 )
 
 func TestSanitizeHostname(t *testing.T) {

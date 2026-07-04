@@ -3,7 +3,7 @@
 //! TODO(P1):
 //! - `detect()`: locate `vmrun.exe` on PATH / default install dirs (Workstation
 //!   and Player), report which.
-//! - `provision()`: import `iolab-appliance.vmx` (+ .vmdk) into a known
+//! - `provision()`: import `iolbox-appliance.vmx` (+ .vmdk) into a known
 //!   location if not already present.
 //! - `start()`/`stop()`: `vmrun -T ws start <vmx> nogui` / `stop`; Player
 //!   uses `-T player`.
@@ -11,7 +11,7 @@
 //!   fixed control port, OR a fixed host-only IP baked into the appliance
 //!   (mirrors the PNetLab gate VM pattern already in production use).
 //! - `sync_image()`: `vmrun CopyFileFromHostToGuest`, or a shared folder
-//!   mounted at `/opt/iolab/images` inside the appliance.
+//!   mounted at `/opt/iolbox/images` inside the appliance.
 
 use super::{Detection, Endpoint, Health, Provider, ProviderError, ProviderId, ProviderResult};
 use std::path::Path;

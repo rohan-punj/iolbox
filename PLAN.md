@@ -1,4 +1,4 @@
-# iolab — build plan
+# iolbox — build plan
 
 A lightweight, Windows-native lab tool for Cisco **IOL** images and **VPCS**.
 Draw topologies, console into nodes, live-capture links in Wireshark. No login,
@@ -67,7 +67,7 @@ a ranked choice with plain-English tradeoffs. Never fails cryptically.
 
 ## Image loading & swapping (explicit requirement)
 
-- **Image library**: a Windows-side folder (default `%APPDATA%\iolab\images`) the
+- **Image library**: a Windows-side folder (default `%APPDATA%\iolbox\images`) the
   GUI manages. "Add image" = copy a `.bin`/`.iol` in; the app fingerprints it
   (sha256), sniffs L2-vs-L3 and arch (i386/x86_64), and records metadata.
 - Images are synced into the runtime on demand (shared folder / `vmrun` copy / scp).
@@ -109,7 +109,7 @@ IOL packs can be converted with a small script for an instant content library.
 ## Repo layout
 
 ```
-iolab/
+iolbox/
   PLAN.md  README.md  LICENSE  .gitignore
   docs/         architecture.md · lab-schema.md · protocol.md · providers.md
   contracts/    lab.schema.json  (canonical JSON Schema; codegen source of truth)

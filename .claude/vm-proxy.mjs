@@ -1,6 +1,6 @@
-// Plain TCP proxy: localhost:4174 -> 192.168.111.152:4001 (iolab runtime VM).
+// Plain TCP proxy: localhost:4174 -> 192.168.111.152:4001 (iolbox runtime VM).
 // HTTP and WebSocket both pass through untouched, so the preview tools can
-// drive the REAL VM-served GUI. Used by the "iolab-vm-proxy" launch config.
+// drive the REAL VM-served GUI. Used by the "iolbox-vm-proxy" launch config.
 import net from "node:net";
 
 const LISTEN = 4174;
@@ -20,5 +20,5 @@ const server = net.createServer((client) => {
 });
 
 server.listen(LISTEN, "127.0.0.1", () => {
-  console.log(`iolab vm proxy: 127.0.0.1:${LISTEN} -> ${TARGET_HOST}:${TARGET_PORT}`);
+  console.log(`iolbox vm proxy: 127.0.0.1:${LISTEN} -> ${TARGET_HOST}:${TARGET_PORT}`);
 });

@@ -1,4 +1,4 @@
-// iolab's native lab format is YAML — far more readable than JSON, especially
+// iolbox's native lab format is YAML — far more readable than JSON, especially
 // for multi-line startup-configs (rendered as literal block scalars). This
 // module is the single YAML boundary: the durable store, export/import, and the
 // launcher folder all carry lab documents as YAML text; only the runtime

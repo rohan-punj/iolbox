@@ -1,14 +1,14 @@
-# iolab Docker image — Linux runtime for IOL/VPCS, packaged as a container
+# iolbox Docker image — Linux runtime for IOL/VPCS, packaged as a container
 # instead of the WSL2/VMware appliance. Same rootfs contract as
 # runtime/build-rootfs.sh (see runtime/README.md): one supervisor binary,
-# one vpcs binary, the same package set, the same /opt/iolab layout. A bug
+# one vpcs binary, the same package set, the same /opt/iolbox layout. A bug
 # fixed in the appliance should be fixed here too, and vice versa.
 #
 # BUILD CONTEXT: repo root (not docker/), because stage 2 COPYs the
 # prebuilt supervisor binary from ../supervisor/bin/. Build it first:
 #
 #   bash build-release.sh
-#   docker build -f docker/Dockerfile -t iolab:latest .
+#   docker build -f docker/Dockerfile -t iolbox:latest .
 #
 # (docker-compose.yml sets `context: ..` / `dockerfile: docker/Dockerfile`
 # for you — see docker/compose.yml and docker/README.md.)
@@ -89,33 +89,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl3:i386 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-# /opt/iolab layout — identical to build-rootfs.sh Stage 4.
-RUN install -d -m 0755 /opt/iolab/images \
-    && install -d -m 0755 /opt/iolab/run \
-    && install -d -m 0755 /opt/iolab/labs
+# /opt/iolbox layout — identical to build-rootfs.sh Stage 4.
+RUN install -d -m 0755 /opt/iolbox/images \
+    && install -d -m 0755 /opt/iolbox/run \
+    && install -d -m 0755 /opt/iolbox/labs
 
 # Supervisor binary — built by build-release.sh at the repo root BEFORE
 # `docker build` runs (this Dockerfile does not build Go/Node itself; see
 # the header comment and docker/README.md). Context is the repo root, so
 # this path is relative to that.
-COPY supervisor/bin/supervisor-linux-amd64 /opt/iolab/supervisor
+COPY supervisor/bin/supervisor-linux-amd64 /opt/iolbox/supervisor
 
 # vpcs, built in stage 1.
-COPY --from=vpcs-builder /out/vpcs /opt/iolab/vpcs
+COPY --from=vpcs-builder /out/vpcs /opt/iolbox/vpcs
 
 # entrypoint + prestart cleanup + firstboot-iourc-equivalent logic (all one
 # script here — see entrypoint.sh's header for why this isn't split into
 # separate systemd-style units the way the appliance is).
-COPY docker/entrypoint.sh /opt/iolab/entrypoint.sh
+COPY docker/entrypoint.sh /opt/iolbox/entrypoint.sh
 
-RUN chmod 0755 /opt/iolab/supervisor /opt/iolab/vpcs /opt/iolab/entrypoint.sh
+RUN chmod 0755 /opt/iolbox/supervisor /opt/iolbox/vpcs /opt/iolbox/entrypoint.sh
 
-# /opt/iolab on PATH: the supervisor spawns `vpcs` by bare name (see
-# supervisor/internal/node/argv.go), matching iolab-supervisor.service's
+# /opt/iolbox on PATH: the supervisor spawns `vpcs` by bare name (see
+# supervisor/internal/node/argv.go), matching iolbox-supervisor.service's
 # Environment=PATH= line exactly.
-ENV PATH="/opt/iolab:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PATH="/opt/iolbox:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-WORKDIR /opt/iolab
+WORKDIR /opt/iolbox
 
 # 4001 = ws-addr (GUI + WS control/console bridge). Console (9000-9999) and
 # capture (5500-6499) ranges are published via compose.yml, not baked in as
@@ -124,4 +124,4 @@ WORKDIR /opt/iolab
 # supervisor/internal/server/server.go — see docker/README.md).
 EXPOSE 4001
 
-ENTRYPOINT ["/opt/iolab/entrypoint.sh"]
+ENTRYPOINT ["/opt/iolbox/entrypoint.sh"]

@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-// wslBackend imports (first run) and starts the `iolab` WSL2 distro, then waits
+// wslBackend imports (first run) and starts the `iolbox` WSL2 distro, then waits
 // for the supervisor's GUI on 127.0.0.1:4001 (WSL2 localhost forwarding makes
 // the guest's :4001 reachable directly).
 //
 // NOTE on systemd: runtime/files/wsl.conf sets [boot] systemd=true, so the
-// rootfs boots real systemd and iolab-supervisor.service autostarts. The
+// rootfs boots real systemd and iolbox-supervisor.service autostarts. The
 // PRIMARY start path here is therefore just "start the distro and wait for
 // :4001". A direct-exec fallback (mirroring the unit's ExecStart) is retained
 // in case a distro was imported from a tar WITHOUT systemd=true.
@@ -24,11 +24,11 @@ type wslBackend struct {
 	opts   launchOpts
 	ranges portRanges
 
-	distro     string // "iolab"
+	distro     string // "iolbox"
 	installDir string
 }
 
-const wslDistroName = "iolab"
+const wslDistroName = "iolbox"
 
 // run brings the WSL2 backend up end to end.
 func (w *wslBackend) run(ctx context.Context) error {
@@ -50,8 +50,8 @@ func (w *wslBackend) run(ctx context.Context) error {
 		logf("WSL distro %q already present.", w.distro)
 	}
 
-	// Start the distro. With systemd=true, `wsl -d iolab true` triggers boot;
-	// systemd then starts iolab-supervisor.service. If the distro lacks
+	// Start the distro. With systemd=true, `wsl -d iolbox true` triggers boot;
+	// systemd then starts iolbox-supervisor.service. If the distro lacks
 	// systemd, fall back to launching the supervisor directly.
 	if err := w.startDistro(ctx); err != nil {
 		return err
@@ -62,7 +62,7 @@ func (w *wslBackend) run(ctx context.Context) error {
 	up := waitForGUI(ctx, "127.0.0.1", w.ranges.guiPort, w.opts.bootTimeout, nil)
 	if !up {
 		return fmt.Errorf("timed out waiting for the GUI on %s.\n"+
-			"  Check the supervisor: wsl -d %s -- systemctl status iolab-supervisor.service\n"+
+			"  Check the supervisor: wsl -d %s -- systemctl status iolbox-supervisor.service\n"+
 			"  (if systemctl reports 'System has not been booted with systemd', the imported\n"+
 			"   tar lacks [boot] systemd=true in /etc/wsl.conf — see the orchestrator note)",
 			guiURL, w.distro)
@@ -97,7 +97,7 @@ func (w *wslBackend) run(ctx context.Context) error {
 	if !w.opts.noBrowser {
 		openBrowser(guiURL)
 	}
-	logf("iolab is running in WSL2. Press Ctrl-C to shut down cleanly.")
+	logf("iolbox is running in WSL2. Press Ctrl-C to shut down cleanly.")
 
 	<-ctx.Done()
 	logf("Shutdown requested — terminating the %q distro...", w.distro)
@@ -110,7 +110,7 @@ func (w *wslBackend) run(ctx context.Context) error {
 	return nil
 }
 
-// distroExists checks `wsl --list --quiet` for the iolab distro. wsl.exe emits
+// distroExists checks `wsl --list --quiet` for the iolbox distro. wsl.exe emits
 // UTF-16LE, so we strip NULs before matching.
 func (w *wslBackend) distroExists() (bool, error) {
 	out, err := exec.Command("wsl.exe", "--list", "--quiet").Output()
@@ -126,9 +126,9 @@ func (w *wslBackend) distroExists() (bool, error) {
 	return false, nil
 }
 
-// importDistro runs `wsl --import iolab <dir> <tar> --version 2`. The tar is
-// iolab-rootfs.tar located next to the exe (or via --wsl-tar). The install dir
-// defaults to %LOCALAPPDATA%\iolab.
+// importDistro runs `wsl --import iolbox <dir> <tar> --version 2`. The tar is
+// iolbox-rootfs.tar located next to the exe (or via --wsl-tar). The install dir
+// defaults to %LOCALAPPDATA%\iolbox.
 func (w *wslBackend) importDistro() error {
 	tar := w.opts.wslTar
 	if tar == "" {
@@ -136,11 +136,11 @@ func (w *wslBackend) importDistro() error {
 		if err != nil {
 			return err
 		}
-		tar = filepath.Join(filepath.Dir(exePath), "iolab-rootfs.tar")
+		tar = filepath.Join(filepath.Dir(exePath), "iolbox-rootfs.tar")
 	}
 	if _, err := os.Stat(tar); err != nil {
 		return fmt.Errorf("WSL rootfs tarball not found at %s\n"+
-			"  (download iolab-rootfs.tar from the release and place it next to the launcher,\n"+
+			"  (download iolbox-rootfs.tar from the release and place it next to the launcher,\n"+
 			"   or pass --wsl-tar <path>): %w", tar, err)
 	}
 
@@ -150,7 +150,7 @@ func (w *wslBackend) importDistro() error {
 		if la == "" {
 			la = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
 		}
-		dir = filepath.Join(la, "iolab")
+		dir = filepath.Join(la, "iolbox")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("cannot create WSL install dir %s: %w", dir, err)
@@ -170,7 +170,7 @@ func (w *wslBackend) importDistro() error {
 
 // startDistro boots the distro. With systemd=true a no-op command triggers the
 // boot; we then verify systemd is actually PID 1. If not, we exec the
-// supervisor directly (detached) mirroring iolab-supervisor.service's ExecStart.
+// supervisor directly (detached) mirroring iolbox-supervisor.service's ExecStart.
 func (w *wslBackend) startDistro(ctx context.Context) error {
 	logf("Starting WSL distro %q ...", w.distro)
 	// Trigger boot (also validates the distro runs at all).
@@ -180,7 +180,7 @@ func (w *wslBackend) startDistro(ctx context.Context) error {
 	}
 
 	if w.systemdActive() {
-		logf("  systemd is PID 1 — iolab-supervisor.service will autostart.")
+		logf("  systemd is PID 1 — iolbox-supervisor.service will autostart.")
 		return nil
 	}
 
@@ -203,23 +203,23 @@ func (w *wslBackend) systemdActive() bool {
 
 // startSupervisorDirect runs the firstboot iourc step (if the iourc is absent)
 // then launches the supervisor detached, mirroring
-// runtime/files/iolab-supervisor.service ExecStart exactly.
+// runtime/files/iolbox-supervisor.service ExecStart exactly.
 func (w *wslBackend) startSupervisorDirect(_ context.Context) error {
 	// Mirror the unit: prestart clean, firstboot iourc (idempotent), then the
 	// supervisor with the full proven flag set, nohup'd so wsl.exe returns.
 	script := strings.Join([]string{
-		`[ -x /opt/iolab/prestart-clean.sh ] && /opt/iolab/prestart-clean.sh || true`,
-		`if [ ! -f /opt/iolab/iourc ] && [ -x /opt/iolab/firstboot-iourc.sh ]; then /opt/iolab/firstboot-iourc.sh || true; fi`,
-		`nohup /opt/iolab/supervisor ` +
+		`[ -x /opt/iolbox/prestart-clean.sh ] && /opt/iolbox/prestart-clean.sh || true`,
+		`if [ ! -f /opt/iolbox/iourc ] && [ -x /opt/iolbox/firstboot-iourc.sh ]; then /opt/iolbox/firstboot-iourc.sh || true; fi`,
+		`nohup /opt/iolbox/supervisor ` +
 			`-control-addr 127.0.0.1:4000 ` +
 			`-ws-addr 0.0.0.0:4001 ` +
 			`-console-bind 0.0.0.0 ` +
 			`-capture-bind 0.0.0.0 ` +
-			`-image-dir /opt/iolab/images ` +
-			`-run-dir /opt/iolab/run ` +
-			`-labs-dir /opt/iolab/labs ` +
-			`-iourc /opt/iolab/iourc ` +
-			`>/var/log/iolab-supervisor.log 2>&1 &`,
+			`-image-dir /opt/iolbox/images ` +
+			`-run-dir /opt/iolbox/run ` +
+			`-labs-dir /opt/iolbox/labs ` +
+			`-iourc /opt/iolbox/iourc ` +
+			`>/var/log/iolbox-supervisor.log 2>&1 &`,
 	}, "; ")
 
 	cmd := exec.Command("wsl.exe", "-d", w.distro, "-u", "root", "--", "sh", "-c", script)

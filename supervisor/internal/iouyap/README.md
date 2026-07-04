@@ -124,7 +124,7 @@ lands. The expected shape:
    p2p/segment pair — capture requested, one endpoint is VPCS, or the peer is
    on another host.
 2. **Allocate a `NetioPath`** for the IOL-side socket (e.g.
-   `/opt/iolab/run/link-<id>-<nodeid>-<iface>.sock`) and put that path — not
+   `/opt/iolbox/run/link-<id>-<nodeid>-<iface>.sock`) and put that path — not
    the peer node id/port — into the IOL endpoint's NETMAP entry, per
    `internal/netmap`'s `Build`. (`netmap.Build` today only emits IOL↔IOL
    `nodeid:port` lines for direct p2p; a bridged endpoint instead needs IOL's

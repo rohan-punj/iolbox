@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "iolab",
+  "productName": "iolbox",
   "version": "0.1.0",
-  "identifier": "com.iolab.app",
+  "identifier": "com.iolbox.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "iolab",
+        "title": "iolbox",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,

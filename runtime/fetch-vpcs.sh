@@ -13,7 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 VPCS_SRC_DIR="$BUILD_DIR/vpcs-src"
 VPCS_OUT_DIR="$BUILD_DIR/vpcs"
 
@@ -23,7 +23,7 @@ VPCS_OUT_DIR="$BUILD_DIR/vpcs"
 # from). Pinned to a tag, not a moving branch, for reproducibility — bump
 # deliberately, not silently on every rebuild.
 VPCS_REPO="${VPCS_REPO:-https://github.com/GNS3/vpcs.git}"
-VPCS_REF="${VPCS_REF:-v0.8.3}"   # same release the proven iolab-rt vpcs was built from
+VPCS_REF="${VPCS_REF:-v0.8.3}"   # same release the proven iolbox-rt vpcs was built from
 
 echo "== fetch-vpcs: $VPCS_REPO @ $VPCS_REF =="
 
@@ -71,7 +71,7 @@ git -C "$VPCS_SRC_DIR" checkout "$VPCS_REF"
 
 # The GNS3/vpcs source layout builds from src/ with per-OS makefiles —
 # src/Makefile.linux is the one that matters here (PROVEN: the reference
-# iolab-rt VM's vpcs was built exactly this way). Some tags also carry a
+# iolbox-rt VM's vpcs was built exactly this way). Some tags also carry a
 # plain src/Makefile or src/unix/Makefile.linux; try the proven layout
 # first, then the historical ones.
 pushd "$VPCS_SRC_DIR/src" >/dev/null

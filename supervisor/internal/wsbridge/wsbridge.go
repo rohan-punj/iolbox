@@ -1,6 +1,6 @@
 // Package wsbridge exposes the supervisor's control protocol and node
 // consoles over WebSocket so browsers (which cannot open a raw TCP socket or
-// telnet) can drive iolab: the desktop app's embedded webview and a plain
+// telnet) can drive iolbox: the desktop app's embedded webview and a plain
 // browser build both talk to the same two endpoints.
 //
 //   - GET /control          — NDJSON control protocol, one JSON object per
@@ -46,9 +46,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/telnet"
-	"github.com/rohanpunj/iolab/supervisor/internal/web"
-	"github.com/rohanpunj/iolab/supervisor/internal/ws"
+	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/web"
+	"github.com/rohanpunj/iolbox/supervisor/internal/ws"
 )
 
 // ControlServer is the subset of *server.Server the bridge needs: the shared

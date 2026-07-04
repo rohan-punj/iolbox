@@ -396,7 +396,7 @@ class LabStore {
 
   /** localStorage key holding the id of the lab the user last had open, so a
    *  refresh reopens it rather than the throwaway seed. */
-  private static LAST_LAB_KEY = "iolab.lastActiveLab";
+  private static LAST_LAB_KEY = "iolbox.lastActiveLab";
 
   private rememberActiveLab(id: string) {
     try {

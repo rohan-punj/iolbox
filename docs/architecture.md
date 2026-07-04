@@ -2,7 +2,7 @@
 
 The high-level layer diagram is in [PLAN.md](../PLAN.md). This doc explains the one
 genuinely load-bearing idea: **how nodes are wired without bridges, tap devices, or
-root** — which is what lets iolab stay tiny.
+root** — which is what lets iolbox stay tiny.
 
 ## Everything is a UDP tunnel
 
@@ -62,7 +62,7 @@ the frames are ours to copy because they were never in the kernel to begin with.
 
 ## Why this stays lightweight
 
-| Heavy thing PNetLab/EVE need | Why iolab doesn't |
+| Heavy thing PNetLab/EVE need | Why iolbox doesn't |
 |---|---|
 | tun/tap + Linux bridges per link | links are UDP tunnels in userspace |
 | root daemon / setuid helpers | no kernel networking to privilege |

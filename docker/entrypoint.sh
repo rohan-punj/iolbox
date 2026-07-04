@@ -1,10 +1,10 @@
 #!/bin/sh
-# /opt/iolab/entrypoint.sh — container PID 1 for the iolab runtime image.
+# /opt/iolbox/entrypoint.sh — container PID 1 for the iolbox runtime image.
 #
 # No systemd here (see Dockerfile's stage-2 comment: systemd/udev are
 # dropped from the image). This script folds together what the appliance
-# splits across three systemd units — iolab-firstboot-iourc.service,
-# prestart-clean.sh (ExecStartPre), and iolab-supervisor.service's
+# splits across three systemd units — iolbox-firstboot-iourc.service,
+# prestart-clean.sh (ExecStartPre), and iolbox-supervisor.service's
 # ExecStart — into one linear sequence, then execs the supervisor as PID 1
 # so it receives SIGTERM directly from `docker stop` (no init-shim needed;
 # the supervisor's own signal.NotifyContext(os.Interrupt, syscall.SIGTERM)
@@ -15,8 +15,8 @@
 # POSIX sh on purpose, matching firstboot-iourc.sh / prestart-clean.sh.
 set -eu
 
-IOLAB_DIR="/opt/iolab"
-SUPERVISOR="$IOLAB_DIR/supervisor"
+IOLBOX_DIR="/opt/iolbox"
+SUPERVISOR="$IOLBOX_DIR/supervisor"
 
 # ---------------------------------------------------------------------------
 # Step 1: prestart cleanup (adapted from runtime/files/prestart-clean.sh).
@@ -26,9 +26,9 @@ SUPERVISOR="$IOLAB_DIR/supervisor"
 # across a *reboot* of the same long-lived VM. A container is different:
 # `docker run`/`docker compose up` normally starts in a fresh network
 # namespace every time, so tap devices can't leak in from a previous
-# container's crash — but /opt/iolab/run CAN be non-empty on restart if it
+# container's crash — but /opt/iolbox/run CAN be non-empty on restart if it
 # lives in a named volume (docker/compose.yml gives it one, alongside
-# images/ and labs/, so an `iolab upgrade` — pull a new image, recreate the
+# images/ and labs/, so an `iolbox upgrade` — pull a new image, recreate the
 # container — doesn't lose uploaded images or lab documents). Sweep it the
 # same way the appliance does, for the same reason: run/ is scratch state,
 # never the durable store.
@@ -38,10 +38,10 @@ for i in 0 1 2 3 4 5 6 7 8 9 10 11; do
     ip tuntap del dev "iolnat$i" mode tap 2>/dev/null || true
     ip link delete "iolmgmt$i" type macvtap 2>/dev/null || true
 done
-rm -rf "$IOLAB_DIR/run"/* 2>/dev/null || true
+rm -rf "$IOLBOX_DIR/run"/* 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Step 2: sysctl (adapted from runtime/files/99-iolab.conf).
+# Step 2: sysctl (adapted from runtime/files/99-iolbox.conf).
 #
 # The appliance ships these as a /etc/sysctl.d drop-in applied at VM BOOT
 # time by systemd-sysctl, before any container/namespace concept exists.
@@ -83,7 +83,7 @@ sysctl -w net.ipv6.conf.all.accept_redirects=0 >/dev/null 2>&1 || true
 #
 # DECISION: generate /etc/hostid ONCE and persist it in the same named
 # volume as iourc/images/labs (docker/compose.yml mounts
-# /opt/iolab/state), so both the hostid seed AND the derived iourc survive
+# /opt/iolbox/state), so both the hostid seed AND the derived iourc survive
 # `docker compose down && up`, image upgrades, and host reboots — not just
 # in-place restarts. This is the "bake/persist /etc/hostid in a volume"
 # option from the two choices considered; baking it into the image itself
@@ -92,7 +92,7 @@ sysctl -w net.ipv6.conf.all.accept_redirects=0 >/dev/null 2>&1 || true
 # firstboot-iourc.sh already documents for never baking iourc at build
 # time — the same argument applies one layer down to hostid).
 # ---------------------------------------------------------------------------
-STATE_DIR="$IOLAB_DIR/state"
+STATE_DIR="$IOLBOX_DIR/state"
 install -d -m 0755 "$STATE_DIR"
 
 if [ ! -f /etc/hostid ]; then
@@ -116,7 +116,7 @@ else
     cp /etc/hostid "$STATE_DIR/hostid" 2>/dev/null || true
 fi
 
-IOURC_FILE="$IOLAB_DIR/iourc"
+IOURC_FILE="$IOLBOX_DIR/iourc"
 if [ -f "$STATE_DIR/iourc" ]; then
     cp "$STATE_DIR/iourc" "$IOURC_FILE"
 elif [ -x "$SUPERVISOR" ]; then
@@ -137,7 +137,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 4: exec the supervisor (PID 1 replaces itself — signals pass
 # straight through to `docker stop`). Flag set mirrors
-# runtime/files/iolab-supervisor.service's ExecStart= exactly: 0.0.0.0
+# runtime/files/iolbox-supervisor.service's ExecStart= exactly: 0.0.0.0
 # binds for ws/console/capture, because here — same as the appliance's
 # reasoning — the isolation boundary is one layer out (the appliance's
 # hypervisor NIC there, the container network namespace + published ports
@@ -149,7 +149,7 @@ exec "$SUPERVISOR" \
     -ws-addr 0.0.0.0:4001 \
     -console-bind 0.0.0.0 \
     -capture-bind 0.0.0.0 \
-    -image-dir "$IOLAB_DIR/images" \
-    -run-dir "$IOLAB_DIR/run" \
-    -labs-dir "$IOLAB_DIR/labs" \
+    -image-dir "$IOLBOX_DIR/images" \
+    -run-dir "$IOLBOX_DIR/run" \
+    -labs-dir "$IOLBOX_DIR/labs" \
     -iourc "$IOURC_FILE"

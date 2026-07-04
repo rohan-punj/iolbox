@@ -34,7 +34,7 @@ set -euo pipefail
 # Parameters (all overridable via flags; see usage() below)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 ROOTFS_DIR="$BUILD_DIR/rootfs"
 
 SUITE="bookworm"                              # Debian 12, pinned deliberately (see "Reproducibility" below)
@@ -250,26 +250,26 @@ rm -rf "$ROOTFS_DIR"/var/lib/apt/lists/*
 rm -rf "$ROOTFS_DIR"/var/cache/apt/*
 
 # ---------------------------------------------------------------------------
-# Stage 4: /opt/iolab layout + binaries
+# Stage 4: /opt/iolbox layout + binaries
 # ---------------------------------------------------------------------------
-echo "== build-rootfs: installing /opt/iolab =="
+echo "== build-rootfs: installing /opt/iolbox =="
 
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab"
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab/images"   # image library (uploads land here via the GUI's POST /api/upload/image)
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab/run"      # supervisor's per-lab runtime state (sockets, NETMAPs, nvram scratch) — swept by prestart-clean.sh
-install -d -m 0755 "$ROOTFS_DIR/opt/iolab/labs"     # durable lab-document store (-labs-dir); seed labs materialize here on first connect when empty
+install -d -m 0755 "$ROOTFS_DIR/opt/iolbox"
+install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/images"   # image library (uploads land here via the GUI's POST /api/upload/image)
+install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/run"      # supervisor's per-lab runtime state (sockets, NETMAPs, nvram scratch) — swept by prestart-clean.sh
+install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/labs"     # durable lab-document store (-labs-dir); seed labs materialize here on first connect when empty
 
-# The supervisor binary itself (a FILE at /opt/iolab/supervisor).
-install -m 0755 -o root -g root "$SUPERVISOR_BIN" "$ROOTFS_DIR/opt/iolab/supervisor"
+# The supervisor binary itself (a FILE at /opt/iolbox/supervisor).
+install -m 0755 -o root -g root "$SUPERVISOR_BIN" "$ROOTFS_DIR/opt/iolbox/supervisor"
 
-# VPCS binary. Lives in /opt/iolab, which the supervisor unit puts on PATH
+# VPCS binary. Lives in /opt/iolbox, which the supervisor unit puts on PATH
 # (the supervisor spawns `vpcs` by bare name).
-install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolab/vpcs"
+install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolbox/vpcs"
 
 # firstboot-iourc.sh (called by both the systemd unit and the non-systemd
 # fallback init script) + the ExecStartPre stale-state sweep.
-install -m 0755 -o root -g root "$SCRIPT_DIR/files/firstboot-iourc.sh" "$ROOTFS_DIR/opt/iolab/firstboot-iourc.sh"
-install -m 0755 -o root -g root "$SCRIPT_DIR/files/prestart-clean.sh" "$ROOTFS_DIR/opt/iolab/prestart-clean.sh"
+install -m 0755 -o root -g root "$SCRIPT_DIR/files/firstboot-iourc.sh" "$ROOTFS_DIR/opt/iolbox/firstboot-iourc.sh"
+install -m 0755 -o root -g root "$SCRIPT_DIR/files/prestart-clean.sh" "$ROOTFS_DIR/opt/iolbox/prestart-clean.sh"
 
 # ---------------------------------------------------------------------------
 # Stage 5: systemd units + non-systemd fallback
@@ -277,10 +277,10 @@ install -m 0755 -o root -g root "$SCRIPT_DIR/files/prestart-clean.sh" "$ROOTFS_D
 echo "== build-rootfs: installing systemd units =="
 
 install -d -m 0755 "$ROOTFS_DIR/etc/systemd/system"
-install -m 0644 "$SCRIPT_DIR/files/iolab-supervisor.service" \
-    "$ROOTFS_DIR/etc/systemd/system/iolab-supervisor.service"
-install -m 0644 "$SCRIPT_DIR/files/iolab-firstboot-iourc.service" \
-    "$ROOTFS_DIR/etc/systemd/system/iolab-firstboot-iourc.service"
+install -m 0644 "$SCRIPT_DIR/files/iolbox-supervisor.service" \
+    "$ROOTFS_DIR/etc/systemd/system/iolbox-supervisor.service"
+install -m 0644 "$SCRIPT_DIR/files/iolbox-firstboot-iourc.service" \
+    "$ROOTFS_DIR/etc/systemd/system/iolbox-firstboot-iourc.service"
 
 # Enable both units the "offline" way (symlink into multi-user.target.wants)
 # rather than `systemctl enable` inside a chroot, which needs a running
@@ -289,15 +289,15 @@ install -m 0644 "$SCRIPT_DIR/files/iolab-firstboot-iourc.service" \
 # [Install] section is just WantedBy=multi-user.target (true for both units
 # here), so this is equivalent, not a shortcut.
 install -d -m 0755 "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants"
-ln -sf ../iolab-supervisor.service \
-    "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolab-supervisor.service"
-ln -sf ../iolab-firstboot-iourc.service \
-    "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolab-firstboot-iourc.service"
+ln -sf ../iolbox-supervisor.service \
+    "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-supervisor.service"
+ln -sf ../iolbox-firstboot-iourc.service \
+    "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-firstboot-iourc.service"
 
-# Non-systemd fallback (see files/iolab-init.sh's header comment for when
+# Non-systemd fallback (see files/iolbox-init.sh's header comment for when
 # this path is actually used — qemu-compat initrd boots, mainly).
 install -d -m 0755 "$ROOTFS_DIR/etc/init.d"
-install -m 0755 "$SCRIPT_DIR/files/iolab-init.sh" "$ROOTFS_DIR/etc/init.d/iolab"
+install -m 0755 "$SCRIPT_DIR/files/iolbox-init.sh" "$ROOTFS_DIR/etc/init.d/iolbox"
 
 # ---------------------------------------------------------------------------
 # Stage 6: networking — generic DHCP fallback; the VMware artifact gets
@@ -317,18 +317,18 @@ chroot "$ROOTFS_DIR" systemctl enable systemd-networkd.service 2>/dev/null || \
         "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
 
 install -d -m 0755 "$ROOTFS_DIR/etc/sysctl.d"
-install -m 0644 "$SCRIPT_DIR/files/99-iolab.conf" "$ROOTFS_DIR/etc/sysctl.d/99-iolab.conf"
+install -m 0644 "$SCRIPT_DIR/files/99-iolbox.conf" "$ROOTFS_DIR/etc/sysctl.d/99-iolbox.conf"
 
 # Static hostname — deliberately boring/fixed, and LOAD-BEARING twice
-# over: (1) the firstboot iourc is keyed "iolab = <key>" and IOL checks it
-# against the running hostname; (2) the "127.0.1.1 iolab" /etc/hosts line
+# over: (1) the firstboot iourc is keyed "iolbox = <key>" and IOL checks it
+# against the running hostname; (2) the "127.0.1.1 iolbox" /etc/hosts line
 # below keeps the hostname resolvable — without it every `sudo` call
 # (extnet runs several per NAT-node start) stalls ~10s on DNS resolution.
 # Hard-won on the reference VM; do not remove either side.
-echo "iolab" > "$ROOTFS_DIR/etc/hostname"
+echo "iolbox" > "$ROOTFS_DIR/etc/hostname"
 cat > "$ROOTFS_DIR/etc/hosts" <<'EOF'
 127.0.0.1   localhost
-127.0.1.1   iolab
+127.0.1.1   iolbox
 ::1         localhost ip6-localhost ip6-loopback
 EOF
 
@@ -349,14 +349,14 @@ install -m 0644 "$SCRIPT_DIR/files/wsl.conf" "$ROOTFS_DIR/etc/wsl.conf"
 # ---------------------------------------------------------------------------
 # Stage 8: root console login for support/debugging
 # ---------------------------------------------------------------------------
-# root password = "iolab": fixed, documented, deliberately non-secret.
+# root password = "iolbox": fixed, documented, deliberately non-secret.
 # There is NO sshd in this image, so the only way to use it is the VM
-# console (VMware window / `wsl -d iolab`) — acceptable for a single-
+# console (VMware window / `wsl -d iolbox`) — acceptable for a single-
 # tenant lab appliance, and it turns "the appliance won't come up" from a
 # black box into a normal login-and-look debugging session. (The scaffold
 # originally locked root entirely; that made the first real boot failure
 # undiagnosable without rebuilding the image.)
-echo 'root:iolab' | chroot "$ROOTFS_DIR" chpasswd
+echo 'root:iolbox' | chroot "$ROOTFS_DIR" chpasswd
 
 echo "== build-rootfs: done =="
 du -sh "$ROOTFS_DIR" 2>/dev/null || true

@@ -114,7 +114,7 @@ func (u *stubUploader) upload(filename string, body io.Reader) (string, error) {
 	if u.pathFor != nil {
 		return u.pathFor(filename), nil
 	}
-	return "/opt/iolab/images/" + filename, nil
+	return "/opt/iolbox/images/" + filename, nil
 }
 
 // ---- helpers ---------------------------------------------------------
@@ -198,8 +198,8 @@ func TestSyncImagesIn_RegisterFailureIsNonFatal(t *testing.T) {
 
 	cc := newStubControlClient()
 	up := newStubUploader()
-	up.pathFor = func(filename string) string { return "/opt/iolab/images/" + filename }
-	cc.registerErrFor["/opt/iolab/images/a.bin"] = errors.New("registry rejected")
+	up.pathFor = func(filename string) string { return "/opt/iolbox/images/" + filename }
+	cc.registerErrFor["/opt/iolbox/images/a.bin"] = errors.New("registry rejected")
 	fs := newFolderSync(dir, t.TempDir(), cc, up)
 
 	count, err := fs.syncImagesIn()
@@ -209,7 +209,7 @@ func TestSyncImagesIn_RegisterFailureIsNonFatal(t *testing.T) {
 	if count != 1 {
 		t.Errorf("count = %d, want 1", count)
 	}
-	if len(cc.registered) != 1 || cc.registered[0] != "/opt/iolab/images/b.bin" {
+	if len(cc.registered) != 1 || cc.registered[0] != "/opt/iolbox/images/b.bin" {
 		t.Errorf("registered = %v, want only b.bin's path", cc.registered)
 	}
 }

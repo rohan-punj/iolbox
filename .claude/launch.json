@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "iolab-frontend",
+      "name": "iolbox-frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
@@ -13,7 +13,7 @@
       "port": 1420
     },
     {
-      "name": "iolab-prod-preview",
+      "name": "iolbox-prod-preview",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
@@ -28,7 +28,7 @@
       "port": 4173
     },
     {
-      "name": "iolab-vm-proxy",
+      "name": "iolbox-vm-proxy",
       "runtimeExecutable": "node",
       "runtimeArgs": [
         ".claude/vm-proxy.mjs"

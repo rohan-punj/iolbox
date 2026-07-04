@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 import-pack.py — convert an existing PNetLab/EVE-NG IOL lab (.unl) into an
-iolab lab JSON document (contracts/lab.schema.json, version 1).
+iolbox lab JSON document (contracts/lab.schema.json, version 1).
 
-Scope: IOL nodes and VPCS only (iolab's supported kinds). Other node types are
+Scope: IOL nodes and VPCS only (iolbox's supported kinds). Other node types are
 skipped with a warning. This gives an instant content library from the existing
 CCNA/CCNP/CCIE IOL packs.
 
@@ -13,9 +13,9 @@ Usage:
 Notes / mapping:
 - .unl is XML (<lab><topology><nodes><node .../></nodes><networks/> ...).
 - IOL node.type == "iol"; image is the node's "image" attr (kept as filename
-  fallback; the iolab image library resolves the real content id on import).
+  fallback; the iolbox image library resolves the real content id on import).
 - Interface addressing: EVE/PNet IOL uses Ethernet/Serial adapter+port; we emit
-  iolab interface strings like "e0/0"/"s1/2". NETMAP id = node.id in both models.
+  iolbox interface strings like "e0/0"/"s1/2". NETMAP id = node.id in both models.
 - Links: EVE models a link as a <network> that node <interface>s reference by
   network_id. Two interfaces on one network => p2p; >2 => segment.
 - Positions (left/top) map to canvas x/y.

@@ -5,7 +5,7 @@ package server
 import (
 	"context"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // runShow is a stub off Linux — IOL nodes only spawn under the Linux pty console

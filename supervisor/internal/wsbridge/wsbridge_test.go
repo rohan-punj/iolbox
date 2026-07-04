@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
-	"github.com/rohanpunj/iolab/supervisor/internal/server"
-	"github.com/rohanpunj/iolab/supervisor/internal/ws"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/server"
+	"github.com/rohanpunj/iolbox/supervisor/internal/ws"
 )
 
 // --- minimal WebSocket client helpers (test-only; mirrors internal/ws framing) ---

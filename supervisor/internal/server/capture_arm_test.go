@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // captureLabJSON is a 2-node lab (IOL + VPCS) whose single link has

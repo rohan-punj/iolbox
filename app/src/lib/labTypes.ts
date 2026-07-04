@@ -1,5 +1,5 @@
 // Hand-derived from contracts/lab.schema.json — keep property names in exact sync.
-// Source of truth: J:\Claude code\iolab\contracts\lab.schema.json
+// Source of truth: J:\Claude code\iolbox\contracts\lab.schema.json
 
 import { uuid } from "./uid";
 

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/relay"
+	"github.com/rohanpunj/iolbox/supervisor/internal/relay"
 )
 
 // snapLen caps how many leading bytes of each frame the raw socket delivers. The

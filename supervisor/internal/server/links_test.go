@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/nvram"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/nvram"
 )
 
 // twoIOL builds a lab with two IOL nodes (0,1) and an optional third node.
@@ -40,7 +40,7 @@ func TestNetmapAllStaticTaps(t *testing.T) {
 		},
 	}
 	s := newTestServer()
-	ll := newLoadedLab(doc, "/run/iolab")
+	ll := newLoadedLab(doc, "/run/iolbox")
 	s.refreshFabric(ll)
 	got := s.netmapFor(ll)
 	// No native direct-netio line for the plain IOL<->IOL link.
@@ -62,7 +62,7 @@ func TestNetmapAllStaticTaps(t *testing.T) {
 func TestLabDirIsShared(t *testing.T) {
 	doc := &lab.Lab{Version: 1, ID: "lab-y", Name: "n",
 		Nodes: []lab.Node{iolNode(1), iolNode(2), vpcsNode(3)}}
-	ll := newLoadedLab(doc, "/run/iolab")
+	ll := newLoadedLab(doc, "/run/iolbox")
 	if ll.workDir(1) != ll.labDir() || ll.workDir(2) != ll.labDir() {
 		t.Fatalf("IOL nodes must share lab dir: %q %q vs %q", ll.workDir(1), ll.workDir(2), ll.labDir())
 	}

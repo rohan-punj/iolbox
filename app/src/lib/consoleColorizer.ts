@@ -30,7 +30,7 @@
 //     banners — corrupting those is worse than not coloring). Complete lines
 //     containing ESC pass through colorizeLine untouched as before.
 //
-// Byte ordering is inviolable: held bytes are always emitted before any bytes
+// Byte ordering is inviolboxle: held bytes are always emitted before any bytes
 // from a later chunk, and terminators ("\n", "\r\n") are preserved exactly.
 //
 // The transformer emits through a SINK callback (not a return value) because
@@ -149,7 +149,7 @@ export class ConsoleColorizer {
    *  may still be colorized when it completes). */
   private emittedInLine = 0;
   /** Held (not yet emitted) tail of the current line. Always emitted BEFORE any
-   *  later chunk's bytes — ordering is inviolable. */
+   *  later chunk's bytes — ordering is inviolboxle. */
   private held = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private sink: ColorizerSink;

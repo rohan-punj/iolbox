@@ -1,4 +1,4 @@
-module github.com/rohanpunj/iolab/supervisor
+module github.com/rohanpunj/iolbox/supervisor
 
 go 1.26
 

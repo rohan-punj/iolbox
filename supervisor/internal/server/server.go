@@ -13,11 +13,11 @@ import (
 	"net"
 	"sync"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/egress"
-	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
-	"github.com/rohanpunj/iolab/supervisor/internal/image"
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/egress"
+	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/image"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // Config configures a Server.
@@ -30,11 +30,11 @@ type Config struct {
 	RunDir string
 	// LabsDir is where the durable lab-document store persists saved lab copies
 	// (one <id>.json per lab). Created on first save. Empty defaults to
-	// /opt/iolab/labs.
+	// /opt/iolbox/labs.
 	LabsDir string
 	// IourcPath is the runtime's generated IOU license file, copied into each
 	// lab's shared dir so co-located IOL instances find it. Empty defaults to
-	// <ImageDir>/../iourc then /opt/iolab/iourc (see prepareLabDir).
+	// <ImageDir>/../iourc then /opt/iolbox/iourc (see prepareLabDir).
 	IourcPath string
 	// ConsoleBind is the host the per-node IOL console listeners bind (VPCS
 	// binds its own console on all interfaces already). Default loopback;
@@ -101,7 +101,7 @@ func New(cfg Config) *Server {
 		cfg.Arch = "x86_64"
 	}
 	if cfg.LabsDir == "" {
-		cfg.LabsDir = "/opt/iolab/labs"
+		cfg.LabsDir = "/opt/iolbox/labs"
 	}
 	if cfg.Egress == "" {
 		cfg.Egress = "auto"

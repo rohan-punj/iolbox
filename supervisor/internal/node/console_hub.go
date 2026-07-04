@@ -5,7 +5,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/telnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 )
 
 // consoleHub multiplexes ONE node's pty console across any number of telnet

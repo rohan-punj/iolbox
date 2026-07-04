@@ -8,10 +8,10 @@ export type DockSide = "bottom" | "right";
  *  client via the telnet:// scheme. Global, not per-node. */
 export type ConsoleMode = "web" | "native";
 
-const SIDE_KEY = "iolab.console.dockSide";
-const COLOR_KEY = "iolab.console.colorize";
-const MODE_KEY = "iolab.console.mode";
-const FONT_KEY = "iolab.console.fontSize";
+const SIDE_KEY = "iolbox.console.dockSide";
+const COLOR_KEY = "iolbox.console.colorize";
+const MODE_KEY = "iolbox.console.mode";
+const FONT_KEY = "iolbox.console.fontSize";
 
 /** Console terminal font size bounds + default. 15 (not xterm's tiny default)
  *  reads comfortably on a HiDPI laptop; the A-/A+ control walks this range. */

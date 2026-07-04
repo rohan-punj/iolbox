@@ -1,23 +1,23 @@
-# iolab
+# iolbox
 
 **A lightweight, Windows-native lab for Cisco IOL and VPCS.** Draw topologies,
 console into every node, and live-capture any link straight into Wireshark. No
 login, no database, no web server — a single small app.
 
-> ⚠️ **iolab ships no Cisco software.** It runs IOL/IOU images *you* supply and
+> ⚠️ **iolbox ships no Cisco software.** It runs IOL/IOU images *you* supply and
 > hold licenses for. See [Legal](#legal).
 
 ## Why
 
 Existing options for running IOL on Windows are heavy (PNetLab/EVE/CML VMs) and
-most break nested virtualization or fight with VMware Workstation. iolab keeps the
+most break nested virtualization or fight with VMware Workstation. iolbox keeps the
 GUI native and pushes only the tiny Linux execution layer into whatever hypervisor
 you already have.
 
 ## How it works
 
 IOL binaries are Linux ELF executables, so they can't run on Windows directly.
-iolab runs them inside a small **runtime provider** and talks to it over localhost:
+iolbox runs them inside a small **runtime provider** and talks to it over localhost:
 
 - **VMware Workstation** (default here) — a headless helper VM driven by `vmrun`.
   No nested-virt loss, no Hyper-V, no conflict with your existing labs.
@@ -66,7 +66,7 @@ Prereqs: Windows 10/11, Node 18+, Rust (MSVC), Go 1.22+, and one runtime
 
 ## Legal
 
-iolab is an independent open-source tool and is **not** affiliated with or endorsed
+iolbox is an independent open-source tool and is **not** affiliated with or endorsed
 by Cisco Systems. It does not include, distribute, or generate Cisco IOS/IOL/IOU
 software or license keys for use outside your entitlement. You are responsible for
 lawfully obtaining images and complying with your license agreements. See

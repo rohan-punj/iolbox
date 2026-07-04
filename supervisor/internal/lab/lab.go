@@ -1,4 +1,4 @@
-// Package lab defines the Go representation of the iolab lab document and its
+// Package lab defines the Go representation of the iolbox lab document and its
 // validation rules. The struct tags mirror contracts/lab.schema.json exactly so
 // the same JSON round-trips between the GUI and the supervisor.
 package lab

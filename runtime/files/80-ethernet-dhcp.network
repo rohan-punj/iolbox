@@ -14,7 +14,7 @@
 # a null-route). That posture was retired when the NAT node (extnet)
 # shipped: it MASQUERADEs lab traffic out through the runtime's default
 # route, so the runtime now legitimately needs one — and the proven
-# reference VM (iolab-rt, real default route via its NAT NIC) runs L2 IOL
+# reference VM (iolbox-rt, real default route via its NAT NIC) runs L2 IOL
 # 17.18 with no abort. Genuine internet either connects or times out;
 # neither triggers the abort.
 #

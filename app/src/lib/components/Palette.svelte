@@ -10,7 +10,7 @@
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(
-      "application/iolab-node",
+      "application/iolbox-node",
       JSON.stringify({ kind, imageId })
     );
   }

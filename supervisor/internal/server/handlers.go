@@ -7,13 +7,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/egress"
-	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
-	"github.com/rohanpunj/iolab/supervisor/internal/image"
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/egress"
+	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/image"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // decode unmarshals raw args into v, returning a schema_invalid protocol error

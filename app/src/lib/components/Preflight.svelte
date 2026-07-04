@@ -76,7 +76,7 @@
     <div class="modal-header">
       <h2>Choose a runtime provider</h2>
       <p class="sub">
-        iolab needs a small Linux runtime to execute IOL/VPCS. Pick where it runs — this never
+        iolbox needs a small Linux runtime to execute IOL/VPCS. Pick where it runs — this never
         changes a Windows system feature automatically.
       </p>
     </div>

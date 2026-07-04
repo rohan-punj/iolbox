@@ -1,10 +1,10 @@
-// iolab-launcher — a single Windows exe that gets a user from zero to
+// iolbox-launcher — a single Windows exe that gets a user from zero to
 // http://localhost:4001, picking the right Linux backend automatically.
 //
 // Two backends:
 //   - qemu : bundled qemu-system-x86_64 (TCG software emulation), works
 //     everywhere, conflicts with nothing, no admin. The fallback.
-//   - wsl  : the `iolab` WSL2 distro (imported from iolab-rootfs.tar). Fastest,
+//   - wsl  : the `iolbox` WSL2 distro (imported from iolbox-rootfs.tar). Fastest,
 //     but only usable when an active Windows hypervisor is present.
 //
 // Backend selection implements docs/providers.md: WSL2 is preferred ONLY when
@@ -49,9 +49,9 @@ type launchOpts struct {
 
 func main() {
 	var (
-		// mem/smp defaults mirror runtime/resources.env (IOLAB_RAM_MB=4096,
-		// IOLAB_VCPUS=4), the single source of truth for vCPU/RAM across every
-		// iolab deployment target; still overridable here via --mem/--smp.
+		// mem/smp defaults mirror runtime/resources.env (IOLBOX_RAM_MB=4096,
+		// IOLBOX_VCPUS=4), the single source of truth for vCPU/RAM across every
+		// iolbox deployment target; still overridable here via --mem/--smp.
 		backendFlag = flag.String("backend", "auto", "backend: qemu | wsl | auto")
 		memMB       = flag.Int("mem", 4096, "guest RAM in MB")
 		smp         = flag.Int("smp", 4, "guest vCPU count")
@@ -62,9 +62,9 @@ func main() {
 		verbose     = flag.Bool("v", false, "verbose (print the qemu command line)")
 
 		qemuExe    = flag.String("qemu", "", "override path to qemu-system-x86_64.exe (dev)")
-		diskPath   = flag.String("disk", "", "override path to iolab-disk.qcow2 (dev)")
-		wslTar     = flag.String("wsl-tar", "", "override path to iolab-rootfs.tar (dev)")
-		wslDir     = flag.String("wsl-dir", "", "override WSL install dir (default %LOCALAPPDATA%\\iolab)")
+		diskPath   = flag.String("disk", "", "override path to iolbox-disk.qcow2 (dev)")
+		wslTar     = flag.String("wsl-tar", "", "override path to iolbox-rootfs.tar (dev)")
+		wslDir     = flag.String("wsl-dir", "", "override WSL install dir (default %LOCALAPPDATA%\\iolbox)")
 		detectOnly = flag.Bool("detect", false, "print backend detection and exit (no launch)")
 
 		noSync    = flag.Bool("no-sync", false, "disable images\\/labs\\ folder sync (pure ephemeral; folders untouched)")
@@ -141,7 +141,7 @@ func main() {
 }
 
 func printDetection(d detection, chosen backend) {
-	logf("iolab-launcher — backend selection")
+	logf("iolbox-launcher — backend selection")
 	logf("  wsl.exe present:       %v", d.wslExePresent)
 	logf("  wsl --version OK:      %v", d.wslVersionOK)
 	if d.hypervisorKnown {
@@ -157,7 +157,7 @@ func printDetection(d detection, chosen backend) {
 
 // logf writes a timestamped line to stderr (plain console UX).
 func logf(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "[iolab] "+format+"\n", a...)
+	fmt.Fprintf(os.Stderr, "[iolbox] "+format+"\n", a...)
 }
 
 // openBrowser opens the default browser at url via cmd /c start. Non-fatal.

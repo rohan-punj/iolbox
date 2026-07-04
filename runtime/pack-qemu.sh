@@ -37,7 +37,7 @@
 #
 # Disk layout (identical to the VMware/OVA disks — GPT, legacy-BIOS GRUB):
 #   p1  bios_grub  1MiB..2MiB
-#   p2  root ext4  2MiB..100%   (LABEL=iolab-root)
+#   p2  root ext4  2MiB..100%   (LABEL=iolbox-root)
 # 16 GB virtual size (the image library lives INSIDE the appliance); the qcow2
 # stays sparse + is compressed, so actual on-disk bytes stay small.
 #
@@ -49,22 +49,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 
 # --version stamps the artifact name. Default "dev" per the launcher kickoff
-# (the exe looks for iolab-disk.qcow2, so a release build points --out at that
+# (the exe looks for iolbox-disk.qcow2, so a release build points --out at that
 # fixed name; --version just gives a distinguishable dev artifact).
 VERSION="dev"
 
 recompute_paths() {
     ROOTFS_DIR="$BUILD_DIR/rootfs"
     WORK_DIR="$BUILD_DIR/qemu-work"
-    RAW_DISK="$WORK_DIR/iolab-disk.raw"
-    # Versioned artifact name: iolab-disk-<version>.qcow2. An explicit --out
+    RAW_DISK="$WORK_DIR/iolbox-disk.raw"
+    # Versioned artifact name: iolbox-disk-<version>.qcow2. An explicit --out
     # overrides this entirely (release builds point it at plain
-    # iolab-disk.qcow2, the name the launcher looks for next to the exe).
-    local stem="iolab-disk"
-    [ -n "$VERSION" ] && stem="iolab-disk-$VERSION"
+    # iolbox-disk.qcow2, the name the launcher looks for next to the exe).
+    local stem="iolbox-disk"
+    [ -n "$VERSION" ] && stem="iolbox-disk-$VERSION"
     OUT_QCOW2="$BUILD_DIR/$stem.qcow2"
 }
 recompute_paths
@@ -80,10 +80,10 @@ Usage: $0 [options]
 
   --build-dir DIR     Root containing rootfs/ (default: $BUILD_DIR)
   --rootfs DIR        Rootfs directory (default: <build-dir>/rootfs)
-  --version VER       Stamp artifact name as iolab-disk-VER.qcow2
-                       (default: dev -> iolab-disk-dev.qcow2)
+  --version VER       Stamp artifact name as iolbox-disk-VER.qcow2
+                       (default: dev -> iolbox-disk-dev.qcow2)
   --out FILE          Explicit output qcow2 path (overrides --version naming;
-                       release builds use --out .../iolab-disk.qcow2)
+                       release builds use --out .../iolbox-disk.qcow2)
   -h, --help          This help
 
 Always builds with --no-vmtools --no-nic-configs --zerofree (the QEMU profile).
@@ -155,5 +155,5 @@ qcow2 disk ready:
 
 The tools/iolab-launcher Windows exe boots this under qemu-system-x86_64 (TCG),
 forwarding 127.0.0.1:4001 (GUI/WS) + the console/capture port blocks. Rename or
---out it to iolab-disk.qcow2 to sit next to the exe for a release bundle.
+--out it to iolbox-disk.qcow2 to sit next to the exe for a release bundle.
 EOF

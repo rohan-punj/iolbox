@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pack-lxc.sh — export the rootfs built by build-rootfs.sh as an
 # unprivileged-Proxmox-LXC-compatible template tarball
-# (iolab-ct-<ver>.tar.zst). See runtime/files/lxc/pct-create.md for the
+# (iolbox-ct-<ver>.tar.zst). See runtime/files/lxc/pct-create.md for the
 # `pct create` recipe this artifact is meant to be consumed by.
 #
 # Must run AFTER build-rootfs.sh has produced runtime/build/rootfs/. Needs
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 ROOTFS_DIR="$BUILD_DIR/rootfs"
 WORK_DIR="$BUILD_DIR/lxc-work"
 STAGE_DIR="$WORK_DIR/rootfs"
@@ -37,9 +37,9 @@ Usage: $0 [--build-dir DIR] [--version VER] [--out FILE]
 
   --build-dir DIR   Root containing rootfs/ (default: $BUILD_DIR)
   --version VER     Version string embedded in the output filename
-                     (default: $VERSION) -> iolab-ct-<VER>.tar.zst
+                     (default: $VERSION) -> iolbox-ct-<VER>.tar.zst
   --out FILE        Output tarball path (default:
-                     <build-dir>/iolab-ct-<VER>.tar.zst)
+                     <build-dir>/iolbox-ct-<VER>.tar.zst)
 EOF
 }
 
@@ -54,7 +54,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$OUT_TAR" ]; then
-    OUT_TAR="$BUILD_DIR/iolab-ct-$VERSION.tar.zst"
+    OUT_TAR="$BUILD_DIR/iolbox-ct-$VERSION.tar.zst"
 fi
 
 if [ ! -d "$ROOTFS_DIR" ]; then
@@ -178,7 +178,7 @@ fi
 # work is needed here.
 #
 # What's shipped anyway: a SAFETY NET, not a duplicate mechanism — an LXC
-# firstboot oneshot (iolab-firstboot-lxc-hosts.service ->
+# firstboot oneshot (iolbox-firstboot-lxc-hosts.service ->
 # firstboot-lxc-hosts.sh) that only appends a 127.0.1.1 line if one for the
 # CURRENT hostname is missing. This covers the cases where Proxmox's
 # management doesn't apply: a template imported/started outside the normal
@@ -189,11 +189,11 @@ fi
 # ---------------------------------------------------------------------------
 echo "== pack-lxc: installing /etc/hosts firstboot safety net =="
 install -m 0755 -o root -g root "$SCRIPT_DIR/files/lxc/firstboot-lxc-hosts.sh" \
-    "$STAGE_DIR/opt/iolab/firstboot-lxc-hosts.sh"
-install -m 0644 "$SCRIPT_DIR/files/lxc/iolab-firstboot-lxc-hosts.service" \
-    "$STAGE_DIR/etc/systemd/system/iolab-firstboot-lxc-hosts.service"
-ln -sf ../iolab-firstboot-lxc-hosts.service \
-    "$STAGE_DIR/etc/systemd/system/multi-user.target.wants/iolab-firstboot-lxc-hosts.service"
+    "$STAGE_DIR/opt/iolbox/firstboot-lxc-hosts.sh"
+install -m 0644 "$SCRIPT_DIR/files/lxc/iolbox-firstboot-lxc-hosts.service" \
+    "$STAGE_DIR/etc/systemd/system/iolbox-firstboot-lxc-hosts.service"
+ln -sf ../iolbox-firstboot-lxc-hosts.service \
+    "$STAGE_DIR/etc/systemd/system/multi-user.target.wants/iolbox-firstboot-lxc-hosts.service"
 
 # ---------------------------------------------------------------------------
 # Tweak 3b: make systemd-networkd start inside an UNPRIVILEGED CT.
@@ -341,7 +341,7 @@ Proxmox-side (see runtime/files/lxc/pct-create.md for the full recipe):
 
   pct create <vmid> local:vztmpl/$(basename "$OUT_TAR") \\
       --unprivileged 1 \\
-      --hostname iolab \\
+      --hostname iolbox \\
       --cores 4 --memory 4096 --swap 512 \\
       --net0 name=eth0,bridge=vmbr0,ip=dhcp \\
       --features nesting=0

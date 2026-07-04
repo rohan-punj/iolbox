@@ -332,7 +332,7 @@ func openTap(name string) (*os.File, error) {
 }
 
 // currentUser returns the username that should own the tap (the process user,
-// e.g. "iolab"), so `ip tuntap add ... user <u>` grants us the fd without root.
+// e.g. "iolbox"), so `ip tuntap add ... user <u>` grants us the fd without root.
 func currentUser() (string, error) {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		return u.Username, nil

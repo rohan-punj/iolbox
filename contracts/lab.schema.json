@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/rohanpunj/iolab/contracts/lab.schema.json",
-  "title": "iolab lab file",
+  "$id": "https://github.com/rohanpunj/iolbox/contracts/lab.schema.json",
+  "title": "iolbox lab file",
   "description": "One JSON document describes a full lab: nodes, links, and metadata. Portable and diffable. This schema is the source of truth for Go structs and TS types.",
   "type": "object",
   "required": ["version", "id", "name", "nodes", "links"],

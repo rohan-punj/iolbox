@@ -26,7 +26,7 @@ func TestServesIndexAtRoot(t *testing.T) {
 		t.Fatalf("GET / Content-Type = %q, want text/html*", ct)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !strings.Contains(string(body), "iolab") {
+	if !strings.Contains(string(body), "iolbox") {
 		t.Fatalf("GET / body missing placeholder marker: %q", body)
 	}
 }
@@ -57,7 +57,7 @@ func TestUnknownPathFallsBackToIndex(t *testing.T) {
 		t.Fatalf("SPA fallback Content-Type = %q, want text/html*", ct)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !strings.Contains(string(body), "iolab") {
+	if !strings.Contains(string(body), "iolbox") {
 		t.Fatalf("SPA fallback did not serve index.html: %q", body)
 	}
 }
@@ -70,7 +70,7 @@ func TestUnknownAssetExtensionStillFallsBack(t *testing.T) {
 		t.Fatalf("missing asset status = %d, want 200 (fallback)", rr.Code)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !strings.Contains(string(body), "iolab") {
+	if !strings.Contains(string(body), "iolbox") {
 		t.Fatalf("missing asset did not fall back to index.html: %q", body)
 	}
 }
@@ -83,7 +83,7 @@ func TestPathTraversalIsContained(t *testing.T) {
 		t.Fatalf("traversal status = %d, want 200 (contained fallback)", rr.Code)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !strings.Contains(string(body), "iolab") {
+	if !strings.Contains(string(body), "iolbox") {
 		t.Fatalf("traversal did not resolve to index.html: %q", body)
 	}
 }

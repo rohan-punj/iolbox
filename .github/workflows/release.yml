@@ -53,7 +53,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: iolab-windows
+          name: iolbox-windows
           path: |
             app/src-tauri/target/release/bundle/msi/*.msi
             app/src-tauri/target/release/bundle/nsis/*.exe
@@ -79,8 +79,8 @@ jobs:
           sudo runtime/pack-wsl.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: iolab-runtime
-          path: runtime/build/iolab-rootfs.tar
+          name: iolbox-runtime
+          path: runtime/build/iolbox-rootfs.tar
 
   release:
     needs: [build-windows, build-runtime]
@@ -92,10 +92,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            iolab-windows/**/*
-            iolab-runtime/**/*
+            iolbox-windows/**/*
+            iolbox-runtime/**/*
           body: |
-            iolab ${{ github.ref_name }}
+            iolbox ${{ github.ref_name }}
 
             **Contains no Cisco software.** Supply your own IOL/IOU images.
             Download the Windows installer and, on first run, pick a runtime

@@ -11,7 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 SKIP_VMWARE=0
 SKIP_WSL=0
 VERSION=""
@@ -27,10 +27,10 @@ Usage: $0 --supervisor-bin PATH [options]
                            GUI bundle is embedded — a plain go build ships
                            the placeholder GUI)
   --build-dir DIR          Output root (default: $BUILD_DIR)
-  --version VER            Stamp appliance artifact names (iolab-appliance-VER
+  --version VER            Stamp appliance artifact names (iolbox-appliance-VER
                            .{vmdk,vmx}); default: unversioned names. Forwarded
                            to pack-vmware.sh. (The WSL tar name is unaffected.)
-  --skip-wsl               Don't produce iolab-rootfs.tar
+  --skip-wsl               Don't produce iolbox-rootfs.tar
   --skip-vmware             Don't produce the vmdk/vmx appliance
   --no-i386                 Forwarded to BOTH build-rootfs.sh and pack-vmware.sh
                              (smaller, 64-bit-IOL-only build)
@@ -45,8 +45,8 @@ Usage: $0 --supervisor-bin PATH [options]
 Runs, in order:
   1. ./fetch-vpcs.sh          (only if runtime/build/vpcs/vpcs is missing)
   2. ./build-rootfs.sh         -> runtime/build/rootfs/
-  3. ./pack-wsl.sh              -> runtime/build/iolab-rootfs.tar   (unless --skip-wsl)
-  4. ./pack-vmware.sh           -> runtime/build/iolab-appliance[-VER].{vmdk,vmx} (unless --skip-vmware)
+  3. ./pack-wsl.sh              -> runtime/build/iolbox-rootfs.tar   (unless --skip-wsl)
+  4. ./pack-vmware.sh           -> runtime/build/iolbox-appliance[-VER].{vmdk,vmx} (unless --skip-vmware)
 EOF
 }
 
@@ -72,10 +72,10 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-export IOLAB_BUILD_DIR="$BUILD_DIR"
+export IOLBOX_BUILD_DIR="$BUILD_DIR"
 
 echo "############################################################"
-echo "# iolab runtime build-all"
+echo "# iolbox runtime build-all"
 echo "#   supervisor: $SUPERVISOR_BIN"
 echo "#   build dir:  $BUILD_DIR"
 echo "############################################################"
@@ -113,6 +113,6 @@ else
 fi
 
 echo "############################################################"
-echo "# iolab runtime build-all: DONE"
+echo "# iolbox runtime build-all: DONE"
 echo "############################################################"
 find "$BUILD_DIR" -maxdepth 1 -type f \( -name '*.tar' -o -name '*.vmdk' -o -name '*.vmx' \) -exec ls -lh {} \;

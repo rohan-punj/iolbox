@@ -24,9 +24,9 @@ cd tools/capture-helper && GOOS=windows GOARCH=amd64 go build -o capture-helper.
 
 | # | Step | Pass criteria | Assumption it validates |
 |---|------|---------------|--------------------------|
-| 1 | `vmrun -T ws start iolab-appliance.vmx nogui`; connect to control port | `hello` returns supervisor version + `features` includes `i386` | VMware provider boots headless; endpoint reachable from Windows |
+| 1 | `vmrun -T ws start iolbox-appliance.vmx nogui`; connect to control port | `hello` returns supervisor version + `features` includes `i386` | VMware provider boots headless; endpoint reachable from Windows |
 | 2 | Copy IOL image into runtime; `image.register` | returns id, `class`, `arch=i386\|x86_64` | ELF sniff + i386 multiarch present |
-| 3 | First-boot iourc generated | `/opt/iolab/iourc` exists; IOL licenses OK | keygen algorithm correct for this hostid |
+| 3 | First-boot iourc generated | `/opt/iolbox/iourc` exists; IOL licenses OK | keygen algorithm correct for this hostid |
 | 4 | `lab.load` + `node.start` one IOL (R1); telnet its console port from Windows | IOS boots to prompt; **no `-l` flag** → idle CPU low | console mechanism + keepalive-flag fix |
 | 5 | Start R2; `link.add` p2p R1e0/0–R2e0/0; configure /30 both sides | `ping` R1→R2 succeeds | UDP p2p wiring + NETMAP encoding |
 | 6 | Start VPCS PC1; link to R1 e0/1; set PC IP | PC1 pings R1 LAN IP | VPCS UDP tunnel + mixed IOL/VPCS segment |
@@ -53,16 +53,16 @@ they get confirmed or corrected. Each has a clearly-marked spot in the code:
 
 ## P0 findings — 2026-07-02 (real IOL 17.18.02, x86_64)
 
-Environment: isolated Ubuntu 24.04 VMware VM (`J:\iolab-runtime-vm`, host-only
-192.168.111.0/24, key `iolab_key`), built from an Ubuntu cloud image — no WSL, no
-project VMs touched. Supervisor + both images + VPCS 0.8.3 deployed to `/opt/iolab`.
+Environment: isolated Ubuntu 24.04 VMware VM (`J:\iolbox-runtime-vm`, host-only
+192.168.111.0/24, key `iolbox_key`), built from an Ubuntu cloud image — no WSL, no
+project VMs touched. Supervisor + both images + VPCS 0.8.3 deployed to `/opt/iolbox`.
 
 **Confirmed:**
 - ✅ **Image sniff**: `x86_64_crb_linux-...iol17.18.02.bin` is ELF64 x86-64; runs on
   stock Ubuntu 24.04 glibc — **no i386 multiarch needed** for the 17.18.02 line
   (`ldd` shows all libs present). i386 only matters for the older `i86bi_` images.
 - ✅ **iourc keygen ACCEPTED by real IOL.** `supervisor -gen-iourc` on hostid
-  `a8c0986f` / hostname `iolab-rt` produced `iolab-rt = 97824a8bfa46e85b;`. IOL
+  `a8c0986f` / hostname `iolbox-rt` produced `iolbox-rt = 97824a8bfa46e85b;`. IOL
   booted (`IOS On Unix - Cisco Systems confidential…`) with **no license error**.
   The community keygen in `internal/iourc` is correct.
 - ✅ **Console mechanism = pty, NOT a TCP port.** IOL uses stdin/stdout on a
@@ -185,7 +185,7 @@ needs the same header work. This is focused networking R&D, not architecture ris
 ## netio header layout — CONFIRMED (2026-07-02)
 
 Resolved the "remaining deep piece" above. Method: a Python MITM
-(`/opt/iolab/hdr-mitm.py` + `hdr-test.sh` on the runtime VM) bound two
+(`/opt/iolbox/hdr-mitm.py` + `hdr-test.sh` on the runtime VM) bound two
 pseudo-instance sockets (`/tmp/netio1000/501`, `/tmp/netio1000/502`) with
 `NETMAP = "1:0/1 501:0/0" / "2:1/0 502:0/0"` — deliberately asymmetric
 interfaces (Et0/1 vs Et1/0) so the port-byte nibble order is unambiguous —

@@ -1,4 +1,4 @@
-# Contributing to iolab
+# Contributing to iolbox
 
 Thanks for helping! A few things keep this project healthy and legal.
 
@@ -7,7 +7,7 @@ Thanks for helping! A few things keep this project healthy and legal.
 - **Never commit or attach Cisco software** — no IOL/IOU `.bin`/`.iol` images, no
   `iourc` keys, no config dumps containing secrets. The `.gitignore` blocks the
   common file types; don't work around it.
-- iolab is **IOL + VPCS, single-user, localhost-only** by design. Features that
+- iolbox is **IOL + VPCS, single-user, localhost-only** by design. Features that
   add other runtimes, multi-user, or network-exposed services are out of scope —
   that's what PNetLab/EVE/CML are for. Keep it lightweight.
 

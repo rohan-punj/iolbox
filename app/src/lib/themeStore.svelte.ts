@@ -4,7 +4,7 @@
 
 export type ThemeName = "bench" | "glass";
 
-const STORAGE_KEY = "iolab.theme";
+const STORAGE_KEY = "iolbox.theme";
 
 function initialTheme(): ThemeName {
   try {

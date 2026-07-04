@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pack-native.sh — package iolab as a standalone installer tarball for ANY
+# pack-native.sh — package iolbox as a standalone installer tarball for ANY
 # systemd x86-64 glibc Linux server (bare metal, cloud VM, on-prem
 # hypervisor guest — not the WSL2/VMware appliance rootfs the other pack-*
 # scripts build). See docs/providers.md's `remote` provider and
@@ -11,11 +11,11 @@
 # binaries (supervisor, vpcs) plus the support files under
 # runtime/files/{,native/}. No root required to run this script.
 #
-# Output: runtime/build/iolab-server-<version>.tar.gz
+# Output: runtime/build/iolbox-server-<version>.tar.gz
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 FILES_DIR="$SCRIPT_DIR/files"
 NATIVE_DIR="$FILES_DIR/native"
 
@@ -26,7 +26,7 @@ VERSION="dev"
 # exist, per this script's brief ("prefer the explicit --supervisor-bin
 # flag like the other pack scripts" — --supervisor-bin always wins).
 SUPERVISOR_BIN_DEFAULT_1="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"
-SUPERVISOR_BIN_DEFAULT_2="$BUILD_DIR/rootfs/opt/iolab/supervisor"
+SUPERVISOR_BIN_DEFAULT_2="$BUILD_DIR/rootfs/opt/iolbox/supervisor"
 SUPERVISOR_BIN=""
 VPCS_BIN_DEFAULT="$BUILD_DIR/vpcs/vpcs"     # fetch-vpcs.sh's output path
 VPCS_BIN=""
@@ -53,7 +53,7 @@ Usage: $0 [options]
   --out DIR                Where to write the tarball (default: --build-dir)
   -h, --help               This help
 
-Output: <out>/iolab-server-<version>.tar.gz
+Output: <out>/iolbox-server-<version>.tar.gz
 EOF
 }
 
@@ -125,17 +125,17 @@ if command -v file >/dev/null 2>&1; then
 fi
 
 for f in \
-    "$FILES_DIR/iolab-supervisor.service" \
-    "$FILES_DIR/iolab-firstboot-iourc.service" \
+    "$FILES_DIR/iolbox-supervisor.service" \
+    "$FILES_DIR/iolbox-firstboot-iourc.service" \
     "$FILES_DIR/firstboot-iourc.sh" \
     "$FILES_DIR/prestart-clean.sh" \
-    "$FILES_DIR/99-iolab.conf" \
+    "$FILES_DIR/99-iolbox.conf" \
     "$NATIVE_DIR/install.sh" \
     "$NATIVE_DIR/uninstall.sh" \
     "$NATIVE_DIR/README.txt" \
     "$NATIVE_DIR/10-bind.conf.tmpl" \
-    "$NATIVE_DIR/iolab-bind.env.local" \
-    "$NATIVE_DIR/iolab-bind.env.all" \
+    "$NATIVE_DIR/iolbox-bind.env.local" \
+    "$NATIVE_DIR/iolbox-bind.env.all" \
     ; do
     if [ ! -f "$f" ]; then
         echo "pack-native: required source file missing: $f" >&2
@@ -146,14 +146,14 @@ done
 # ---------------------------------------------------------------------------
 # Assemble the staging tree
 # ---------------------------------------------------------------------------
-PKG_NAME="iolab-server-$VERSION"
+PKG_NAME="iolbox-server-$VERSION"
 STAGE_ROOT="$BUILD_DIR/native-stage"
 STAGE_DIR="$STAGE_ROOT/$PKG_NAME"
 
 echo "== pack-native: staging $STAGE_DIR =="
 rm -rf "$STAGE_DIR"
 install -d -m 0755 "$STAGE_DIR/bin"
-install -d -m 0755 "$STAGE_DIR/opt-iolab"
+install -d -m 0755 "$STAGE_DIR/opt-iolbox"
 install -d -m 0755 "$STAGE_DIR/systemd"
 install -d -m 0755 "$STAGE_DIR/etc"
 
@@ -164,22 +164,22 @@ install -m 0755 "$VPCS_BIN" "$STAGE_DIR/bin/vpcs"
 
 # Reused verbatim from runtime/files/ — same scripts the WSL/VMware rootfs
 # ships, no VMware-specific path assumptions in either (both are plain
-# POSIX sh operating only under /opt/iolab, which install.sh also uses as
+# POSIX sh operating only under /opt/iolbox, which install.sh also uses as
 # its default --prefix).
-install -m 0755 "$FILES_DIR/firstboot-iourc.sh" "$STAGE_DIR/opt-iolab/firstboot-iourc.sh"
-install -m 0755 "$FILES_DIR/prestart-clean.sh" "$STAGE_DIR/opt-iolab/prestart-clean.sh"
+install -m 0755 "$FILES_DIR/firstboot-iourc.sh" "$STAGE_DIR/opt-iolbox/firstboot-iourc.sh"
+install -m 0755 "$FILES_DIR/prestart-clean.sh" "$STAGE_DIR/opt-iolbox/prestart-clean.sh"
 
 # Stock systemd units, byte-identical to the WSL/VMware copies — the bind
 # addresses are overridden by the 10-bind.conf drop-in, not by editing the
 # unit itself, so this one flag set stays audited-once across every
 # packaging target (see runtime/README.md).
-install -m 0644 "$FILES_DIR/iolab-supervisor.service" "$STAGE_DIR/systemd/iolab-supervisor.service"
-install -m 0644 "$FILES_DIR/iolab-firstboot-iourc.service" "$STAGE_DIR/systemd/iolab-firstboot-iourc.service"
+install -m 0644 "$FILES_DIR/iolbox-supervisor.service" "$STAGE_DIR/systemd/iolbox-supervisor.service"
+install -m 0644 "$FILES_DIR/iolbox-firstboot-iourc.service" "$STAGE_DIR/systemd/iolbox-firstboot-iourc.service"
 install -m 0644 "$NATIVE_DIR/10-bind.conf.tmpl" "$STAGE_DIR/systemd/10-bind.conf"
-install -m 0644 "$NATIVE_DIR/iolab-bind.env.local" "$STAGE_DIR/systemd/bind.env.local"
-install -m 0644 "$NATIVE_DIR/iolab-bind.env.all" "$STAGE_DIR/systemd/bind.env.all"
+install -m 0644 "$NATIVE_DIR/iolbox-bind.env.local" "$STAGE_DIR/systemd/bind.env.local"
+install -m 0644 "$NATIVE_DIR/iolbox-bind.env.all" "$STAGE_DIR/systemd/bind.env.all"
 
-install -m 0644 "$FILES_DIR/99-iolab.conf" "$STAGE_DIR/etc/99-iolab.conf"
+install -m 0644 "$FILES_DIR/99-iolbox.conf" "$STAGE_DIR/etc/99-iolbox.conf"
 
 install -m 0755 "$NATIVE_DIR/install.sh" "$STAGE_DIR/install.sh"
 install -m 0755 "$NATIVE_DIR/uninstall.sh" "$STAGE_DIR/uninstall.sh"

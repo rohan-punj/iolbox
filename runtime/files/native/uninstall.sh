@@ -4,13 +4,13 @@
 #   sudo ./uninstall.sh [--yes]
 #
 # --yes skips the interactive prompt before deleting user data
-# (images/ and labs/ under /opt/iolab) — use for scripted/CI teardown.
+# (images/ and labs/ under /opt/iolbox) — use for scripted/CI teardown.
 # Without it, user data is only removed after an explicit y/N confirmation;
-# everything else (binaries, units, sysctl drop-in, /etc/iolab) is removed
+# everything else (binaries, units, sysctl drop-in, /etc/iolbox) is removed
 # unconditionally since none of it is user data.
 set -euo pipefail
 
-PREFIX="/opt/iolab"
+PREFIX="/opt/iolbox"
 ASSUME_YES=0
 
 usage() {
@@ -39,23 +39,23 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo "uninstall.sh: stopping + disabling units"
-systemctl stop iolab-supervisor.service 2>/dev/null || true
-systemctl stop iolab-firstboot-iourc.service 2>/dev/null || true
-systemctl disable iolab-supervisor.service 2>/dev/null || true
-systemctl disable iolab-firstboot-iourc.service 2>/dev/null || true
+systemctl stop iolbox-supervisor.service 2>/dev/null || true
+systemctl stop iolbox-firstboot-iourc.service 2>/dev/null || true
+systemctl disable iolbox-supervisor.service 2>/dev/null || true
+systemctl disable iolbox-firstboot-iourc.service 2>/dev/null || true
 
 echo "uninstall.sh: removing systemd units + drop-in"
-rm -f /etc/systemd/system/iolab-supervisor.service
-rm -f /etc/systemd/system/iolab-firstboot-iourc.service
-rm -rf /etc/systemd/system/iolab-supervisor.service.d
+rm -f /etc/systemd/system/iolbox-supervisor.service
+rm -f /etc/systemd/system/iolbox-firstboot-iourc.service
+rm -rf /etc/systemd/system/iolbox-supervisor.service.d
 systemctl daemon-reload
-systemctl reset-failed iolab-supervisor.service iolab-firstboot-iourc.service 2>/dev/null || true
+systemctl reset-failed iolbox-supervisor.service iolbox-firstboot-iourc.service 2>/dev/null || true
 
 echo "uninstall.sh: removing sysctl drop-in"
-rm -f /etc/sysctl.d/99-iolab.conf
+rm -f /etc/sysctl.d/99-iolbox.conf
 
-echo "uninstall.sh: removing /etc/iolab (bind.env)"
-rm -rf /etc/iolab
+echo "uninstall.sh: removing /etc/iolbox (bind.env)"
+rm -rf /etc/iolbox
 
 if [ ! -d "$PREFIX" ]; then
     echo "uninstall.sh: $PREFIX does not exist, nothing more to do."

@@ -3,7 +3,7 @@ package lab
 import (
 	"fmt"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 )
 
 // Validate enforces the invariants of lab.schema.json that are not expressible

@@ -1,9 +1,9 @@
-## iolab-appliance.vmx.tmpl — templated VMware VMX for the runtime appliance.
+## iolbox-appliance.vmx.tmpl — templated VMware VMX for the runtime appliance.
 ## pack-vmware.sh substitutes the @@PLACEHOLDER@@ tokens below and writes the
-## result to runtime/build/iolab-appliance.vmx. Do not hand-edit the output;
+## result to runtime/build/iolbox-appliance.vmx. Do not hand-edit the output;
 ## edit this template instead so rebuilds stay reproducible.
 ##
-## Modeled on the PROVEN reference runtime VM (iolab-rt: 4 vCPU / 4 GB,
+## Modeled on the PROVEN reference runtime VM (iolbox-rt: 4 vCPU / 4 GB,
 ## host-only + NAT e1000e NICs) rather than the original scaffold's 768 MB
 ## single-NIC guess — IOL nodes default to 1024 MB RAM each and the NAT
 ## node needs an outbound path.
@@ -17,9 +17,9 @@ config.version = "8"
 virtualHW.version = "19"
 firmware = "bios"
 
-displayName = "iolab-appliance"
+displayName = "iolbox-appliance"
 guestOS = "debian12-64"
-annotation = "iolab runtime appliance - autostarts the iolab supervisor; GUI at http://<vm-ip>:4001 from the Windows host via the host-only NIC. Built by runtime/pack-vmware.sh. No Cisco software included."
+annotation = "iolbox runtime appliance - autostarts the iolbox supervisor; GUI at http://<vm-ip>:4001 from the Windows host via the host-only NIC. Built by runtime/pack-vmware.sh. No Cisco software included."
 
 numvcpus = "@@VCPUS@@"
 cpuid.coresPerSocket = "1"
@@ -28,7 +28,7 @@ memsize = "@@RAM_MB@@"
 ## PCIe root ports — REQUIRED for the e1000e NICs below (e1000e is a PCIe
 ## device; without a pcieRootPort bridge there is "No PCIe slot available
 ## for Ethernet0" and Workstation hard-crashes at power-on instead of
-## erroring). Same block the reference iolab-rt vmx carries.
+## erroring). Same block the reference iolbox-rt vmx carries.
 pciBridge0.present = "TRUE"
 pciBridge4.present = "TRUE"
 pciBridge4.virtualDev = "pcieRootPort"
@@ -55,7 +55,7 @@ floppy0.present = "FALSE"
 ## the in-guest networkd config (10-hostonly.network, written by
 ## pack-vmware.sh) matches this MAC, and the Windows side can resolve the
 ## DHCP lease deterministically from C:\ProgramData\VMware\vmnetdhcp.leases
-## by this MAC — the same discovery pattern the reference iolab-rt VM uses.
+## by this MAC — the same discovery pattern the reference iolbox-rt VM uses.
 ## DHCP (not a baked static IP) because each Workstation install picks its
 ## own random host-only subnet; a hardcoded IP would only be right on the
 ## machine that built the appliance.
@@ -83,14 +83,14 @@ usb_xhci.present = "FALSE"
 serial0.present = "FALSE"
 parallel0.present = "FALSE"
 
-## Headless-friendly. `vmrun -T ws start iolab-appliance.vmx nogui` is the
+## Headless-friendly. `vmrun -T ws start iolbox-appliance.vmx nogui` is the
 ## documented lifecycle command (docs/providers.md).
 gui.fullScreenAtPowerOn = "FALSE"
 gui.viewModeAtPowerOn = "windowed"
 
 ## Nested virtualization is explicitly NOT requested — IOL is a userspace
 ## process, not an inner hypervisor guest. Do not add vhv.enable="TRUE"
-## here (that's the PNetLab pattern for nested KVM; iolab runs no inner VMs).
+## here (that's the PNetLab pattern for nested KVM; iolbox runs no inner VMs).
 
 ## Power-on niceties: skip the "moved or copied" prompt so
 ## `vmrun start ... nogui` never blocks on a hidden dialog.

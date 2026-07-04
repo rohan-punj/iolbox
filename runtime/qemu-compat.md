@@ -12,14 +12,14 @@ not a first choice.
 ## Reuses the VMware disk, unmodified
 
 This is the whole point of building one rootfs and one disk image: the exact
-`iolab-appliance.raw`/`.vmdk` produced by `pack-vmware.sh` (before or after
+`iolbox-appliance.raw`/`.vmdk` produced by `pack-vmware.sh` (before or after
 the raw→vmdk conversion — qemu reads vmdk natively) boots fine under
 `qemu-system-x86_64` too. No separate "qemu rootfs" build step exists or is
 needed. If only the `.vmdk` was kept (typical release artifact) and the
 intermediate `.raw` was discarded, `qemu-img convert -f vmdk -O raw
-iolab-appliance.vmdk iolab-appliance.raw` reverses it if a raw file is
+iolbox-appliance.vmdk iolbox-appliance.raw` reverses it if a raw file is
 preferred, but qemu can also boot the vmdk directly with `-drive
-file=iolab-appliance.vmdk,format=vmdk`.
+file=iolbox-appliance.vmdk,format=vmdk`.
 
 ## Launch command (reference)
 
@@ -29,7 +29,7 @@ qemu-system-x86_64 \
     -accel tcg \
     -m 768 \
     -smp 1 \
-    -drive file=iolab-appliance.vmdk,format=vmdk,if=virtio \
+    -drive file=iolbox-appliance.vmdk,format=vmdk,if=virtio \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:4000-:4000,hostfwd=tcp:127.0.0.1:9000-:9000,hostfwd=tcp:127.0.0.1:9001-:9001,hostfwd=tcp:127.0.0.1:5500-:5500 \
     -device virtio-net-pci,netdev=net0 \
     -display none \

@@ -5,12 +5,12 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/bcap"
-	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
-	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/vtap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/bcap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
+	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
 // loadedLab holds runtime state for one loaded lab: the document, per-node

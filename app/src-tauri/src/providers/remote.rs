@@ -7,11 +7,11 @@
 //! TODO(P1):
 //! - config: capture the user's ssh target (host, user, key/agent).
 //! - `detect()`: reachable only once configured; report accordingly.
-//! - `provision()`: scp `/opt/iolab/supervisor` (linux/amd64) to the host.
+//! - `provision()`: scp `/opt/iolbox/supervisor` (linux/amd64) to the host.
 //! - `start()`: launch supervisor over ssh, open local port-forwards for
 //!   control (4000), console (9000+), capture (5500+); endpoint is the
 //!   local forwarded `127.0.0.1:<port>`.
-//! - `sync_image()`: scp the image into `/opt/iolab/images` on the host.
+//! - `sync_image()`: scp the image into `/opt/iolbox/images` on the host.
 
 use super::{Detection, Endpoint, Health, Provider, ProviderError, ProviderId, ProviderResult};
 use std::path::Path;

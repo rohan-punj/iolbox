@@ -8,7 +8,7 @@ import (
 )
 
 func TestDecodeRequest(t *testing.T) {
-	in := `{"id":"abc","op":"hello","args":{"client":"iolab-gui/0.1.0"}}` + "\n"
+	in := `{"id":"abc","op":"hello","args":{"client":"iolbox-gui/0.1.0"}}` + "\n"
 	dec := NewDecoder(strings.NewReader(in))
 	req, err := dec.ReadRequest()
 	if err != nil {
@@ -21,7 +21,7 @@ func TestDecodeRequest(t *testing.T) {
 	if err := json.Unmarshal(req.Args, &a); err != nil {
 		t.Fatalf("args: %v", err)
 	}
-	if a.Client != "iolab-gui/0.1.0" {
+	if a.Client != "iolbox-gui/0.1.0" {
 		t.Fatalf("client=%q", a.Client)
 	}
 }

@@ -41,10 +41,10 @@ affect VMware" and default to `vmware`.
 
 ## vmware (primary)
 
-- Ship a small appliance (`iolab-appliance.vmx` + `.vmdk`, Debian-slim + kernel +
+- Ship a small appliance (`iolbox-appliance.vmx` + `.vmdk`, Debian-slim + kernel +
   supervisor autostart). 2 vCPU / 4 GB RAM (IOL nodes default to 1 GB each),
   **two NICs**: host-only (control/GUI/console/capture) + NAT (the NAT node's
-  MASQUERADE outbound path). Same shape as the proven iolab-rt reference VM.
+  MASQUERADE outbound path). Same shape as the proven iolbox-rt reference VM.
 - Lifecycle: `vmrun -T ws start <vmx> nogui` / `stop`. Player: `-T player`.
 - Endpoint discovery: `vmrun getGuestIPAddress <vmx> -wait` (open-vm-tools is
   in the image), or match the appliance's fixed host-only MAC
@@ -58,7 +58,7 @@ affect VMware" and default to `vmware`.
 
 ## wsl2
 
-- `wsl --import iolab <dir> iolab-rootfs.tar` (first run). No Store distro needed.
+- `wsl --import iolbox <dir> iolbox-rootfs.tar` (first run). No Store distro needed.
 - Endpoint: WSL2 localhost forwarding → `127.0.0.1:4000` directly.
 - Image sync: images live on a Windows path visible at `/mnt/...`, or copied in.
 - Fastest cold start, smallest footprint. Chosen only when Hyper-V already on.
@@ -80,11 +80,11 @@ Both the VMware appliance and the WSL tar come from **one** Debian-slim rootfs:
 - glibc + `libc6:i386` (32-bit IOL), minimal userspace + what the supervisor
   shells out to at runtime: `sudo`, `iproute2`, `procps` (sysctl), `iptables`
   (NAT node)
-- `/opt/iolab/supervisor` (Go binary, GUI embedded — build via
+- `/opt/iolbox/supervisor` (Go binary, GUI embedded — build via
   `build-release.sh`) started by systemd on boot with the full proven flag set
   (`-ws-addr 0.0.0.0:4001`, `-console-bind`/`-capture-bind 0.0.0.0`, labs/run
   dirs)
-- hostname pinned to `iolab` (`/etc/hostname` + `/etc/hosts` + `wsl.conf`) —
+- hostname pinned to `iolbox` (`/etc/hostname` + `/etc/hosts` + `wsl.conf`) —
   the iourc is keyed to it and `sudo` stalls without the hosts line
 - iourc generated on first boot from the runtime's own hostid
 - default route on the NAT NIC (the NAT node needs outbound; the old

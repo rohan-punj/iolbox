@@ -1,10 +1,10 @@
-# iolab supervisor — the Go control-plane + embedded browser GUI the Windows
-# side talks to. Installed to /etc/systemd/system/iolab-supervisor.service and
+# iolbox supervisor — the Go control-plane + embedded browser GUI the Windows
+# side talks to. Installed to /etc/systemd/system/iolbox-supervisor.service and
 # enabled at build time (build-rootfs.sh symlinks it into
 # multi-user.target.wants).
 #
 # The flag set below mirrors the PROVEN reference runtime's start-sup.sh
-# (J:\iolab-runtime-vm, see iolab-p0-runtime-vm memory topic) exactly:
+# (J:\iolbox-runtime-vm, see iolbox-p0-runtime-vm memory topic) exactly:
 #   -control-addr 127.0.0.1:4000   raw NDJSON control API, guest-loopback only
 #   -ws-addr 0.0.0.0:4001          WS bridge + embedded GUI, reachable from the
 #                                  Windows host (browser-first product, P1)
@@ -13,33 +13,33 @@
 #   -labs-dir                      durable lab store (seed labs materialize
 #                                  here on first connect when empty)
 #   -iourc                         generated at first boot by
-#                                  iolab-firstboot-iourc.service
+#                                  iolbox-firstboot-iourc.service
 [Unit]
-Description=iolab supervisor (IOL/VPCS control plane + GUI)
-After=network.target iolab-firstboot-iourc.service
+Description=iolbox supervisor (IOL/VPCS control plane + GUI)
+After=network.target iolbox-firstboot-iourc.service
 Wants=network.target
-Requires=iolab-firstboot-iourc.service
+Requires=iolbox-firstboot-iourc.service
 
 [Service]
 Type=simple
-# /opt/iolab on PATH: the supervisor spawns `vpcs` by bare name (see
+# /opt/iolbox on PATH: the supervisor spawns `vpcs` by bare name (see
 # supervisor/internal/node/argv.go) and expects it resolvable via PATH.
 # sbin dirs for `ip`/`sysctl`/`iptables` (extnet's `sudo -n` path uses
 # sudo's own secure_path, but keep them here too for direct spawns).
-Environment=PATH=/opt/iolab:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/opt/iolbox:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Clean up what a crashed/SIGKILLed previous run can leave behind: stale
 # iolnatN tap devices (extnet.Close never ran) and the per-lab run dirs.
 # Mirrors the reference runtime's start-sup.sh cleanup loop.
-ExecStartPre=/opt/iolab/prestart-clean.sh
-ExecStart=/opt/iolab/supervisor \
+ExecStartPre=/opt/iolbox/prestart-clean.sh
+ExecStart=/opt/iolbox/supervisor \
     -control-addr 127.0.0.1:4000 \
     -ws-addr 0.0.0.0:4001 \
     -console-bind 0.0.0.0 \
     -capture-bind 0.0.0.0 \
-    -image-dir /opt/iolab/images \
-    -run-dir /opt/iolab/run \
-    -labs-dir /opt/iolab/labs \
-    -iourc /opt/iolab/iourc
+    -image-dir /opt/iolbox/images \
+    -run-dir /opt/iolbox/run \
+    -labs-dir /opt/iolbox/labs \
+    -iourc /opt/iolbox/iourc
 Restart=always
 RestartSec=1
 
@@ -50,11 +50,11 @@ RestartSec=1
 # no orphaned vpcs busy-spinners survive a supervisor bounce (the orphan
 # problem the dev VM needed pkill loops for).
 User=root
-WorkingDirectory=/opt/iolab
+WorkingDirectory=/opt/iolbox
 KillMode=control-group
 
 # Supervisor + child IOL/VPCS output lands in the journal; invaluable when
-# debugging a runtime interactively (journalctl -u iolab-supervisor).
+# debugging a runtime interactively (journalctl -u iolbox-supervisor).
 StandardOutput=journal
 StandardError=journal
 

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 )
 
 // isIOLMap builds the node-id -> is-IOL lookup the fabric helpers need.

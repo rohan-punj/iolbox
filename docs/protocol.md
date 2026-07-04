@@ -44,7 +44,7 @@ Event (server push, no id correlation required):
 
 ### `hello`
 Handshake + capability/version negotiation. First message.
-- args: `{ "client": "iolab-gui/0.1.0" }`
+- args: `{ "client": "iolbox-gui/0.1.0" }`
 - result: `{ "supervisor": "0.1.0", "runtime": "debian-slim-12", "arch": "x86_64", "features": ["nvram","capture","i386"] }`
 
 The `features` array always contains the base capabilities `nvram`, `capture`,
@@ -64,7 +64,7 @@ error (`"runtime does not support nat/mgmt nodes"`).
 ### `image.register`
 Called after the provider has synced an image file into the runtime. Supervisor
 fingerprints + sniffs class/arch authoritatively.
-- args: `{ "path": "/opt/iolab/images/<file>" }`
+- args: `{ "path": "/opt/iolbox/images/<file>" }`
 - result: `{ "id","class","arch","sha256" }`
 
 ### `lab.load`
@@ -75,7 +75,7 @@ Load (not start) a lab document. Validates against schema, allocates ids.
 ### `lab.saveDoc` / `lab.listDocs` / `lab.getDoc` / `lab.deleteDoc`
 Durable lab-document store, separate from the runtime `lab.load`/`lab.start`
 lifecycle: these verbs persist and retrieve whole lab documents on disk
-(`<labs-dir>/<id>.json`, default `/opt/iolab/labs`, configurable with
+(`<labs-dir>/<id>.json`, default `/opt/iolbox/labs`, configurable with
 `-labs-dir`) without loading or starting anything. The document is stored
 byte-for-byte as received (unknown fields preserved); the id comes from the
 document's own `id` field and must match `[A-Za-z0-9_-]+`.

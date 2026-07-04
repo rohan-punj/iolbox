@@ -1,4 +1,4 @@
-# iolab roadmap — phases
+# iolbox roadmap — phases
 
 Where we are and what's next. The scaffold (supervisor, runtime, GUI shell,
 capture path, CI) is **complete and committed**. Two tracks now run in parallel:

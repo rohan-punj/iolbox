@@ -1,13 +1,13 @@
 [package]
-name = "iolab"
+name = "iolbox"
 version = "0.1.0"
-description = "iolab — lightweight Windows-native lab tool for Cisco IOL images and VPCS"
-authors = ["iolab"]
+description = "iolbox — lightweight Windows-native lab tool for Cisco IOL images and VPCS"
+authors = ["iolbox"]
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "iolab_lib"
+name = "iolbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

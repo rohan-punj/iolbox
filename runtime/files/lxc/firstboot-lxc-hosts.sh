@@ -1,10 +1,10 @@
 #!/bin/sh
-# /opt/iolab/firstboot-lxc-hosts.sh — LXC-only defensive fixup for
+# /opt/iolbox/firstboot-lxc-hosts.sh — LXC-only defensive fixup for
 # /etc/hosts, installed by pack-lxc.sh.
 #
-# WHY THIS EXISTS: build-rootfs.sh bakes a hardcoded "127.0.1.1 iolab" line
+# WHY THIS EXISTS: build-rootfs.sh bakes a hardcoded "127.0.1.1 iolbox" line
 # (see its Stage 6) because the WSL2/VMware artifacts always boot with the
-# hostname "iolab" (pinned via wsl.conf / the baked /etc/hostname). Proxmox
+# hostname "iolbox" (pinned via wsl.conf / the baked /etc/hostname). Proxmox
 # is different: `pct create ... --hostname <whatever>` lets (and expects)
 # the operator to pick the CT's hostname, and Proxmox rewrites
 # /etc/hostname AND (per Proxmox's own container setup, pve-container's
@@ -15,10 +15,10 @@
 #
 # This script is a SAFETY NET, not the primary mechanism: it runs after
 # Proxmox's own hostname injection (see the Before=/After= ordering in
-# iolab-firstboot-iourc.service, which this reuses) and only ACTS if the
+# iolbox-firstboot-iourc.service, which this reuses) and only ACTS if the
 # expected "127.0.1.1 <current-hostname>" line is missing — e.g. a CT
 # built from a raw tarball via `pct create ... --unprivileged 1
-# --hostname iolab` outside the normal Proxmox UI flow, or a future
+# --hostname iolbox` outside the normal Proxmox UI flow, or a future
 # Proxmox version that stops managing /etc/hosts. Without SOME
 # "127.0.1.1 <hostname>" resolvable line, every `sudo` the NAT node runs
 # stalls ~10s on DNS (see runtime/README.md's firstboot-iourc section);

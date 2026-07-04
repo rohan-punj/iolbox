@@ -1,9 +1,9 @@
 # Bridge-fabric data-plane migration — design
 
 Status: **PROPOSED** (design only — not yet implemented). Author handoff:
-2026-07-04. Companion kickoff: `J:\Claude code\iolab-bridge-fabric-kickoff-prompt.md`.
+2026-07-04. Companion kickoff: `J:\Claude code\iolbox-bridge-fabric-kickoff-prompt.md`.
 
-This document proposes replacing iolab's userspace UDP-tunnel link fabric with an
+This document proposes replacing iolbox's userspace UDP-tunnel link fabric with an
 EVE-NG / PNetLab-style **Linux-bridge fabric with static per-interface taps**, and
 folds in a **version-stamping** workstream so every deployment reports its build.
 

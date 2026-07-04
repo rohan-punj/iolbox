@@ -1,4 +1,4 @@
-// capture-helper connects to an iolab supervisor capture port (a raw pcapng
+// capture-helper connects to an iolbox supervisor capture port (a raw pcapng
 // byte stream for one link) and pipes it into Wireshark via `wireshark -k -i -`.
 //
 // It is deliberately tiny and standalone so the Tauri app can either spawn it or
@@ -29,7 +29,7 @@ func main() {
 	var (
 		connect   = flag.String("connect", "127.0.0.1:5500", "supervisor capture endpoint host:port")
 		wsPath    = flag.String("wireshark", "", "path to Wireshark.exe (auto-detected if empty)")
-		name      = flag.String("name", "iolab capture", "interface name shown in Wireshark")
+		name      = flag.String("name", "iolbox capture", "interface name shown in Wireshark")
 		relaunch  = flag.Bool("relaunch", true, "respawn Wireshark if it is closed")
 		outFile   = flag.String("out", "", "also write the stream to this pcapng file")
 		dialRetry = flag.Duration("retry", 2*time.Second, "reconnect backoff to the supervisor")

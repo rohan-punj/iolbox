@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/relay"
+	"github.com/rohanpunj/iolbox/supervisor/internal/relay"
 )
 
 // Capture runs tcpdump against a Linux bridge fabric link and re-serves its

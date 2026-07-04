@@ -1,4 +1,4 @@
-// iolab Tauri app — Rust core.
+// iolbox Tauri app — Rust core.
 //
 // Owns process/provider orchestration on the Windows side (see
 // docs/providers.md for the provider contract) and the local image library
@@ -28,5 +28,5 @@ pub fn run() {
             commands::start_capture,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running iolab application");
+        .expect("error while running iolbox application");
 }

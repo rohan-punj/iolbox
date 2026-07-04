@@ -19,9 +19,9 @@ func joinCmds(cmds []cmd) string {
 // TestNatBridgeTapCommands pins the at-Start tap creation: create the tap owned
 // by us and bring it up, UNBRIDGED and unaddressed (attach happens at link time).
 func TestNatBridgeTapCommands(t *testing.T) {
-	got := joinCmds(natBridgeTapCmds("iolnat9", "iolab"))
+	got := joinCmds(natBridgeTapCmds("iolnat9", "iolbox"))
 	for _, want := range []string{
-		"ip tuntap add dev iolnat9 mode tap user iolab",
+		"ip tuntap add dev iolnat9 mode tap user iolbox",
 		"ip link set iolnat9 up",
 	} {
 		if !strings.Contains(got, want) {

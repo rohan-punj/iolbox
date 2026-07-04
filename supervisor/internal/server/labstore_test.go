@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // newStoreServer builds a server whose lab-document store points at a fresh
@@ -15,8 +15,8 @@ func newStoreServer(t *testing.T) *Server {
 	t.Helper()
 	return New(Config{
 		ControlAddr: "127.0.0.1:0",
-		ImageDir:    "/opt/iolab/images",
-		RunDir:      "/run/iolab",
+		ImageDir:    "/opt/iolbox/images",
+		RunDir:      "/run/iolbox",
 		LabsDir:     t.TempDir(),
 		Version:     "test",
 	})

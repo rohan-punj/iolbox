@@ -1,6 +1,6 @@
-# Third-party software distributed with iolab
+# Third-party software distributed with iolbox
 
-iolab bundles the following third-party components. Their licenses are their
+iolbox bundles the following third-party components. Their licenses are their
 own; this file records what we ship, from where, pinned to an exact version and
 checksum, and how we comply with each license.
 
@@ -58,8 +58,8 @@ run, so the DLL set is complete.
 ### Layout shipped next to the launcher exe
 
 ```
-iolab-launcher.exe
-iolab-disk.qcow2            (the runtime disk — a separate release asset, see below)
+iolbox-launcher.exe
+iolbox-disk.qcow2            (the runtime disk — a separate release asset, see below)
 qemu/
   qemu-system-x86_64.exe
   *.dll                     (the runtime DLLs)
@@ -68,7 +68,7 @@ qemu/
     bios*.bin, vgabios*.bin, kvmvapic.bin, linuxboot*.bin, ...
 ```
 
-The launcher looks for `qemu/qemu-system-x86_64.exe` and `iolab-disk.qcow2`
+The launcher looks for `qemu/qemu-system-x86_64.exe` and `iolbox-disk.qcow2`
 relative to its own exe (`--qemu` / `--disk` override for dev). QEMU resolves its
 BIOS/keymap data from the `share/` dir next to its exe automatically.
 
@@ -87,13 +87,13 @@ and other compatible licenses). We redistribute unmodified upstream binaries.
 - **Written offer for source:** the corresponding source for this exact build is
   published by the upstream packager at the QEMU source page,
   <https://www.qemu.org/download/#source> (release 11.0.0), mirrored from
-  <https://qemu.weilnetz.de/>. iolab distributes QEMU **unmodified**; the source
+  <https://qemu.weilnetz.de/>. iolbox distributes QEMU **unmodified**; the source
   offer therefore points at upstream. Include this URL in the release notes /
   About page alongside the version above so the offer travels with the binary.
 
-### The iolab runtime disk (`iolab-disk.qcow2`)
+### The iolbox runtime disk (`iolbox-disk.qcow2`)
 
-Not third-party — it is built from `runtime/` (Debian-slim rootfs + the iolab
+Not third-party — it is built from `runtime/` (Debian-slim rootfs + the iolbox
 supervisor) by `runtime/pack-qemu.sh`. It contains **no Cisco software**; IOL
 images are supplied by the user at runtime via the GUI. Debian's own components
 inside the rootfs are under their respective licenses (Debian is DFSG-free);

@@ -8,7 +8,7 @@ import (
 )
 
 // portRanges is the set of TCP ports the launcher exposes from the guest to
-// the Windows host. iolab's allocators hand out lowest-first with sticky
+// the Windows host. iolbox's allocators hand out lowest-first with sticky
 // assignments, so forwarding the first ~50 of each range covers realistic
 // labs (see the launcher kickoff / supervisor allocator notes):
 //

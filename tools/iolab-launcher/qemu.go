@@ -14,7 +14,7 @@ import (
 )
 
 // qemuBackend launches the bundled qemu-system-x86_64 (TCG, no hardware accel)
-// with the iolab qcow2 disk, forwards the GUI/console/capture ports, waits for
+// with the iolbox qcow2 disk, forwards the GUI/console/capture ports, waits for
 // the GUI to come up on 127.0.0.1:<gui>, and manages clean shutdown via QMP.
 type qemuBackend struct {
 	opts   launchOpts
@@ -29,8 +29,8 @@ type qemuBackend struct {
 // locateQemu finds the bundled qemu binary + disk relative to the launcher exe.
 // Layout next to the exe:
 //
-//	iolab-launcher.exe
-//	iolab-disk.qcow2
+//	iolbox-launcher.exe
+//	iolbox-disk.qcow2
 //	qemu/qemu-system-x86_64.exe   (+ its DLLs, bios/, keymaps/ ...)
 func (q *qemuBackend) locate() error {
 	exePath, err := os.Executable()
@@ -51,14 +51,14 @@ func (q *qemuBackend) locate() error {
 			"   download the release bundle or see THIRD_PARTY.md to stage it): %w", q.qemuExe, err)
 	}
 
-	// disk: iolab-disk.qcow2 next to the launcher. Allow a --disk override.
+	// disk: iolbox-disk.qcow2 next to the launcher. Allow a --disk override.
 	q.diskPath = q.opts.diskPath
 	if q.diskPath == "" {
-		q.diskPath = filepath.Join(exeDir, "iolab-disk.qcow2")
+		q.diskPath = filepath.Join(exeDir, "iolbox-disk.qcow2")
 	}
 	if _, err := os.Stat(q.diskPath); err != nil {
-		return fmt.Errorf("iolab disk image not found at %s\n"+
-			"  (download iolab-disk.qcow2 from the release and place it next to the launcher): %w",
+		return fmt.Errorf("iolbox disk image not found at %s\n"+
+			"  (download iolbox-disk.qcow2 from the release and place it next to the launcher): %w",
 			q.diskPath, err)
 	}
 	return nil
@@ -78,7 +78,7 @@ func (q *qemuBackend) locate() error {
 // virtio_blk (and the initramfs MODULES=most carries it), so the stock kernel
 // boots off virtio with no extra build. virtio is the faster path under TCG.
 //
-// snapshot=on makes the OS disk ephemeral: qemu opens iolab-disk.qcow2
+// snapshot=on makes the OS disk ephemeral: qemu opens iolbox-disk.qcow2
 // READ-ONLY and redirects every guest write to a temporary overlay file (in
 // the Windows %TMP% dir) that is discarded when qemu exits. A hard kill (task
 // kill, power loss, crash) can therefore never corrupt the shipped golden
@@ -216,7 +216,7 @@ func (q *qemuBackend) run(ctx context.Context) error {
 	if !q.opts.noBrowser {
 		openBrowser(guiURL)
 	}
-	logf("iolab is running. Press Ctrl-C to shut down cleanly.")
+	logf("iolbox is running. Press Ctrl-C to shut down cleanly.")
 
 	// Block until Ctrl-C (ctx cancelled) or qemu exits on its own.
 	select {

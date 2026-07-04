@@ -9,7 +9,7 @@
 //! TODO(P1):
 //! - `detect()`: `wsl.exe` present AND VMP/Hyper-V feature state already on
 //!   (query via DISM / `Get-WindowsOptionalFeature` or the registry).
-//! - `provision()`: `wsl --import iolab <dir> iolab-rootfs.tar` (no Store
+//! - `provision()`: `wsl --import iolbox <dir> iolbox-rootfs.tar` (no Store
 //!   distro needed).
 //! - `start()`: launch the supervisor inside the distro; endpoint is
 //!   `127.0.0.1:4000` directly via WSL2 localhost forwarding.
@@ -36,7 +36,7 @@ impl Provider for Wsl2Provider {
             detail: "WSL2 detection not implemented yet (Rust stub).".into(),
             warning: Some(
                 "Enabling Hyper-V/WHP for WSL2 degrades VMware Workstation and disables nested \
-                 virtualization. iolab never enables it automatically."
+                 virtualization. iolbox never enables it automatically."
                     .into(),
             ),
         }

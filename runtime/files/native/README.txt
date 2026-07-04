@@ -1,11 +1,11 @@
-iolab native server install
+iolbox native server install
 ============================
 
-This tarball installs iolab (the Go supervisor that runs Cisco IOL + VPCS
+This tarball installs iolbox (the Go supervisor that runs Cisco IOL + VPCS
 lab nodes, with an embedded browser GUI) directly onto any systemd-based
 x86-64 glibc Linux server: bare metal, a cloud VM, an on-prem hypervisor
 guest, whatever you've got. It is the "bring your own Linux box" install
-target — see docs/providers.md's `remote` provider in the iolab repo for
+target — see docs/providers.md's `remote` provider in the iolbox repo for
 how the Windows-side app talks to a host set up this way.
 
 Requirements
@@ -21,12 +21,12 @@ Requirements
 
 Install
 -------
-    tar xzf iolab-server-<version>.tar.gz
-    cd iolab-server-<version>
+    tar xzf iolbox-server-<version>.tar.gz
+    cd iolbox-server-<version>
     sudo ./install.sh                  # binds GUI/console/capture to 127.0.0.1
     sudo ./install.sh --bind all       # binds 0.0.0.0 (LAN/VPN/tunnel reachable)
 
-install.sh installs to /opt/iolab, sets up the systemd units, generates the
+install.sh installs to /opt/iolbox, sets up the systemd units, generates the
 IOL license (iourc) immediately, and starts the supervisor. It prints the
 GUI URL when done.
 
@@ -46,14 +46,14 @@ randomize the hostname on every boot (install.sh warns if it looks like
 that might be the case).
 
 If the license ever breaks (nodes refuse to start with a license error):
-    sudo rm -f /opt/iolab/.iourc-generated /opt/iolab/iourc
-    sudo systemctl restart iolab-firstboot-iourc.service
-    sudo systemctl restart iolab-supervisor.service
+    sudo rm -f /opt/iolbox/.iourc-generated /opt/iolbox/iourc
+    sudo systemctl restart iolbox-firstboot-iourc.service
+    sudo systemctl restart iolbox-supervisor.service
 
 Changing the bind mode later
 -----------------------------
-    sudo $EDITOR /etc/iolab/bind.env      # edit IOLAB_WS_ADDR / CONSOLE / CAPTURE
-    sudo systemctl restart iolab-supervisor.service
+    sudo $EDITOR /etc/iolbox/bind.env      # edit IOLBOX_WS_ADDR / CONSOLE / CAPTURE
+    sudo systemctl restart iolbox-supervisor.service
 
 Uninstall
 ---------
@@ -62,8 +62,8 @@ Uninstall
 
 Logs and status
 ----------------
-    journalctl -u iolab-supervisor -f
-    systemctl status iolab-supervisor iolab-firstboot-iourc
+    journalctl -u iolbox-supervisor -f
+    systemctl status iolbox-supervisor iolbox-firstboot-iourc
 
 Tarball contents
 -----------------
@@ -72,11 +72,11 @@ Tarball contents
     README.txt                              this file
     bin/supervisor                          the Go supervisor binary (linux/amd64)
     bin/vpcs                                VPCS binary (linux/amd64, static)
-    opt-iolab/firstboot-iourc.sh             first-boot IOL license generator
-    opt-iolab/prestart-clean.sh              ExecStartPre stale-state sweep
-    systemd/iolab-supervisor.service         main unit (unmodified stock unit)
-    systemd/iolab-firstboot-iourc.service    firstboot oneshot unit
+    opt-iolbox/firstboot-iourc.sh             first-boot IOL license generator
+    opt-iolbox/prestart-clean.sh              ExecStartPre stale-state sweep
+    systemd/iolbox-supervisor.service         main unit (unmodified stock unit)
+    systemd/iolbox-firstboot-iourc.service    firstboot oneshot unit
     systemd/10-bind.conf                     drop-in: bind addrs from an EnvironmentFile
     systemd/bind.env.local                   --bind local env file (127.0.0.1 everywhere)
     systemd/bind.env.all                     --bind all env file (0.0.0.0 everywhere)
-    etc/99-iolab.conf                        sysctl drop-in (ip_forward off by default)
+    etc/99-iolbox.conf                        sysctl drop-in (ip_forward off by default)

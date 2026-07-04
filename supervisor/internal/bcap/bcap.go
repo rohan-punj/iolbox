@@ -25,7 +25,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/relay"
+	"github.com/rohanpunj/iolbox/supervisor/internal/relay"
 )
 
 // maxInclLen guards against stream corruption: no real capture snaplen we use

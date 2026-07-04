@@ -3,7 +3,7 @@ package server
 import (
 	"sync"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // broadcaster fans supervisor events out to every subscribed client encoder.

@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 func newTestServer() *Server {
-	return New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolab/images", RunDir: "/run/iolab", Version: "test"})
+	return New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: "/run/iolbox", Version: "test"})
 }
 
 func dispatch(t *testing.T, s *Server, op string, args any) *protocol.Response {

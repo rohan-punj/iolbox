@@ -1,3 +1,3 @@
-module github.com/iolab/iolab-launcher
+module github.com/iolbox/iolbox-launcher
 
 go 1.26

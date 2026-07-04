@@ -8,11 +8,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // The durable lab-document store persists whole lab documents as
-// <LabsDir>/<id>.yml (iolab's native format is YAML), one file per lab, stored
+// <LabsDir>/<id>.yml (iolbox's native format is YAML), one file per lab, stored
 // byte-for-byte as received. The supervisor treats the document as opaque text:
 // it only extracts the id (for the filename) and never re-marshals it, so unknown
 // fields and formatting survive. It is deliberately separate from the runtime

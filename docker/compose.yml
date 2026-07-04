@@ -1,4 +1,4 @@
-# docker/compose.yml — run the iolab runtime as a container instead of the
+# docker/compose.yml — run the iolbox runtime as a container instead of the
 # WSL2/VMware appliance. Build context is the REPO ROOT (not docker/),
 # because the Dockerfile COPYs the prebuilt supervisor binary from
 # ../supervisor/bin/ — see docker/README.md for the full build+run sequence.
@@ -16,30 +16,30 @@
 # ports on a trusted LAN or behind an SSH/WireGuard tunnel. NEVER expose
 # this compose file's ports directly to the public internet.
 services:
-  iolab:
+  iolbox:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: iolab:latest
-    container_name: iolab
+    image: iolbox:latest
+    container_name: iolbox
 
     # Pinned hostname: NOT load-bearing for hostid (see entrypoint.sh — the
     # hostid/iourc pair is persisted in the state volume below, independent
     # of hostname), but kept anyway because the iourc file's own content is
-    # keyed "iolab = <key>" and IOL's license check compares that name
+    # keyed "iolbox = <key>" and IOL's license check compares that name
     # against the running hostname, same as the appliance
     # (runtime/README.md "First boot: iourc" — three places the hostname
-    # 'iolab' has to stay in sync; this is the container's equivalent of
+    # 'iolbox' has to stay in sync; this is the container's equivalent of
     # that pin, done in one place instead of three).
-    hostname: iolab
+    hostname: iolbox
 
     # vCPU/RAM: sourced from docker/.env (which mirrors runtime/resources.env,
     # the single source of truth for every deployment target). `cpus:`/
     # `mem_limit:` are the plain compose v2 limit keys — they work with
     # `docker compose up/run` directly, unlike `deploy.resources.limits`
     # which only applies under `docker stack deploy` (swarm).
-    cpus: "${IOLAB_VCPUS:-4}"
-    mem_limit: "${IOLAB_RAM_MB:-4096}m"
+    cpus: "${IOLBOX_VCPUS:-4}"
+    mem_limit: "${IOLBOX_RAM_MB:-4096}m"
 
     # NET_ADMIN: required for the NAT node's `sudo -n ip/iptables/sysctl`
     # calls (tap creation, MASQUERADE/FORWARD rules, ip_forward toggle) and
@@ -56,7 +56,7 @@ services:
     ports:
       # ws-addr: GUI (embedded Svelte bundle) + WS control/console bridge.
       # supervisor/cmd/supervisor/main.go default -ws-addr flag; entrypoint.sh
-      # binds 0.0.0.0:4001 explicitly (mirrors iolab-supervisor.service).
+      # binds 0.0.0.0:4001 explicitly (mirrors iolbox-supervisor.service).
       - "4001:4001"
       # Console range: telnet <host>:<port> per node. Verified against
       # supervisor/internal/server/server.go:100 —
@@ -83,17 +83,17 @@ services:
       # Uploaded IOL/VPCS images (.bin/.iol) — durable across container
       # recreates and image upgrades. Large; a named volume avoids bind-mount
       # perf/permission quirks on Docker Desktop (Windows/Mac).
-      - iolab-images:/opt/iolab/images
+      - iolbox-images:/opt/iolbox/images
       # Durable lab-document store (-labs-dir). Seed labs materialize here
       # on first connect when empty, same as the appliance.
-      - iolab-labs:/opt/iolab/labs
+      - iolbox-labs:/opt/iolbox/labs
       # hostid seed + generated iourc license, persisted here by
       # entrypoint.sh so BOTH survive `docker compose down && up`, not just
       # in-place restarts — see entrypoint.sh's Step 3 comment for why this
       # matters (container IP changes across recreates, and gethostid(3)
       # falls back to an IP-derived value when /etc/hostid is absent).
-      - iolab-state:/opt/iolab/state
-      # NOT a named volume: /opt/iolab/run. It's scratch state (sockets,
+      - iolbox-state:/opt/iolbox/state
+      # NOT a named volume: /opt/iolbox/run. It's scratch state (sockets,
       # NETMAPs, nvram scratch for in-progress labs) that entrypoint.sh
       # sweeps on every start anyway — same non-durable treatment as the
       # appliance's ExecStartPre cleanup.
@@ -102,12 +102,12 @@ services:
     # figure the appliance docs use). The cpus:/mem_limit: keys above default
     # to 4 vCPU / 4096 MB (docker/.env); size up for the number of
     # concurrent lab nodes you expect, e.g. a 6-node lab wants a good
-    # 6-8 GB budget — override via docker/.env or `IOLAB_RAM_MB=8192 docker
+    # 6-8 GB budget — override via docker/.env or `IOLBOX_RAM_MB=8192 docker
     # compose -f docker/compose.yml up -d`.
 
     restart: unless-stopped
 
 volumes:
-  iolab-images:
-  iolab-labs:
-  iolab-state:
+  iolbox-images:
+  iolbox-labs:
+  iolbox-state:

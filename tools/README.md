@@ -5,7 +5,7 @@ supervisor.
 
 ## capture-helper
 
-Bridges an iolab supervisor **capture port** (a raw pcapng byte stream for one
+Bridges an iolbox supervisor **capture port** (a raw pcapng byte stream for one
 link, opened by the `capture.start` verb) to a live Wireshark window.
 
 ```

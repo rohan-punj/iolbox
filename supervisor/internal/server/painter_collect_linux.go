@@ -6,9 +6,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/painter"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/painter"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // painterCollect scrapes the requested protocol's `show` output from every

@@ -10,9 +10,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 ROOTFS_DIR="$BUILD_DIR/rootfs"
-OUT_TAR="$BUILD_DIR/iolab-rootfs.tar"
+OUT_TAR="$BUILD_DIR/iolbox-rootfs.tar"
 
 usage() {
     cat <<EOF
@@ -25,7 +25,7 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --build-dir) BUILD_DIR="$2"; ROOTFS_DIR="$BUILD_DIR/rootfs"; OUT_TAR="$BUILD_DIR/iolab-rootfs.tar"; shift 2 ;;
+        --build-dir) BUILD_DIR="$2"; ROOTFS_DIR="$BUILD_DIR/rootfs"; OUT_TAR="$BUILD_DIR/iolbox-rootfs.tar"; shift 2 ;;
         --out) OUT_TAR="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage; exit 1 ;;
@@ -40,7 +40,7 @@ fi
 if [ ! -f "$ROOTFS_DIR/etc/wsl.conf" ]; then
     # Not fatal (WSL2 will still import and boot without it — it'll just
     # fall back to WSL's non-systemd init shim, silently breaking the
-    # iolab-supervisor.service autostart), but loud enough that a partial
+    # iolbox-supervisor.service autostart), but loud enough that a partial
     # or hand-assembled rootfs doesn't ship broken by accident.
     echo "pack-wsl: WARNING - $ROOTFS_DIR/etc/wsl.conf is missing." >&2
     echo "           Without it, WSL2 will NOT run systemd, and the supervisor" >&2
@@ -68,7 +68,7 @@ echo "== pack-wsl: creating $OUT_TAR from $ROOTFS_DIR =="
 # on for a small number of binaries (setcap'd ping, etc.). Since this
 # rootfs doesn't setcap anything of its own and ping's default capability
 # xattr isn't load-bearing here (root runs everything anyway — see
-# iolab-supervisor.service's User=root), dropping xattrs on import is a
+# iolbox-supervisor.service's User=root), dropping xattrs on import is a
 # safe simplification, not a functional loss.
 tar \
     --create \
@@ -84,16 +84,16 @@ cat <<EOF
 
 Windows-side import (see docs/providers.md "wsl2"):
 
-  wsl --import iolab <install-dir> "$OUT_TAR"
+  wsl --import iolbox <install-dir> "$OUT_TAR"
 
 Example:
 
-  wsl --import iolab C:\\Users\\<you>\\iolab-wsl "$(cygpath -w "$OUT_TAR" 2>/dev/null || echo "$OUT_TAR")"
+  wsl --import iolbox C:\\Users\\<you>\\iolbox-wsl "$(cygpath -w "$OUT_TAR" 2>/dev/null || echo "$OUT_TAR")"
 
-First boot will run iolab-firstboot-iourc.service then
-iolab-supervisor.service automatically (systemd=true in /etc/wsl.conf is
+First boot will run iolbox-firstboot-iourc.service then
+iolbox-supervisor.service automatically (systemd=true in /etc/wsl.conf is
 what makes that happen — see runtime/files/wsl.conf). Verify with:
 
-  wsl -d iolab -- systemctl status iolab-supervisor.service
-  wsl -d iolab -- ss -ltnp sport = :4000
+  wsl -d iolbox -- systemctl status iolbox-supervisor.service
+  wsl -d iolbox -- ss -ltnp sport = :4000
 EOF

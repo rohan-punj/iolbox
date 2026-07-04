@@ -1,6 +1,6 @@
-# Building iolab from source
+# Building iolbox from source
 
-iolab has three build outputs that fit together:
+iolbox has three build outputs that fit together:
 
 1. **supervisor** — Go binary, cross-compiled for **linux/amd64** (it runs inside
    the runtime, never on Windows).
@@ -30,7 +30,7 @@ Runs on a Linux builder (see `runtime/README.md`). Feeds it the supervisor binar
 ```
 cd runtime
 ./build-all.sh ../supervisor/bin/supervisor-linux-amd64
-# produces build/iolab-rootfs.tar (WSL) and build/appliance/*.vmx+*.vmdk (VMware)
+# produces build/iolbox-rootfs.tar (WSL) and build/appliance/*.vmx+*.vmdk (VMware)
 ```
 
 ## 3. Capture helper
@@ -52,6 +52,6 @@ npm run tauri build
 
 ## Where images live
 
-iolab ships **no** Cisco images. At runtime the app manages a local library
-(default `%APPDATA%\iolab\images`) and syncs images into the runtime on demand.
+iolbox ships **no** Cisco images. At runtime the app manages a local library
+(default `%APPDATA%\iolbox\images`) and syncs images into the runtime on demand.
 Nothing image-related is required to build.

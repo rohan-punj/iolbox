@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/bcap"
-	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
-	"github.com/rohanpunj/iolab/supervisor/internal/fabric"
-	"github.com/rohanpunj/iolab/supervisor/internal/iouyap"
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
-	"github.com/rohanpunj/iolab/supervisor/internal/vtap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/bcap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
+	"github.com/rohanpunj/iolbox/supervisor/internal/fabric"
+	"github.com/rohanpunj/iolbox/supervisor/internal/iouyap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
 // startFabric realises the static-tap fabric for the current plan, BEFORE any

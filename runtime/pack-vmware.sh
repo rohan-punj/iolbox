@@ -2,7 +2,7 @@
 # pack-vmware.sh — turn the rootfs built by build-rootfs.sh into a bootable
 # VMware appliance: a GPT disk (bios_grub + root) with legacy-BIOS GRUB and a
 # Debian kernel, converted to monolithicSparse .vmdk, plus a templated .vmx
-# (runtime/files/iolab-appliance.vmx.tmpl). See docs/providers.md
+# (runtime/files/iolbox-appliance.vmx.tmpl). See docs/providers.md
 # "vmware (primary)" for the contract.
 #
 # The disk-image build itself (partition -> loop -> mkfs -> rsync rootfs ->
@@ -20,13 +20,13 @@
 # Disk layout (GPT, legacy BIOS boot — VMware Workstation's default; the vmx
 # template deliberately does not set firmware="efi"):
 #   p1  bios_grub  1MiB..2MiB
-#   p2  root ext4  2MiB..100%   (LABEL=iolab-root)
+#   p2  root ext4  2MiB..100%   (LABEL=iolbox-root)
 # 16 GB virtual size (the image library lives INSIDE the appliance);
 # monolithicSparse vmdk so actual on-disk bytes stay near what's written.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 
 # resources.env is the single source of truth for vCPU/RAM across every
 # deployment target (VMware, OVA, LXC, Docker); the Windows QEMU launcher
@@ -35,7 +35,7 @@ BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
 source "$SCRIPT_DIR/resources.env"
 
 # --version stamps the artifact names. Default empty -> historical unversioned
-# names (iolab-appliance.vmdk/.vmx) so existing tooling keeps working.
+# names (iolbox-appliance.vmdk/.vmx) so existing tooling keeps working.
 VERSION=""
 
 # Size levers (opt-in; forwarded to lib-disk.sh's build_raw_disk). Defaults
@@ -49,11 +49,11 @@ ZEROFREE=0
 recompute_paths() {
     ROOTFS_DIR="$BUILD_DIR/rootfs"
     WORK_DIR="$BUILD_DIR/vmware-work"
-    RAW_DISK="$WORK_DIR/iolab-appliance.raw"
-    # Versioned artifact names: iolab-appliance-<version>.{vmdk,vmx}. Empty
+    RAW_DISK="$WORK_DIR/iolbox-appliance.raw"
+    # Versioned artifact names: iolbox-appliance-<version>.{vmdk,vmx}. Empty
     # VERSION -> the historical unversioned names.
-    local stem="iolab-appliance"
-    [ -n "$VERSION" ] && stem="iolab-appliance-$VERSION"
+    local stem="iolbox-appliance"
+    [ -n "$VERSION" ] && stem="iolbox-appliance-$VERSION"
     OUT_VMDK="$BUILD_DIR/$stem.vmdk"
     OUT_VMX="$BUILD_DIR/$stem.vmx"
 }
@@ -61,7 +61,7 @@ recompute_paths
 
 DISK_SIZE_MB=16384         # 16 GB virtual; sparse vmdk only consumes written blocks
 
-# Fixed NIC MACs — MUST match files/iolab-appliance.vmx.tmpl. lib-disk.sh
+# Fixed NIC MACs — MUST match files/iolbox-appliance.vmx.tmpl. lib-disk.sh
 # writes MAC-matched networkd configs so "which NIC is host-only" never
 # depends on interface naming (ens160 vs ens33 vs eth0).
 MAC_HOSTONLY="00:50:56:3f:ab:01"
@@ -72,8 +72,8 @@ usage() {
 Usage: $0 [options]
 
   --build-dir DIR     Root containing rootfs/ (default: $BUILD_DIR)
-  --version VER       Stamp artifact names as iolab-appliance-VER.{vmdk,vmx}
-                       (default: unversioned iolab-appliance.{vmdk,vmx})
+  --version VER       Stamp artifact names as iolbox-appliance-VER.{vmdk,vmx}
+                       (default: unversioned iolbox-appliance.{vmdk,vmx})
   --zerofree          Zero free blocks before conversion — THE size lever:
                        measured ~1.55 GiB -> ~0.81 GiB vmdk (needs the
                        'zerofree' package; dd fallback otherwise)
@@ -153,9 +153,9 @@ echo "== pack-vmware: templating .vmx =="
 VMDK_FILENAME="$(basename "$OUT_VMDK")"
 sed \
     -e "s|@@VMDK_FILENAME@@|$VMDK_FILENAME|g" \
-    -e "s|@@VCPUS@@|$IOLAB_VCPUS|g" \
-    -e "s|@@RAM_MB@@|$IOLAB_RAM_MB|g" \
-    "$SCRIPT_DIR/files/iolab-appliance.vmx.tmpl" > "$OUT_VMX"
+    -e "s|@@VCPUS@@|$IOLBOX_VCPUS|g" \
+    -e "s|@@RAM_MB@@|$IOLBOX_RAM_MB|g" \
+    "$SCRIPT_DIR/files/iolbox-appliance.vmx.tmpl" > "$OUT_VMX"
 
 echo "== pack-vmware: done =="
 ls -lh "$OUT_VMDK" "$OUT_VMX"

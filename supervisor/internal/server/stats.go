@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // maxProtos caps how many per-protocol entries a link.stats event carries: the

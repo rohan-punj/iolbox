@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability set for the iolab main window.",
+  "description": "Default capability set for the iolbox main window.",
   "windows": ["main"],
   "permissions": [
     "core:default",

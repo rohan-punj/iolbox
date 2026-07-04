@@ -3,8 +3,8 @@
 package server
 
 import (
-	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 )
 
 // The static-tap fabric is Linux-only (taps + bridges). On other platforms the

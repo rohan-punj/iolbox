@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/nvram"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/nvram"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // prepareLabDir creates the shared lab directory and writes the whole-lab
@@ -89,7 +89,7 @@ func (s *Server) iourcSource() string {
 	if s.cfg.ImageDir != "" {
 		return filepath.Join(filepath.Dir(s.cfg.ImageDir), "iourc")
 	}
-	return "/opt/iolab/iourc"
+	return "/opt/iolbox/iourc"
 }
 
 // injectNVRAM encodes a node's startupConfig into its nvram_<id> file in the

@@ -1,4 +1,4 @@
-// Command supervisor is the iolab control + data plane daemon. It runs inside
+// Command supervisor is the iolbox control + data plane daemon. It runs inside
 // the Linux runtime (WSL2 / VMware helper VM / remote / qemu) and speaks the
 // NDJSON control protocol (see docs/protocol.md) to the Windows GUI over a
 // loopback TCP connection.
@@ -18,9 +18,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/iourc"
-	"github.com/rohanpunj/iolab/supervisor/internal/server"
-	"github.com/rohanpunj/iolab/supervisor/internal/wsbridge"
+	"github.com/rohanpunj/iolbox/supervisor/internal/iourc"
+	"github.com/rohanpunj/iolbox/supervisor/internal/server"
+	"github.com/rohanpunj/iolbox/supervisor/internal/wsbridge"
 )
 
 // version is the supervisor build version reported in the hello handshake.
@@ -31,10 +31,10 @@ var version = "0.1.0"
 func main() {
 	controlAddr := flag.String("control-addr", "127.0.0.1:4000", "control API bind address (loopback only)")
 	wsAddr := flag.String("ws-addr", "127.0.0.1:4001", "WebSocket bridge + GUI bind address (control + console over WS and the embedded browser GUI; use 0.0.0.0:4001 for browser access from the host; empty disables it)")
-	imageDir := flag.String("image-dir", "/opt/iolab/images", "directory holding IOL image files")
-	runDir := flag.String("run-dir", "/run/iolab", "base directory for per-lab working directories")
-	labsDir := flag.String("labs-dir", "/opt/iolab/labs", "directory for the durable lab-document store (lab.saveDoc/listDocs/getDoc/deleteDoc)")
-	iourcPath := flag.String("iourc", "/opt/iolab/iourc", "IOU license file copied into each lab's shared dir (generated at firstboot by -gen-iourc)")
+	imageDir := flag.String("image-dir", "/opt/iolbox/images", "directory holding IOL image files")
+	runDir := flag.String("run-dir", "/run/iolbox", "base directory for per-lab working directories")
+	labsDir := flag.String("labs-dir", "/opt/iolbox/labs", "directory for the durable lab-document store (lab.saveDoc/listDocs/getDoc/deleteDoc)")
+	iourcPath := flag.String("iourc", "/opt/iolbox/iourc", "IOU license file copied into each lab's shared dir (generated at firstboot by -gen-iourc)")
 	consoleBind := flag.String("console-bind", "127.0.0.1", "host the per-node IOL console listeners bind; 0.0.0.0 lets a native telnet client on the GUI host dial <vm-ip>:<consolePort>")
 	captureBind := flag.String("capture-bind", "127.0.0.1", "host each link's pcapng capture tee listener binds; 0.0.0.0 lets a native Wireshark on the GUI host attach with `wireshark -k -i TCP@<vm-ip>:<capturePort>`")
 	egressMode := flag.String("egress", "auto", "NAT internet-egress capability advertised in hello: auto (detect QEMU slirp signature), slirp (force ICMP-limited: DHCP/TCP only), or routed (force full ICMP/traceroute)")
@@ -71,7 +71,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("iolab supervisor %s listening on %s (images=%s run=%s)", version, *controlAddr, *imageDir, *runDir)
+		log.Printf("iolbox supervisor %s listening on %s (images=%s run=%s)", version, *controlAddr, *imageDir, *runDir)
 		if err := srv.ListenAndServe(ctx); err != nil {
 			errCh <- fmt.Errorf("control listener: %w", err)
 		}
@@ -82,13 +82,13 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			log.Printf("iolab supervisor ws bridge listening on %s (/control, /console/{nodeId})", *wsAddr)
+			log.Printf("iolbox supervisor ws bridge listening on %s (/control, /console/{nodeId})", *wsAddr)
 			if err := bridge.ListenAndServe(ctx); err != nil {
 				errCh <- fmt.Errorf("ws bridge: %w", err)
 			}
 		}()
 	} else {
-		log.Printf("iolab supervisor ws bridge disabled (-ws-addr empty)")
+		log.Printf("iolbox supervisor ws bridge disabled (-ws-addr empty)")
 	}
 
 	wg.Wait()
@@ -98,7 +98,7 @@ func main() {
 			log.Fatalf("supervisor: %v", err)
 		}
 	}
-	log.Printf("iolab supervisor shut down cleanly")
+	log.Printf("iolbox supervisor shut down cleanly")
 }
 
 // generateIourc writes the ~/.iourc license file content for this host to w.

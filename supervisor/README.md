@@ -1,6 +1,6 @@
-# iolab supervisor
+# iolbox supervisor
 
-The **supervisor** is the control + data plane for iolab. It is a single static
+The **supervisor** is the control + data plane for iolbox. It is a single static
 Go binary that runs **inside the Linux runtime** (WSL2, a VMware helper VM, a
 remote box, or QEMU) and drives Cisco IOL + VPCS nodes: it spawns the processes,
 bridges each console over a pty, wires same-host IOL nodes together natively via
@@ -60,7 +60,7 @@ go test ./...       # runs the pure-logic tests on any OS
 ## Run
 
 ```sh
-./supervisor -control-addr 127.0.0.1:4000 -ws-addr 127.0.0.1:4001 -image-dir /opt/iolab/images -run-dir /run/iolab
+./supervisor -control-addr 127.0.0.1:4000 -ws-addr 127.0.0.1:4001 -image-dir /opt/iolbox/images -run-dir /run/iolbox
 ```
 
 The control server binds **loopback only** (it refuses any non-loopback host).
@@ -79,7 +79,7 @@ link's pcapng capture tee: with `0.0.0.0`, a native Wireshark on the GUI host
 attaches with `wireshark -k -i TCP@<vm-ip>:<capturePort>`. Both share the
 `-ws-addr` trust boundary — the VM's own network exposure.
 
-`-iourc` (default `/opt/iolab/iourc`) points at the runtime's IOU license; the
+`-iourc` (default `/opt/iolbox/iourc`) points at the runtime's IOU license; the
 supervisor copies it into each lab's shared dir at start (see below).
 
 ## Node runtime model (P0-confirmed)

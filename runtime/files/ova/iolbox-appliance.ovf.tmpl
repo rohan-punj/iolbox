@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  iolab-appliance.ovf.tmpl - hand-written OVF descriptor for the iolab runtime
+  iolbox-appliance.ovf.tmpl - hand-written OVF descriptor for the iolbox runtime
   appliance, templated by runtime/pack-ova.sh.
 
   Substituted tokens (envsubst-style @@NAME@@):
@@ -9,9 +9,9 @@
     @@VMDK_CAPACITY@@   ovf:capacity - virtual disk size in BYTES (16 GiB)
     @@VMDK_POPULATED@@  ovf:populatedSize - bytes actually in use (uncompressed)
     @@PRODUCT_VERSION@@ human version string for the ProductSection
-    @@VSYS_ID@@         VirtualSystem id / displayName (e.g. iolab-appliance-1.2.3)
-    @@VCPUS@@           vCPU count (from runtime/resources.env IOLAB_VCPUS)
-    @@RAM_MB@@          RAM in MB (from runtime/resources.env IOLAB_RAM_MB)
+    @@VSYS_ID@@         VirtualSystem id / displayName (e.g. iolbox-appliance-1.2.3)
+    @@VCPUS@@           vCPU count (from runtime/resources.env IOLBOX_VCPUS)
+    @@RAM_MB@@          RAM in MB (from runtime/resources.env IOLBOX_RAM_MB)
 
   Design notes (see pack-ova.sh header + the OVA doc snippet for the full
   rationale):
@@ -60,29 +60,29 @@
   <NetworkSection>
     <Info>The list of logical networks</Info>
     <Network ovf:name="control">
-      <Description>Control/management plane - reach the iolab GUI at http://&lt;vm-ip&gt;:4001, native telnet consoles and Wireshark capture. Map to a host-only / internal network.</Description>
+      <Description>Control/management plane - reach the iolbox GUI at http://&lt;vm-ip&gt;:4001, native telnet consoles and Wireshark capture. Map to a host-only / internal network.</Description>
     </Network>
     <Network ovf:name="nat">
       <Description>NAT node outbound path - lab traffic is MASQUERADEd out through the default route this NIC provides. Map to a NAT network.</Description>
     </Network>
   </NetworkSection>
   <VirtualSystem ovf:id="@@VSYS_ID@@">
-    <Info>iolab runtime appliance</Info>
+    <Info>iolbox runtime appliance</Info>
     <Name>@@VSYS_ID@@</Name>
     <OperatingSystemSection ovf:id="96" vmw:osType="debian12_64Guest">
       <Info>The operating system installed</Info>
       <Description>Debian GNU/Linux 12 (64-bit)</Description>
     </OperatingSystemSection>
     <ProductSection>
-      <Info>iolab runtime appliance product information</Info>
-      <Product>iolab runtime appliance</Product>
-      <Vendor>iolab</Vendor>
+      <Info>iolbox runtime appliance product information</Info>
+      <Product>iolbox runtime appliance</Product>
+      <Vendor>iolbox</Vendor>
       <Version>@@PRODUCT_VERSION@@</Version>
       <ProductUrl>https://github.com/</ProductUrl>
     </ProductSection>
     <AnnotationSection>
       <Info>Annotation</Info>
-      <Annotation>iolab runtime appliance - autostarts the iolab supervisor; GUI at http://&lt;vm-ip&gt;:4001 reached from the host over the "control" (host-only) NIC. No Cisco software included; users supply their own .iol/.bin via the GUI. WARNING: the GUI has no authentication - keep the control network host-only / LAN-only, never bridge it to an untrusted network. Minimum to run: 2 GB RAM / 1 vCPU (one small IOL node); defaults @@RAM_MB@@ MB / @@VCPUS@@ vCPU.</Annotation>
+      <Annotation>iolbox runtime appliance - autostarts the iolbox supervisor; GUI at http://&lt;vm-ip&gt;:4001 reached from the host over the "control" (host-only) NIC. No Cisco software included; users supply their own .iol/.bin via the GUI. WARNING: the GUI has no authentication - keep the control network host-only / LAN-only, never bridge it to an untrusted network. Minimum to run: 2 GB RAM / 1 vCPU (one small IOL node); defaults @@RAM_MB@@ MB / @@VCPUS@@ vCPU.</Annotation>
     </AnnotationSection>
     <VirtualHardwareSection>
       <Info>Virtual hardware requirements</Info>

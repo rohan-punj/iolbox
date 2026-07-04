@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 )
 
 // Spec is the platform-independent description of how to launch a node. It is

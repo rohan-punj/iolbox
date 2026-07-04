@@ -4,9 +4,9 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/fabric"
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/netmap"
+	"github.com/rohanpunj/iolbox/supervisor/internal/fabric"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 )
 
 // isFabricLink reports whether a link is realised by the STATIC-TAP LINUX-BRIDGE

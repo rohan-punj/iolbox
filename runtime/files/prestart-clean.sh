@@ -1,5 +1,5 @@
 #!/bin/sh
-# /opt/iolab/prestart-clean.sh — ExecStartPre for iolab-supervisor.service.
+# /opt/iolbox/prestart-clean.sh — ExecStartPre for iolbox-supervisor.service.
 #
 # Clears state a crashed or SIGKILLed previous supervisor run can leave
 # behind, so a fresh start never fails on "File exists" / bound ports:
@@ -23,6 +23,6 @@ for i in 0 1 2 3 4 5 6 7 8 9 10 11; do
     ip link delete "iolmgmt$i" type macvtap 2>/dev/null || true
 done
 
-rm -rf /opt/iolab/run/* 2>/dev/null || true
+rm -rf /opt/iolbox/run/* 2>/dev/null || true
 
 exit 0

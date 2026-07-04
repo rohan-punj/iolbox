@@ -1,4 +1,4 @@
-// Package protocol implements the NDJSON control protocol between the iolab GUI
+// Package protocol implements the NDJSON control protocol between the iolbox GUI
 // and the supervisor (see docs/protocol.md). One request, response, or event
 // per line, UTF-8, correlated by id.
 package protocol

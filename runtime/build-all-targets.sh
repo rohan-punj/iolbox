@@ -31,7 +31,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 
 SKIP_WSL=0
 SKIP_VMWARE=0
@@ -48,7 +48,7 @@ Usage: sudo $0 [options]
   --version VER     Override the artifact-name/version stamp (default:
                      git describe --tags --always --dirty -> $VERSION)
   --build-dir DIR   Output root (default: $BUILD_DIR)
-  --skip-wsl        Don't produce iolab-rootfs.tar
+  --skip-wsl        Don't produce iolbox-rootfs.tar
   --skip-vmware     Don't produce the VMware vmdk/vmx appliance
   --skip-ova        Don't produce the .ova
   --skip-lxc        Don't produce the Proxmox LXC template tarball
@@ -59,12 +59,12 @@ Usage: sudo $0 [options]
 Runs, in order:
   1. repo root  build-release.sh      -> supervisor/bin/supervisor-linux-amd64
                                           (GUI embedded, version-stamped)
-  2. runtime/   build-all.sh           -> rootfs/ + iolab-rootfs.tar (WSL)
-                                          + iolab-appliance-<VER>.{vmdk,vmx}
-  3. runtime/   pack-ova.sh             -> iolab-appliance-<VER>.ova
-  4. runtime/   pack-lxc.sh             -> iolab-ct-<VER>.tar.zst
-  5. runtime/   pack-native.sh          -> iolab-server-<VER>.tar.gz
-  6. runtime/   pack-qemu.sh            -> iolab-disk-<VER>.qcow2
+  2. runtime/   build-all.sh           -> rootfs/ + iolbox-rootfs.tar (WSL)
+                                          + iolbox-appliance-<VER>.{vmdk,vmx}
+  3. runtime/   pack-ova.sh             -> iolbox-appliance-<VER>.ova
+  4. runtime/   pack-lxc.sh             -> iolbox-ct-<VER>.tar.zst
+  5. runtime/   pack-native.sh          -> iolbox-server-<VER>.tar.gz
+  6. runtime/   pack-qemu.sh            -> iolbox-disk-<VER>.qcow2
 
 Docker is a separate build (context = repo root, not runtime/build/) — see
 docker/README.md; it isn't part of this wrapper.
@@ -92,11 +92,11 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-export IOLAB_BUILD_DIR="$BUILD_DIR"
+export IOLBOX_BUILD_DIR="$BUILD_DIR"
 SUPERVISOR_BIN="$REPO_ROOT/supervisor/bin/supervisor-linux-amd64"
 
 echo "############################################################"
-echo "# iolab build-all-targets"
+echo "# iolbox build-all-targets"
 echo "#   version:   $VERSION"
 echo "#   build dir: $BUILD_DIR"
 echo "############################################################"
@@ -140,13 +140,13 @@ else
 fi
 
 echo "############################################################"
-echo "# iolab build-all-targets: DONE (version $VERSION)"
+echo "# iolbox build-all-targets: DONE (version $VERSION)"
 echo "############################################################"
 find "$BUILD_DIR" -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.zst' -o -name '*.tar.gz' \
     -o -name '*.vmdk' -o -name '*.vmx' -o -name '*.ova' -o -name '*.qcow2*' \) -exec ls -lh {} \;
 
 echo
 echo "Not built by this wrapper (separate, context = repo root):"
-echo "  docker build -f docker/Dockerfile -t iolab:\$VERSION .   # see docker/README.md"
+echo "  docker build -f docker/Dockerfile -t iolbox:\$VERSION .   # see docker/README.md"
 echo
 echo "See runtime/REDEPLOY.md for per-target redeploy steps."

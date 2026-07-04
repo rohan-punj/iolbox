@@ -36,7 +36,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+BUILD_DIR="${IOLBOX_BUILD_DIR:-$SCRIPT_DIR/build}"
 
 # resources.env is the single source of truth for vCPU/RAM across every
 # deployment target (VMware, OVA, LXC, Docker); the Windows QEMU launcher
@@ -68,9 +68,9 @@ MAC_NAT="00:50:56:3f:ab:02"
 recompute_paths() {
     ROOTFS_DIR="$BUILD_DIR/rootfs"
     WORK_DIR="$BUILD_DIR/ova-work"
-    RAW_DISK="$WORK_DIR/iolab-appliance.raw"
-    local stem="iolab-appliance"
-    [ -n "$VERSION" ] && stem="iolab-appliance-$VERSION"
+    RAW_DISK="$WORK_DIR/iolbox-appliance.raw"
+    local stem="iolbox-appliance"
+    [ -n "$VERSION" ] && stem="iolbox-appliance-$VERSION"
     STEM="$stem"
     # vmdk lands inside the OVA staging dir; OVA is the final artifact.
     OVA_STAGE="$WORK_DIR/stage"
@@ -85,7 +85,7 @@ usage() {
 Usage: $0 [options]
 
   --build-dir DIR     Root containing rootfs/ (default: $BUILD_DIR)
-  --version VER       Stamp artifact name as iolab-appliance-VER.ova and the
+  --version VER       Stamp artifact name as iolbox-appliance-VER.ova and the
                        OVF Product/VirtualSystem id (default: dev)
   --rootfs DIR        Override the rootfs dir (default: <build-dir>/rootfs)
   --out FILE          Override the output .ova path
@@ -185,9 +185,9 @@ sed \
     -e "s|@@VMDK_POPULATED@@|$VMDK_POPULATED|g" \
     -e "s|@@PRODUCT_VERSION@@|$VERSION|g" \
     -e "s|@@VSYS_ID@@|$VSYS_ID|g" \
-    -e "s|@@VCPUS@@|$IOLAB_VCPUS|g" \
-    -e "s|@@RAM_MB@@|$IOLAB_RAM_MB|g" \
-    "$SCRIPT_DIR/files/ova/iolab-appliance.ovf.tmpl" > "$OVA_STAGE/$OVF_FILENAME"
+    -e "s|@@VCPUS@@|$IOLBOX_VCPUS|g" \
+    -e "s|@@RAM_MB@@|$IOLBOX_RAM_MB|g" \
+    "$SCRIPT_DIR/files/ova/iolbox-appliance.ovf.tmpl" > "$OVA_STAGE/$OVF_FILENAME"
 
 # ---------------------------------------------------------------------------
 # Stage 7: tar the OVA - OVF FIRST, then vmdk, NO .mf manifest.
@@ -213,8 +213,8 @@ Appliance ready:
 Import (LAN-only appliance - the GUI has NO authentication):
   VirtualBox:  VBoxManage import "$STEM.ova"   (or File > Import Appliance)
                then set adapter 1 to Host-only, adapter 2 to NAT.
-  VMware WS:   ovftool "$STEM.ova" iolab.vmx    (or File > Open)
+  VMware WS:   ovftool "$STEM.ova" iolbox.vmx    (or File > Open)
   ESXi:        ovftool "$STEM.ova" vi://root@<esxi-host>/
-  Defaults $IOLAB_VCPUS vCPU / $IOLAB_RAM_MB MB; minimum 2 GB / 1 vCPU. Then browse the guest's
+  Defaults $IOLBOX_VCPUS vCPU / $IOLBOX_RAM_MB MB; minimum 2 GB / 1 vCPU. Then browse the guest's
   "control"-NIC IP at http://<vm-ip>:4001.
 EOF

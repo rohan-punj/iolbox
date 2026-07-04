@@ -3,22 +3,22 @@
 # it's a safety net rather than the primary mechanism (Proxmox manages
 # /etc/hosts for unprivileged Debian-family CTs by default).
 #
-# Ordered like iolab-firstboot-iourc.service: runs early, before the
+# Ordered like iolbox-firstboot-iourc.service: runs early, before the
 # supervisor, After=local-fs.target so /etc is writable. Deliberately NOT
-# wired into iolab-supervisor.service's Requires= (unlike the iourc unit) —
+# wired into iolbox-supervisor.service's Requires= (unlike the iourc unit) —
 # a missing /etc/hosts line degrades sudo latency, it doesn't invalidate
 # the license the way a missing iourc does, so the supervisor should still
 # start even if this unit somehow fails.
 [Unit]
-Description=iolab LXC first-boot /etc/hosts fixup
-Before=iolab-supervisor.service
+Description=iolbox LXC first-boot /etc/hosts fixup
+Before=iolbox-supervisor.service
 DefaultDependencies=no
 After=local-fs.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/opt/iolab/firstboot-lxc-hosts.sh
+ExecStart=/opt/iolbox/firstboot-lxc-hosts.sh
 
 [Install]
 WantedBy=multi-user.target

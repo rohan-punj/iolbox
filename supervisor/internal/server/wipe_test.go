@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 // loadLab loads doc into s and returns the loaded lab so tests can inspect
@@ -27,7 +27,7 @@ func loadLab(t *testing.T, s *Server, doc *lab.Lab) *loadedLab {
 // from the shared lab dir, returning the wiped id.
 func TestLabWipeDeletesNvramAndStopsNode(t *testing.T) {
 	runDir := t.TempDir()
-	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolab/images", RunDir: runDir, Version: "test"})
+	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: runDir, Version: "test"})
 	doc := &lab.Lab{Version: 1, ID: "lab-w", Name: "n", Nodes: []lab.Node{iolNode(0)}}
 	ll := loadLab(t, s, doc)
 
@@ -70,7 +70,7 @@ func TestLabWipeDeletesNvramAndStopsNode(t *testing.T) {
 // succeeds (a fresh node that never booted has no file yet).
 func TestLabWipeMissingNvramNotError(t *testing.T) {
 	runDir := t.TempDir()
-	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolab/images", RunDir: runDir, Version: "test"})
+	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: runDir, Version: "test"})
 	doc := &lab.Lab{Version: 1, ID: "lab-w2", Name: "n", Nodes: []lab.Node{iolNode(0), iolNode(1)}}
 	loadLab(t, s, doc)
 
@@ -88,7 +88,7 @@ func TestLabWipeMissingNvramNotError(t *testing.T) {
 // TestLabWipeUnknownNode rejects a wipe targeting a node id not in the lab.
 func TestLabWipeUnknownNode(t *testing.T) {
 	runDir := t.TempDir()
-	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolab/images", RunDir: runDir, Version: "test"})
+	s := New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: runDir, Version: "test"})
 	doc := &lab.Lab{Version: 1, ID: "lab-w3", Name: "n", Nodes: []lab.Node{iolNode(0)}}
 	loadLab(t, s, doc)
 

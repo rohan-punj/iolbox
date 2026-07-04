@@ -55,7 +55,7 @@
       bind:size={paletteWidth}
       min={180}
       max={360}
-      storageKey="iolab.split.palette"
+      storageKey="iolbox.split.palette"
     >
       <Palette />
     </SplitPane>
@@ -78,7 +78,7 @@
           bind:size={consoleHeight}
           min={80}
           max={520}
-          storageKey="iolab.split.consoleBottom"
+          storageKey="iolbox.split.consoleBottom"
         >
           <Console />
         </SplitPane>
@@ -102,7 +102,7 @@
         bind:size={consoleWidth}
         min={280}
         max={Math.max(720, Math.floor(winW * 0.5))}
-        storageKey="iolab.split.consoleRight"
+        storageKey="iolbox.split.consoleRight"
       >
         <Console />
       </SplitPane>

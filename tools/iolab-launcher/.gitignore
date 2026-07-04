@@ -3,7 +3,7 @@ qemu/
 # Disk images (release assets, never committed)
 *.qcow2
 # Built launcher exe (and stray editor/OS backups of it)
-iolab-launcher.exe
+iolbox-launcher.exe
 *.exe
 *.exe~
 # Folder-sync default data dirs (created next to the exe at runtime — user's

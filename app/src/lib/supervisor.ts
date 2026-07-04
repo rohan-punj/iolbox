@@ -49,7 +49,7 @@ export class SupervisorClient {
   async connect(): Promise<HelloResult> {
     this.unsubscribe = this.transport.onMessage((frame) => this.onFrame(frame));
     await this.transport.connect();
-    return this.call<HelloResult>("hello", { client: "iolab-gui/0.1.0" });
+    return this.call<HelloResult>("hello", { client: "iolbox-gui/0.1.0" });
   }
 
   disconnect() {
@@ -186,7 +186,7 @@ export class SupervisorClient {
   }
 
   // ---- durable lab-document store ----
-  // Labs persist as YAML text (iolab's native format). This client is the YAML
+  // Labs persist as YAML text (iolbox's native format). This client is the YAML
   // boundary: it serialises on save and parses on read, so callers still work in
   // LabDocument terms. Docs that fail to parse are dropped from the list.
   labSaveDoc(lab: LabDocument) {

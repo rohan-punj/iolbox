@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# lib-disk.sh — SHARED disk-image builder for the iolab runtime appliances.
+# lib-disk.sh — SHARED disk-image builder for the iolbox runtime appliances.
 #
 # This library takes a finished rootfs directory (built by build-rootfs.sh)
 # and produces a bootable GPT RAW disk image: legacy-BIOS GRUB + a Debian
-# kernel, root on ext4 (LABEL=iolab-root), and the per-NIC systemd-networkd
+# kernel, root on ext4 (LABEL=iolbox-root), and the per-NIC systemd-networkd
 # configs the VMware/OVA appliances need. It leaves FORMAT CONVERSION to the
 # caller — pack-vmware.sh converts the raw disk to monolithicSparse vmdk,
 # pack-ova.sh will convert it to a streamOptimized vmdk, pack-qemu.sh to a
@@ -94,10 +94,10 @@
 # ---------------------------------------------------------------------------
 
 # Guard against double-sourcing.
-if [ -n "${_IOLAB_LIB_DISK_SOURCED:-}" ]; then
+if [ -n "${_IOLBOX_LIB_DISK_SOURCED:-}" ]; then
     return 0 2>/dev/null || true
 fi
-_IOLAB_LIB_DISK_SOURCED=1
+_IOLBOX_LIB_DISK_SOURCED=1
 
 # build_raw_disk — see INTERFACE CONTRACT above.
 build_raw_disk() {
@@ -204,8 +204,8 @@ build_raw_disk() {
     fi
 
     # ext4 mkfs — size levers applied here. Defaults (no --inode-count,
-    # no --lazy-init) reproduce the historical `mkfs.ext4 -q -L iolab-root`.
-    local mkfs_opts=(-q -L iolab-root)
+    # no --lazy-init) reproduce the historical `mkfs.ext4 -q -L iolbox-root`.
+    local mkfs_opts=(-q -L iolbox-root)
     if [ "$lazy_init" -eq 1 ]; then
         mkfs_opts+=(-E lazy_itable_init=1,lazy_journal_init=1)
     fi
@@ -256,7 +256,7 @@ build_raw_disk() {
     # fstab: root by LABEL (inside the guest the disk enumerates as /dev/sda,
     # never as this build's loop device).
     cat > "$mnt/etc/fstab" <<EOF
-LABEL=iolab-root   /   ext4   errors=remount-ro   0 1
+LABEL=iolbox-root   /   ext4   errors=remount-ro   0 1
 EOF
 
     # The shipped rootfs has an EMPTY resolv.conf — apt in this chroot needs a
@@ -343,8 +343,8 @@ EOF
             zerofree "$root_part"
         else
             echo "   zerofree not found; using dd zero-fill fallback"
-            dd if=/dev/zero of="$mnt/.iolab-zerofill" bs=1M 2>/dev/null || true
-            rm -f "$mnt/.iolab-zerofill"
+            dd if=/dev/zero of="$mnt/.iolbox-zerofill" bs=1M 2>/dev/null || true
+            rm -f "$mnt/.iolbox-zerofill"
             sync
         fi
     fi

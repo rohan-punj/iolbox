@@ -436,7 +436,7 @@
 
   function onDrop(e: DragEvent) {
     e.preventDefault();
-    const raw = e.dataTransfer?.getData("application/iolab-node");
+    const raw = e.dataTransfer?.getData("application/iolbox-node");
     if (!raw) return;
     const { kind, imageId } = JSON.parse(raw) as {
       kind: "iol" | "vpcs" | "nat";

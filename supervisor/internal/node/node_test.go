@@ -100,7 +100,7 @@ func TestIOLArgvStripsKeepalive(t *testing.T) {
 func TestEnvironHasNoConsolePort(t *testing.T) {
 	// P0: the console is a pty bridged by the supervisor, NOT an IOL-opened TCP
 	// port. Environ must not invent a console port env var.
-	s := Spec{NodeID: 3, Kind: "iol", WorkDir: "/run/iolab/lab1", ConsolePort: 9003}
+	s := Spec{NodeID: 3, Kind: "iol", WorkDir: "/run/iolbox/lab1", ConsolePort: 9003}
 	for _, e := range s.Environ() {
 		if len(e) >= 8 && e[:8] == "IOL_CONS" {
 			t.Fatalf("Environ must not set a console port env: %q", e)
@@ -109,7 +109,7 @@ func TestEnvironHasNoConsolePort(t *testing.T) {
 	// IOURC must still point into the (shared) work dir.
 	found := false
 	for _, e := range s.Environ() {
-		if e == "IOURC=/run/iolab/lab1/iourc" {
+		if e == "IOURC=/run/iolbox/lab1/iourc" {
 			found = true
 		}
 	}

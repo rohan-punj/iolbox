@@ -1,11 +1,11 @@
-# iolab runtime
+# iolbox runtime
 
 The **runtime** is the small Linux environment that actually executes IOL and
 VPCS. Everything here builds **one** Debian-slim (bookworm) rootfs and then
 packages that *same* rootfs two ways:
 
-- a **WSL2 import tarball** (`iolab-rootfs.tar`) for the `wsl2` provider
-- a **VMware Workstation/Player appliance** (`iolab-appliance.vmx` + `.vmdk`)
+- a **WSL2 import tarball** (`iolbox-rootfs.tar`) for the `wsl2` provider
+- a **VMware Workstation/Player appliance** (`iolbox-appliance.vmx` + `.vmdk`)
   for the `vmware` provider (the default on machines that already run VMware —
   see `docs/providers.md`)
 
@@ -19,7 +19,7 @@ here bakes in Cisco software — the rootfs is empty of images; users supply
 their own `.bin`/`.iol` at runtime via the GUI's image upload.
 
 The configuration baked in here mirrors the **proven reference runtime**
-(the hand-built `iolab-rt` Ubuntu VM every product feature was validated
+(the hand-built `iolbox-rt` Ubuntu VM every product feature was validated
 on): same supervisor flags, same `/etc/hosts` hostname line, same stale-
 device cleanup, same two-NIC (host-only + NAT) shape.
 
@@ -28,7 +28,7 @@ device cleanup, same two-NIC (host-only + NAT) shape.
 They are authored on Windows but are **Linux build scripts** — they shell out
 to `debootstrap`/`mmdebstrap`, `chroot`, `qemu-img`, and friends. Run them on:
 
-- a real Linux box or VM (the iolab-rt reference VM works: ~5 GB free disk
+- a real Linux box or VM (the iolbox-rt reference VM works: ~5 GB free disk
   needed),
 - CI (GitHub Actions `ubuntu-latest`, which can apt-install everything).
 
@@ -46,20 +46,20 @@ runtime/
   README.md               this file
   build-rootfs.sh          debootstrap the base rootfs -> runtime/build/rootfs/
   fetch-vpcs.sh             clone+build GNS3 vpcs (static link) -> vpcs binary
-  pack-wsl.sh               rootfs -> iolab-rootfs.tar (wsl --import format)
+  pack-wsl.sh               rootfs -> iolbox-rootfs.tar (wsl --import format)
   pack-vmware.sh            rootfs -> bootable GPT disk -> vmdk + templated .vmx
   build-all.sh              orchestrator: rootfs -> [pack-wsl, pack-vmware]
   qemu-compat.md            qemu-system-x86_64 (TCG) fallback notes
   files/
-    iolab-supervisor.service      systemd unit, autostarts the supervisor
-    iolab-firstboot-iourc.service systemd oneshot, runs before the above
+    iolbox-supervisor.service      systemd unit, autostarts the supervisor
+    iolbox-firstboot-iourc.service systemd oneshot, runs before the above
     prestart-clean.sh             ExecStartPre: stale tap devices + run-dir sweep
     firstboot-iourc.sh            generates iourc from the runtime's own hostid
-    iolab-init.sh                 non-systemd fallback init script
+    iolbox-init.sh                 non-systemd fallback init script
     wsl.conf                      /etc/wsl.conf for the WSL2 import (pins hostname!)
     80-ethernet-dhcp.network      networkd fallback: plain DHCP on en*
-    99-iolab.conf                 sysctl drop-in (ip_forward off until NAT node starts)
-    iolab-appliance.vmx.tmpl      templated VMware VMX (4 vCPU / 4 GB / 2 NICs)
+    99-iolbox.conf                 sysctl drop-in (ip_forward off until NAT node starts)
+    iolbox-appliance.vmx.tmpl      templated VMware VMX (4 vCPU / 4 GB / 2 NICs)
   build/                   OUTPUT (git-ignored)
 ```
 
@@ -78,7 +78,7 @@ Rebuilding only one package does **not** require re-running
 ## Resource sizing (vCPU / RAM)
 
 `runtime/resources.env` is the single place to change vCPU/RAM for every
-deployment target: `IOLAB_VCPUS` (default 4) and `IOLAB_RAM_MB` (default
+deployment target: `IOLBOX_VCPUS` (default 4) and `IOLBOX_RAM_MB` (default
 4096). `pack-vmware.sh` and `pack-ova.sh` both source it at build time and
 substitute the values into the `.vmx` / OVF descriptor. The Proxmox LXC
 container reads it via the `pct create` recipe (`files/lxc/pct-create.md`
@@ -121,24 +121,24 @@ embedded Svelte bundle:
 bash build-release.sh    # -> supervisor/bin/supervisor-linux-amd64
 ```
 
-`build-rootfs.sh` copies that binary to `/opt/iolab/supervisor` and fails
+`build-rootfs.sh` copies that binary to `/opt/iolbox/supervisor` and fails
 fast if it's missing.
 
 ### First boot: iourc
 
 `files/firstboot-iourc.sh` runs once (before the supervisor unit) and calls
-`supervisor -gen-iourc` to mint `/opt/iolab/iourc` from the runtime's own
-hostid + hostname. The hostname is pinned to `iolab` in **three** places
-that must stay in sync: `/etc/hostname`, the `127.0.1.1 iolab` line in
+`supervisor -gen-iourc` to mint `/opt/iolbox/iourc` from the runtime's own
+hostid + hostname. The hostname is pinned to `iolbox` in **three** places
+that must stay in sync: `/etc/hostname`, the `127.0.1.1 iolbox` line in
 `/etc/hosts` (without which every `sudo` the NAT node runs stalls ~10 s on
-DNS), and `wsl.conf`'s `hostname=iolab` (without which WSL2 uses the
+DNS), and `wsl.conf`'s `hostname=iolbox` (without which WSL2 uses the
 Windows hostname and IOL rejects the license).
 
 ## Debugging a built appliance
 
-- Root console login: user `root`, password `iolab` (no sshd in the image;
+- Root console login: user `root`, password `iolbox` (no sshd in the image;
   console only). Open the VM in the Workstation UI instead of `nogui`.
-- Supervisor logs: `journalctl -u iolab-supervisor -f`.
+- Supervisor logs: `journalctl -u iolbox-supervisor -f`.
 - The unit's `KillMode=control-group` means bouncing the supervisor also
   reaps every IOL/VPCS child — no orphan hunting.
 
@@ -146,8 +146,8 @@ Windows hostname and IOL rejects the license).
 
 - rootfs dir: ~250-300 MB (minbase + i386 multiarch + sudo/procps/iptables
   + supervisor ~11 MB + vpcs ~1 MB, docs/locales stripped)
-- `iolab-rootfs.tar`: about the same as the rootfs dir
-- `iolab-appliance.vmdk`: 16 GB virtual (the image library lives inside the
+- `iolbox-rootfs.tar`: about the same as the rootfs dir
+- `iolbox-appliance.vmdk`: 16 GB virtual (the image library lives inside the
   appliance and IOL images run 100-400 MB each), **sparse** — actual bytes
   ~600-800 MB with kernel + GRUB + open-vm-tools.
 
@@ -156,8 +156,8 @@ Windows hostname and IOL rejects the license).
 ```sh
 cd runtime
 sudo ./build-all.sh --supervisor-bin ../supervisor/bin/supervisor-linux-amd64
-# -> runtime/build/iolab-rootfs.tar
-# -> runtime/build/iolab-appliance.vmdk + iolab-appliance.vmx
+# -> runtime/build/iolbox-rootfs.tar
+# -> runtime/build/iolbox-appliance.vmdk + iolbox-appliance.vmx
 ```
 
 To rebuild the supervisor binary AND every packaging target (WSL, VMware,
@@ -170,12 +170,12 @@ cd runtime
 sudo ./build-all-targets.sh
 ```
 
-Windows side, VMware provider: copy `iolab-appliance.vmx` + `.vmdk` into an
+Windows side, VMware provider: copy `iolbox-appliance.vmx` + `.vmdk` into an
 empty directory, then:
 
 ```powershell
-vmrun -T ws start "iolab-appliance.vmx" nogui
-vmrun -T ws getGuestIPAddress "iolab-appliance.vmx" -wait
+vmrun -T ws start "iolbox-appliance.vmx" nogui
+vmrun -T ws getGuestIPAddress "iolbox-appliance.vmx" -wait
 # browse to http://<that-ip>:4001
 ```
 
@@ -183,8 +183,8 @@ Windows side, WSL2 provider (only where Hyper-V is already enabled — never
 enable it on a VMware machine):
 
 ```powershell
-wsl --import iolab C:\Users\<you>\iolab-wsl runtime\build\iolab-rootfs.tar
-wsl -d iolab -- systemctl status iolab-supervisor.service
+wsl --import iolbox C:\Users\<you>\iolbox-wsl runtime\build\iolbox-rootfs.tar
+wsl -d iolbox -- systemctl status iolbox-supervisor.service
 # browse to http://localhost:4001
 ```
 
@@ -213,11 +213,11 @@ jobs:
              --supervisor-bin ../supervisor/bin/supervisor-linux-amd64
       - uses: actions/upload-artifact@v4   # or softprops/action-gh-release on tags
         with:
-          name: iolab-runtime
+          name: iolbox-runtime
           path: |
-            runtime/build/iolab-rootfs.tar
-            runtime/build/iolab-appliance.vmdk
-            runtime/build/iolab-appliance.vmx
+            runtime/build/iolbox-rootfs.tar
+            runtime/build/iolbox-appliance.vmdk
+            runtime/build/iolbox-appliance.vmx
 ```
 
 Notes:

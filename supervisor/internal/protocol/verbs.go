@@ -3,7 +3,7 @@ package protocol
 import (
 	"encoding/json"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 )
 
 // This file defines the arg and result payloads for every protocol verb, so
@@ -92,7 +92,7 @@ type LabLoadResult struct {
 // struct does not model.
 
 // LabSaveDocArgs is the lab.saveDoc request payload: the full lab document as
-// text (YAML — iolab's native lab format; JSON is also accepted on read for
+// text (YAML — iolbox's native lab format; JSON is also accepted on read for
 // back-compat). The supervisor stores it verbatim and does not parse it beyond
 // extracting the id for the filename.
 type LabSaveDocArgs struct {

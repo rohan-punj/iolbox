@@ -1,6 +1,6 @@
 # Proxmox LXC deployment — `pct create` recipe
 
-This is the exact recipe for turning `iolab-ct-<ver>.tar.zst` (built by
+This is the exact recipe for turning `iolbox-ct-<ver>.tar.zst` (built by
 `runtime/pack-lxc.sh`) into a running **unprivileged** Proxmox LXC
 container. It is also emitted as `SETUP.md` at the root of the tarball
 itself (see pack-lxc.sh's header comment for why it's shipped in both
@@ -8,10 +8,10 @@ places) — this copy is the canonical source; keep them in sync if edited.
 
 ## 1. Upload the template
 
-Copy `iolab-ct-<ver>.tar.zst` to the Proxmox host's template storage, e.g.:
+Copy `iolbox-ct-<ver>.tar.zst` to the Proxmox host's template storage, e.g.:
 
 ```sh
-scp iolab-ct-<ver>.tar.zst root@<pve-host>:/var/lib/vz/template/cache/
+scp iolbox-ct-<ver>.tar.zst root@<pve-host>:/var/lib/vz/template/cache/
 ```
 
 (Or upload via the Datacenter -> Storage -> Content -> Upload UI, storage
@@ -20,9 +20,9 @@ type must allow "CT Template".)
 ## 2. Create the container
 
 ```sh
-pct create <vmid> local:vztmpl/iolab-ct-<ver>.tar.zst \
+pct create <vmid> local:vztmpl/iolbox-ct-<ver>.tar.zst \
     --unprivileged 1 \
-    --hostname iolab \
+    --hostname iolbox \
     --cores 4 \
     --memory 4096 \
     --swap 512 \
@@ -37,17 +37,17 @@ Notes on each flag:
   recipe (device cgroup allow-list below, no CAP_SYS_ADMIN games). A
   privileged CT also works but gives the container host-equivalent
   privilege for no benefit this workload needs.
-- `--hostname iolab` — **set it here, at creation, and never rename it
+- `--hostname iolbox` — **set it here, at creation, and never rename it
   after first boot.** The IOL license file (`iourc`) is minted at first
   boot from this CT's own hostid + hostname (see
-  `iolab-firstboot-iourc.service`); renaming later (`pct set <vmid>
+  `iolbox-firstboot-iourc.service`); renaming later (`pct set <vmid>
   --hostname ...`) invalidates it and every IOL node will fail its
   license check on next start. If you need a different hostname than
-  `iolab`, pick it now, not later. (The hostname does NOT have to be
-  literally `iolab` — any value is fine, `iolab` is just this doc's
+  `iolbox`, pick it now, not later. (The hostname does NOT have to be
+  literally `iolbox` — any value is fine, `iolbox` is just this doc's
   example — but it must be stable for the container's lifetime.)
 - `--cores 4 --memory 4096` — matches the VMware appliance's sizing (see
-  `runtime/files/iolab-appliance.vmx.tmpl`). 4 GB covers the supervisor +
+  `runtime/files/iolbox-appliance.vmx.tmpl`). 4 GB covers the supervisor +
   a handful of IOL nodes; IOL nodes default to roughly 1 GB of guest RAM
   each in typical images, so budget `--memory` up if you plan to run more
   than 2-3 nodes concurrently (Proxmox lets you resize later with
@@ -102,7 +102,7 @@ pct stop <vmid> && pct start <vmid>
 
 ```sh
 pct start <vmid>
-pct exec <vmid> -- systemctl status iolab-supervisor.service
+pct exec <vmid> -- systemctl status iolbox-supervisor.service
 pct exec <vmid> -- ip -4 addr show eth0
 ```
 
@@ -124,12 +124,12 @@ is the simplest fix.
 
 ## Troubleshooting
 
-- `journalctl -u iolab-supervisor -f` inside the CT (`pct exec <vmid> --
-  journalctl -u iolab-supervisor -f`) — same as the other artifacts.
+- `journalctl -u iolbox-supervisor -f` inside the CT (`pct exec <vmid> --
+  journalctl -u iolbox-supervisor -f`) — same as the other artifacts.
 - If `sudo` inside the CT feels slow (~10s per invocation, visible as
   laggy NAT-node start), check `/etc/hosts` for a `127.0.1.1 <hostname>`
   line — Proxmox normally writes this for you, but
-  `iolab-firstboot-lxc-hosts.service` is a safety net that fills the gap
+  `iolbox-firstboot-lxc-hosts.service` is a safety net that fills the gap
   if it's ever missing (see `runtime/pack-lxc.sh` for why).
 - If `eth0` never gets an address, check whether Proxmox actually injected
   `/etc/systemd/network/eth0.network` (`pct exec <vmid> -- ls

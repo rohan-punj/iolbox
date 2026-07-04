@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/node"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
-	"github.com/rohanpunj/iolab/supervisor/internal/telnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 )
 
 // runShowTimeout bounds a single runShow session end-to-end (dial + prompt sync

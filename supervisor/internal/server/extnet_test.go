@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
-	"github.com/rohanpunj/iolab/supervisor/internal/lab"
-	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
 func natNode(id int) lab.Node { return lab.Node{ID: id, Kind: lab.KindNAT, Name: "NAT"} }

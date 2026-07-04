@@ -1,4 +1,4 @@
-# iolab design brief — "Bench & Glass"
+# iolbox design brief — "Bench & Glass"
 
 The improved brief for the frontend redesign. It replaces the placeholder
 GitHub-dark scaffold with a deliberate visual identity and specifies the four
@@ -165,7 +165,7 @@ Three changes requested after seeing the "Bench & Glass" mockup:
 1. **Icons must be uploadable (PNetLab-style).** Beyond the bundled set + picker,
    the user imports their own icons exactly like PNetLab's icon management: an
    "Import icon…" action accepts SVG/PNG, stores it in a per-user icon library
-   (`%APPDATA%\iolab\icons`), and it appears in the picker for any node. Custom
+   (`%APPDATA%\iolbox\icons`), and it appears in the picker for any node. Custom
    raster icons render as-is; SVG icons are tintable when single-colour. The node
    `icon` field stores the library key. This is part of D4.
 

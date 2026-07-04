@@ -1,6 +1,6 @@
 //! Local image library (Windows side), per PLAN.md "Image loading & swapping".
 //!
-//! The library is a Windows folder (default `%APPDATA%\iolab\images`) the GUI
+//! The library is a Windows folder (default `%APPDATA%\iolbox\images`) the GUI
 //! manages. "Add image" copies a `.bin`/`.iol` in; the app fingerprints it
 //! (sha256), sniffs L2-vs-L3 and arch (i386/x86_64), and records metadata.
 //! Nodes reference images by `id` (sha256 prefix), so swapping a node's image
@@ -54,12 +54,12 @@ impl ImageLibrary {
         }
     }
 
-    /// Default library location: `%APPDATA%\iolab\images`.
+    /// Default library location: `%APPDATA%\iolbox\images`.
     pub fn default_dir() -> PathBuf {
         let base = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        base.join("iolab").join("images")
+        base.join("iolbox").join("images")
     }
 
     pub fn list(&self) -> Vec<ImageMeta> {
