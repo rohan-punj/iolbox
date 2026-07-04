@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
 	"github.com/rohanpunj/iolab/supervisor/internal/protocol"
 )
 
@@ -45,6 +46,9 @@ func (s *Server) statsLoop(ctx context.Context) {
 	type sample struct {
 		frames, bytes uint64
 		protos        map[string]uint64
+		// dir is the previous tick's cumulative directional counters, diffed into
+		// ProtosDir/ProtosSubtypeDir the same way protos becomes Protos.
+		dir dirstat.Counters
 	}
 	flast := make(map[int]sample)
 
@@ -89,17 +93,28 @@ func (s *Server) statsLoop(ctx context.Context) {
 			}
 			for id, st := range fcur {
 				prev := flast[id]
-				flast[id] = sample{frames: st.frames, bytes: st.bytes, protos: st.protos}
+				flast[id] = sample{frames: st.frames, bytes: st.bytes, protos: st.protos, dir: st.dir}
 				fps, bps, emit := linkRate(prev.frames, prev.bytes, st.frames, st.bytes, statsInterval)
 				if !emit {
 					continue
 				}
 				protos := protoRates(prev.protos, st.protos, statsInterval)
-				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{Link: id, FPS: fps, BPS: bps, Protos: protos})
+				// Diff the always-on directional counters into per-direction rates.
+				// Uses the same one-decimal rounding as linkRate's fps.
+				protosDir, protosSubtypeDir := dirstat.Direction(
+					prev.dir, st.dir, statsInterval.Seconds(), round1)
+				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{
+					Link: id, FPS: fps, BPS: bps, Protos: protos,
+					ProtosDir: protosDir, ProtosSubtypeDir: protosSubtypeDir,
+				})
 			}
 		}
 	}
 }
+
+// round1 rounds a rate to one decimal, matching linkRate's fps rounding. Passed
+// to dirstat.Direction so directional rates round the same way as FPS/Protos.
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
 // linkRate derives per-second forwarded throughput from two consecutive
 // cumulative samples of a link's relay counters. It returns the frames/sec

@@ -201,3 +201,133 @@ func TestClassifyIPv6NextHeader(t *testing.T) {
 		}
 	}
 }
+
+// arpFrame builds an ethernet-II ARP frame (ethertype 0x0806) whose operation
+// field (offset 6 in the ARP header) is op. Only the op field drives the ARP
+// subtype, so the preceding hardware/protocol type fields are left zero.
+func arpFrame(op uint16) []byte {
+	return ethHdr(0x0806,
+		0, 0, /* htype */
+		0, 0, /* ptype */
+		0, 0, /* hlen, plen */
+		byte(op >> 8), byte(op))
+}
+
+// ipv4Proto builds an ethernet-II IPv4 frame (IHL=5) carrying the given
+// protocol, followed by an arbitrary-length L4 payload so a subtype byte at a
+// fixed offset can be reached. Mirrors the ipv4 helper but without the fixed
+// two-byte cap so BGP's deep offset is reachable.
+func ipv4Proto(proto byte, l4 ...byte) []byte {
+	return ethHdr(0x0800, append([]byte{
+		0x45, 0, 0, 0,
+		0, 0, 0, 0,
+		64, proto, 0, 0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+	}, l4...)...)
+}
+
+// bgpFrame builds an IPv4 TCP frame to/from port 179 with a minimal 20-byte TCP
+// header (data offset nibble = 5) followed by a BGP header whose message-type
+// byte (offset 18: 16-byte marker + 2-byte length + type) is msgType.
+func bgpFrame(msgType byte) []byte {
+	tcp := []byte{
+		0x00, 0xB3, 0xC3, 0x50, /* src 179, dst 50000 */
+		0, 0, 0, 0, /* seq */
+		0, 0, 0, 0, /* ack */
+		0x50, 0, 0, 0, /* data offset=5 (20 bytes), flags, window */
+		0, 0, 0, 0, /* checksum, urgent */
+	}
+	bgp := make([]byte, 19) // 16 marker + 2 len + 1 type
+	bgp[18] = msgType
+	return ipv4Proto(6, append(tcp, bgp...)...)
+}
+
+// TestClassifyDetailedSubtypes exercises the per-protocol subtype vocabulary
+// emitted by ClassifyDetailed with crafted frames per subtype, and confirms the
+// primary label + tagged bits still match Classify.
+func TestClassifyDetailedSubtypes(t *testing.T) {
+	cases := []struct {
+		name        string
+		frame       []byte
+		wantLabel   string
+		wantSubtype string
+	}{
+		// ICMP: type byte is the first byte of the L4 payload (l3+20 for IHL=5).
+		{"icmp-echo-request", ipv4(1, 8, 0), "PING", "echo-request"},
+		{"icmp-echo-reply", ipv4(1, 0, 0), "PING", "echo-reply"},
+		{"icmp-unreachable", ipv4(1, 3, 0), "ICMP", "unreachable"},
+		{"icmp-redirect", ipv4(1, 5, 0), "ICMP", "redirect"},
+		{"icmp-time-exceeded", ipv4(1, 11, 0), "ICMP", "time-exceeded"},
+		{"icmp-other", ipv4(1, 9, 0), "ICMP", "other"},
+
+		// OSPF (proto 89): version byte then packet-type byte.
+		{"ospf-hello", ipv4Proto(89, 2, 1), "OSPF", "hello"},
+		{"ospf-db-desc", ipv4Proto(89, 2, 2), "OSPF", "db-desc"},
+		{"ospf-ls-request", ipv4Proto(89, 2, 3), "OSPF", "ls-request"},
+		{"ospf-ls-update", ipv4Proto(89, 2, 4), "OSPF", "ls-update"},
+		{"ospf-ls-ack", ipv4Proto(89, 2, 5), "OSPF", "ls-ack"},
+		{"ospf-unknown", ipv4Proto(89, 2, 9), "OSPF", ""},
+
+		// EIGRP (proto 88): version byte then opcode byte.
+		{"eigrp-update", ipv4Proto(88, 2, 1), "EIGRP", "update"},
+		{"eigrp-request", ipv4Proto(88, 2, 2), "EIGRP", "request"},
+		{"eigrp-query", ipv4Proto(88, 2, 3), "EIGRP", "query"},
+		{"eigrp-reply", ipv4Proto(88, 2, 4), "EIGRP", "reply"},
+		{"eigrp-hello", ipv4Proto(88, 2, 5), "EIGRP", "hello"},
+		{"eigrp-unknown", ipv4Proto(88, 2, 9), "EIGRP", ""},
+
+		// BGP (TCP :179): message-type byte after the 16-byte marker + length.
+		{"bgp-open", bgpFrame(1), "BGP", "open"},
+		{"bgp-update", bgpFrame(2), "BGP", "update"},
+		{"bgp-notification", bgpFrame(3), "BGP", "notification"},
+		{"bgp-keepalive", bgpFrame(4), "BGP", "keepalive"},
+		{"bgp-route-refresh", bgpFrame(5), "BGP", "route-refresh"},
+		{"bgp-unknown", bgpFrame(9), "BGP", ""},
+
+		// ARP op field.
+		{"arp-request", arpFrame(1), "ARP", "request"},
+		{"arp-reply", arpFrame(2), "ARP", "reply"},
+		{"arp-rarp", arpFrame(3), "ARP", ""},
+
+		// Labels with no subtype vocabulary → "".
+		{"tcp-plain", ipv4Ports(6, 12345, 23), "TCP", ""},
+		{"stp-no-subtype", func() []byte {
+			f := ethHdr(0x0026, 0x42, 0x42, 0x03, 0x00, 0x00)
+			copy(f[0:6], []byte{0x01, 0x80, 0xc2, 0x00, 0x00, 0x00})
+			return f
+		}(), "STP", ""},
+	}
+	for _, c := range cases {
+		label, subtype, _ := ClassifyDetailed(c.frame)
+		if label != c.wantLabel || subtype != c.wantSubtype {
+			t.Errorf("%s: ClassifyDetailed = (%q, %q), want (%q, %q)",
+				c.name, label, subtype, c.wantLabel, c.wantSubtype)
+		}
+		// Classify must agree on the label and delegate cleanly.
+		if got, _ := Classify(c.frame); got != c.wantLabel {
+			t.Errorf("%s: Classify label = %q, want %q", c.name, got, c.wantLabel)
+		}
+	}
+}
+
+// TestClassifyDetailedShortFrameNoSubtype ensures a frame too short to reach the
+// subtype byte yields an empty subtype (never a panic or a misread) while the
+// coarse label still resolves. A BGP TCP frame truncated before the BGP header
+// is the segmentation guard case.
+func TestClassifyDetailedShortFrameNoSubtype(t *testing.T) {
+	// IPv4 TCP to port 179 with only the 20-byte TCP header, no BGP header.
+	tcpOnly := ipv4Proto(6,
+		0x00, 0xB3, 0xC3, 0x50,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+		0x50, 0, 0, 0,
+		0, 0, 0, 0)
+	if label, subtype, _ := ClassifyDetailed(tcpOnly); label != "BGP" || subtype != "" {
+		t.Errorf("segmented BGP: got (%q, %q), want (BGP, \"\")", label, subtype)
+	}
+	// A runt frame classifies OTHER with no subtype.
+	if label, subtype, _ := ClassifyDetailed([]byte{0, 1, 2}); label != "OTHER" || subtype != "" {
+		t.Errorf("runt: got (%q, %q), want (OTHER, \"\")", label, subtype)
+	}
+}

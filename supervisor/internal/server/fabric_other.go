@@ -2,7 +2,10 @@
 
 package server
 
-import "github.com/rohanpunj/iolab/supervisor/internal/lab"
+import (
+	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
+	"github.com/rohanpunj/iolab/supervisor/internal/lab"
+)
 
 // The static-tap fabric is Linux-only (taps + bridges). On other platforms the
 // control plane still computes ll.staticTaps (so the NETMAP and tests match), but
@@ -25,6 +28,7 @@ type fabStat struct {
 	frames uint64
 	bytes  uint64
 	protos map[string]uint64
+	dir    dirstat.Counters
 }
 
 func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat { return nil }

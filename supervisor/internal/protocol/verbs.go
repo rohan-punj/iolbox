@@ -305,11 +305,23 @@ type LinkStatsData struct {
 	// ProtosDir is the per-direction per-protocol frames/sec breakdown over the
 	// same interval, keyed by protocol label. Each value is [fps sourced from
 	// endpoint 0, fps sourced from endpoint 1], where endpoint order matches the
-	// lab link's doc endpoints order. Only labels with a nonzero rate in either
-	// direction; one-decimal rounding. "DOT1Q" appears here (counting 802.1Q-
-	// tagged frames) and overlaps the primary labels, so this map does NOT sum
-	// to FPS. Omitted (nil) when there's nothing to report.
+	// lab link's doc endpoints order. Populated for fabric links from the
+	// always-on per-endpoint-tap classifier: a frame is attributed to the
+	// endpoint whose tap received it (the node behind that tap sent it). Only
+	// labels with a nonzero rate in either direction; one-decimal rounding. A
+	// frame counts once, under one label, in one direction, so this map does NOT
+	// sum to FPS in general. Omitted (nil) when there's nothing to report.
 	ProtosDir map[string][2]float64 `json:"protosDir,omitempty"`
+	// ProtosSubtypeDir is the same directional breakdown one level deeper: for
+	// each label that carries a decodable packet-type subtype (BGP open/update/
+	// notification/keepalive/route-refresh; ICMP echo-request/echo-reply/
+	// unreachable/time-exceeded/redirect/other; OSPF hello/db-desc/ls-request/
+	// ls-update/ls-ack; EIGRP hello/update/query/reply/request; ARP request/
+	// reply), label -> subtype -> [ep0 fps, ep1 fps]. Only subtypes with a
+	// nonzero rate; frames whose subtype couldn't be decoded contribute to
+	// ProtosDir under the label but appear under no subtype here. Omitted (nil)
+	// when there's nothing to report.
+	ProtosSubtypeDir map[string]map[string][2]float64 `json:"protosSubtypeDir,omitempty"`
 }
 
 // HostStatsData is the host.stats event payload: the runtime VM's resource

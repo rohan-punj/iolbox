@@ -4,11 +4,13 @@ package server
 
 import (
 	"context"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/bcap"
+	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
 	"github.com/rohanpunj/iolab/supervisor/internal/fabric"
 	"github.com/rohanpunj/iolab/supervisor/internal/iouyap"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
@@ -182,7 +184,49 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 	ll.mu.Lock()
 	ll.fabricLinks[l.ID] = true
 	ll.mu.Unlock()
+	s.openLinkDirstat(ll, l)
 	return nil
+}
+
+// openLinkDirstat (re)opens the always-on per-endpoint-tap directional
+// classifier for a fabric link over its current endpoint taps. Called from
+// attachFabricLink, which may run more than once for a link (mid-session
+// link.add, or attachFabricForNode when a VPCS/NAT endpoint comes up after the
+// bridge already existed): re-opening picks up an endpoint tap that didn't exist
+// at first attach. Any existing classifier is closed first so sockets/goroutines
+// don't leak across re-attaches. A link with fewer than one bindable tap yields
+// a nil classifier and simply no directional data — the aggregate fps/bps glow
+// is unaffected.
+func (s *Server) openLinkDirstat(ll *loadedLab, l *lab.Link) {
+	devs := s.fabricLinkTapDevs(ll, l)
+	ll.mu.Lock()
+	old := ll.dirstats[l.ID]
+	delete(ll.dirstats, l.ID)
+	ll.mu.Unlock()
+	old.Close()
+
+	dc, err := dirstat.Open(devs)
+	if err != nil {
+		// Non-fatal: a tap that can't be bound (missing, or the dev box lacks
+		// CAP_NET_RAW) just costs this link its directional breakdown. Log once at
+		// the link level so a systematic failure is visible without spamming.
+		log.Printf("dirstat: link %d directional classifier degraded: %v", l.ID, err)
+	}
+	if dc != nil {
+		ll.mu.Lock()
+		ll.dirstats[l.ID] = dc
+		ll.mu.Unlock()
+	}
+}
+
+// closeLinkDirstat stops and drops a fabric link's directional classifier.
+// Idempotent (nil-safe Close).
+func (s *Server) closeLinkDirstat(ll *loadedLab, linkID int) {
+	ll.mu.Lock()
+	dc := ll.dirstats[linkID]
+	delete(ll.dirstats, linkID)
+	ll.mu.Unlock()
+	dc.Close()
 }
 
 // attachFabricForNode (re)attaches the fabric link that a just-started node
@@ -210,6 +254,8 @@ func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error {
 func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 	// Stop any bridge capture first (the bridge is about to go away).
 	s.stopBridgeCapture(ll, l.ID)
+	// Stop the directional classifier: its taps are about to be detached/removed.
+	s.closeLinkDirstat(ll, l.ID)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	for _, ep := range l.Endpoints {
@@ -286,6 +332,10 @@ type fabStat struct {
 	frames uint64
 	bytes  uint64
 	protos map[string]uint64
+	// dir is a cumulative snapshot of the link's always-on per-endpoint-tap
+	// directional classifier (nil when the link has no classifier). The stats
+	// loop diffs two consecutive snapshots into per-direction per-protocol rates.
+	dir dirstat.Counters
 }
 
 // fabricStats snapshots every fabric link's cumulative counters (see fabStat).
@@ -301,6 +351,10 @@ func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat {
 	bcaps := make(map[int]*bcap.Capture, len(ll.bcaps))
 	for id, c := range ll.bcaps {
 		bcaps[id] = c
+	}
+	dcs := make(map[int]*dirstat.Classifier, len(ll.dirstats))
+	for id, c := range ll.dirstats {
+		dcs[id] = c
 	}
 	ll.mu.Unlock()
 
@@ -320,6 +374,9 @@ func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat {
 		if c := bcaps[id]; c != nil {
 			_, _, protos := c.Stats()
 			fs.protos = protos
+		}
+		if dc := dcs[id]; dc != nil {
+			fs.dir = dc.Snapshot()
 		}
 		out[id] = fs
 	}
@@ -399,6 +456,8 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	taps := ll.staticTaps
 	caps := ll.bcaps
 	ll.bcaps = make(map[int]*bcap.Capture)
+	dcs := ll.dirstats
+	ll.dirstats = make(map[int]*dirstat.Classifier)
 	nodes := make([]*nodeRuntime, 0, len(ll.nodes))
 	for _, nr := range ll.nodes {
 		nodes = append(nodes, nr)
@@ -407,6 +466,9 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 
 	for _, c := range caps {
 		_ = c.Close()
+	}
+	for _, dc := range dcs {
+		dc.Close()
 	}
 	for _, b := range tbs {
 		_ = b.close()

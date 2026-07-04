@@ -20,8 +20,24 @@ import "fmt"
 // Frames shorter than a 14-byte ethernet header can't be classified and are
 // reported as "OTHER" rather than dropped, so they still count toward totals.
 func Classify(frame []byte) (label string, tagged bool) {
+	label, _, tagged = ClassifyDetailed(frame)
+	return label, tagged
+}
+
+// ClassifyDetailed is Classify plus a coarse packet-type subtype for the
+// protocols whose message type is cheaply readable from a fixed offset near the
+// front of the frame (ICMP, BGP, OSPF, EIGRP, ARP). It shares Classify's
+// single-pass traversal, so it has the same hot-path/no-panic contract: every
+// offset is bounds checked and anything unrecognised falls through to a coarse
+// label with an empty subtype. The subtype is "" whenever the label has no
+// known sub-discrimination, the type byte can't be reached (short/segmented
+// frame), or the value is unrecognised — callers omit an empty subtype.
+//
+// Endpoint/direction attribution is the caller's job (the AF_PACKET per-tap
+// classifier splits by sll_pkttype); this only names the frame.
+func ClassifyDetailed(frame []byte) (label, subtype string, tagged bool) {
 	if len(frame) < 14 {
-		return "OTHER", false
+		return "OTHER", "", false
 	}
 
 	// EtherType/length lives at offset 12. A single 802.1Q tag (0x8100) pushes
@@ -32,39 +48,67 @@ func Classify(frame []byte) (label string, tagged bool) {
 	if et == 0x8100 {
 		tagged = true
 		if len(frame) < 18 {
-			return "OTHER", tagged
+			return "OTHER", "", tagged
 		}
 		et = uint16(frame[16])<<8 | uint16(frame[17])
 		l3 = 18
 	}
 
 	if et >= 0x0600 {
-		return classifyEtherType(et, frame, l3), tagged
+		label, subtype = classifyEtherTypeDetailed(et, frame, l3)
+		return label, subtype, tagged
 	}
 	// et < 0x0600 is an 802.3 length field: the payload is an LLC/SNAP header,
-	// which is how STP, CDP, DTP, VTP and IS-IS appear on the wire.
-	return classifyLLC(frame, l3), tagged
+	// which is how STP, CDP, DTP, VTP and IS-IS appear on the wire. None of the
+	// LLC/SNAP labels carry a subtype we decode.
+	return classifyLLC(frame, l3), "", tagged
 }
 
 // classifyEtherType handles DIX/Ethernet-II frames (ethertype >= 0x0600),
-// including the SNAP recursion which reuses these same labels.
+// including the SNAP recursion which reuses these same labels. It discards the
+// subtype classifyEtherTypeDetailed computes (LLC/SNAP-tunnelled frames don't
+// surface subtypes to callers).
 func classifyEtherType(et uint16, frame []byte, l3 int) string {
+	label, _ := classifyEtherTypeDetailed(et, frame, l3)
+	return label
+}
+
+// classifyEtherTypeDetailed is classifyEtherType plus the subtype for the
+// ethertypes that carry one (ARP op, and the IPv4/IPv6 upper-layer message
+// types). SNAP-tunnelled ethertypes recurse through classifyEtherType (no
+// subtype), so this is only reached for the outer DIX frame.
+func classifyEtherTypeDetailed(et uint16, frame []byte, l3 int) (label, subtype string) {
 	switch et {
 	case 0x0806:
-		return "ARP"
+		return "ARP", classifyARP(frame, l3)
 	case 0x0800:
 		return classifyIPv4(frame, l3)
 	case 0x86dd:
 		return classifyIPv6(frame, l3)
 	case 0x88cc:
-		return "LLDP"
+		return "LLDP", ""
 	case 0x9000:
-		return "LOOP"
+		return "LOOP", ""
 	case 0x8847:
-		return "MPLS"
+		return "MPLS", ""
 	default:
-		return fmt.Sprintf("0x%04x", et)
+		return fmt.Sprintf("0x%04x", et), ""
 	}
+}
+
+// classifyARP reads the ARP operation field (offset 6 within the ARP header):
+// 1 = request, 2 = reply. Anything else (RARP op 3/4, unreadable) → "".
+func classifyARP(frame []byte, l3 int) string {
+	if len(frame) < l3+8 {
+		return ""
+	}
+	switch uint16(frame[l3+6])<<8 | uint16(frame[l3+7]) {
+	case 1:
+		return "request"
+	case 2:
+		return "reply"
+	}
+	return ""
 }
 
 // classifyIPv4 reads the IPv4 protocol byte (offset 9 within the L3 header) to
@@ -72,22 +116,22 @@ func classifyEtherType(et uint16, frame []byte, l3 int) string {
 // TCP/UDP it peeks the L4 ports to name a well-known application; port reading
 // is guarded by the IHL-derived L4 offset and skipped on fragments carrying a
 // nonzero fragment offset (their L4 header isn't present at the front).
-func classifyIPv4(frame []byte, l3 int) string {
+func classifyIPv4(frame []byte, l3 int) (label, subtype string) {
 	if len(frame) < l3+10 {
-		return "IPv4"
+		return "IPv4", ""
 	}
 	proto := frame[l3+9]
 	switch proto {
 	case 1:
 		return classifyICMPv4(frame, l3)
 	case 2:
-		return "IGMP"
+		return "IGMP", ""
 	case 6, 17:
 		// TCP/UDP: peek ports unless this is a non-first fragment. The fragment
 		// offset is the low 13 bits of the flags/frag-offset word at l3+6..7.
 		frag := (uint16(frame[l3+6])<<8 | uint16(frame[l3+7])) & 0x1fff
 		if frag != 0 {
-			return transportName(proto)
+			return transportName(proto), ""
 		}
 		// IHL (low nibble of byte 0) is the L3 header length in 32-bit words.
 		ihl := int(frame[l3]&0x0f) * 4
@@ -95,43 +139,108 @@ func classifyIPv4(frame []byte, l3 int) string {
 			ihl = 20 // malformed IHL; assume a minimal header
 		}
 		l4 := l3 + ihl
-		return classifyPorts(proto, frame, l4)
+		return classifyTransport(proto, frame, l4)
 	case 47:
-		return "GRE"
+		return "GRE", ""
 	case 50:
-		return "ESP"
+		return "ESP", ""
 	case 51:
-		return "AH"
+		return "AH", ""
 	case 88:
-		return "EIGRP"
+		return "EIGRP", classifyEIGRP(frame, l3)
 	case 89:
-		return "OSPF"
+		return "OSPF", classifyOSPF(frame, l3)
 	case 103:
-		return "PIM"
+		return "PIM", ""
 	case 112:
-		return "VRRP"
+		return "VRRP", ""
 	default:
-		return "IPv4"
+		return "IPv4", ""
 	}
 }
 
-// classifyICMPv4 splits ICMPv4 echo request/reply (types 8/0) out as "PING"
-// from other ICMPv4 ("ICMP"). The type byte is the first byte of the ICMP
-// header at the L4 offset, derived from IHL like classifyIPv4's port peek.
-func classifyICMPv4(frame []byte, l3 int) string {
+// classifyOSPF reads the OSPFv2 packet-type byte at offset 1 of the OSPF header
+// (which begins at the IPv4 payload, l3 + IHL): 1=hello 2=db-desc 3=ls-request
+// 4=ls-update 5=ls-ack. The version byte at offset 0 is ignored. Unreadable or
+// unknown type → "".
+func classifyOSPF(frame []byte, l3 int) string {
+	l4 := l3 + ipv4IHL(frame, l3)
+	if len(frame) < l4+2 {
+		return ""
+	}
+	switch frame[l4+1] {
+	case 1:
+		return "hello"
+	case 2:
+		return "db-desc"
+	case 3:
+		return "ls-request"
+	case 4:
+		return "ls-update"
+	case 5:
+		return "ls-ack"
+	}
+	return ""
+}
+
+// classifyEIGRP reads the EIGRP opcode byte at offset 1 of the EIGRP header
+// (version byte at offset 0, opcode at offset 1): 1=update 2=request 3=query
+// 4=reply 5=hello. Unreadable or unknown opcode → "".
+func classifyEIGRP(frame []byte, l3 int) string {
+	l4 := l3 + ipv4IHL(frame, l3)
+	if len(frame) < l4+2 {
+		return ""
+	}
+	switch frame[l4+1] {
+	case 1:
+		return "update"
+	case 2:
+		return "request"
+	case 3:
+		return "query"
+	case 4:
+		return "reply"
+	case 5:
+		return "hello"
+	}
+	return ""
+}
+
+// ipv4IHL returns the IPv4 header length in bytes from the IHL nibble, clamped
+// to a 20-byte minimum for a malformed value — the same derivation the ICMP and
+// port peeks use.
+func ipv4IHL(frame []byte, l3 int) int {
 	ihl := int(frame[l3]&0x0f) * 4
 	if ihl < 20 {
 		ihl = 20
 	}
-	l4 := l3 + ihl
+	return ihl
+}
+
+// classifyICMPv4 splits ICMPv4 echo request/reply (types 8/0) out as "PING"
+// from other ICMPv4 ("ICMP"), and names the message subtype from the type byte:
+// echo-request (8), echo-reply (0), unreachable (3), redirect (5),
+// time-exceeded (11), else "other". The type byte is the first byte of the ICMP
+// header at the L4 offset, derived from IHL like classifyIPv4's port peek. A
+// frame too short to reach the type byte yields ("ICMP", "").
+func classifyICMPv4(frame []byte, l3 int) (label, subtype string) {
+	l4 := l3 + ipv4IHL(frame, l3)
 	if len(frame) < l4+1 {
-		return "ICMP"
+		return "ICMP", ""
 	}
 	switch frame[l4] {
-	case 0, 8:
-		return "PING"
+	case 8:
+		return "PING", "echo-request"
+	case 0:
+		return "PING", "echo-reply"
+	case 3:
+		return "ICMP", "unreachable"
+	case 5:
+		return "ICMP", "redirect"
+	case 11:
+		return "ICMP", "time-exceeded"
 	default:
-		return "ICMP"
+		return "ICMP", "other"
 	}
 }
 
@@ -139,25 +248,26 @@ func classifyICMPv4(frame []byte, l3 int) string {
 // header). Extension headers would shift the true upper-layer proto, but naming
 // the first next-header is enough for the traffic breakdown. TCP/UDP peek ports
 // at the fixed 40-byte IPv6 header offset (no options to skip).
-func classifyIPv6(frame []byte, l3 int) string {
+func classifyIPv6(frame []byte, l3 int) (label, subtype string) {
 	if len(frame) < l3+7 {
-		return "IPv6"
+		return "IPv6", ""
 	}
 	switch frame[l3+6] {
 	case 6, 17:
-		return classifyPorts(frame[l3+6], frame, l3+40)
+		// IPv6 has no options, so the L4 header sits at the fixed 40-byte offset.
+		return classifyTransport(frame[l3+6], frame, l3+40)
 	case 50:
-		return "ESP"
+		return "ESP", ""
 	case 51:
-		return "AH"
+		return "AH", ""
 	case 58:
-		return "ICMPv6"
+		return "ICMPv6", ""
 	case 88:
-		return "EIGRP"
+		return "EIGRP", ""
 	case 89:
-		return "OSPF"
+		return "OSPF", ""
 	default:
-		return "IPv6"
+		return "IPv6", ""
 	}
 }
 
@@ -168,6 +278,50 @@ func transportName(proto byte) string {
 		return "TCP"
 	}
 	return "UDP"
+}
+
+// classifyTransport names the TCP/UDP frame (via classifyPorts) and, for the
+// application labels that carry a decodable message type, its subtype. Only BGP
+// (TCP :179) decodes a subtype today; every other transport label returns "".
+func classifyTransport(proto byte, frame []byte, l4 int) (label, subtype string) {
+	label = classifyPorts(proto, frame, l4)
+	if label == "BGP" {
+		// The BGP header follows the TCP header. l4 is the TCP header offset; the
+		// TCP data offset (header length) is the high nibble of the byte at l4+12,
+		// in 32-bit words. Only decode when the whole TCP header — and the BGP
+		// header behind it — is present in this frame (guard against a segmented
+		// stream where the BGP header spilled into a later segment).
+		if len(frame) >= l4+13 {
+			tcpHdr := int(frame[l4+12]>>4) * 4
+			if tcpHdr >= 20 {
+				subtype = classifyBGP(frame, l4+tcpHdr)
+			}
+		}
+	}
+	return label, subtype
+}
+
+// classifyBGP reads the BGP message-type byte at offset 18 of the BGP header —
+// 16-byte marker, 2-byte length, then the type byte: 1=open 2=update
+// 3=notification 4=keepalive 5=route-refresh. bgp is the offset of the BGP
+// header (start of the marker). Unreadable (segmented/short) or unknown → "".
+func classifyBGP(frame []byte, bgp int) string {
+	if len(frame) < bgp+19 {
+		return ""
+	}
+	switch frame[bgp+18] {
+	case 1:
+		return "open"
+	case 2:
+		return "update"
+	case 3:
+		return "notification"
+	case 4:
+		return "keepalive"
+	case 5:
+		return "route-refresh"
+	}
+	return ""
 }
 
 // classifyPorts names a well-known application from the TCP/UDP source OR

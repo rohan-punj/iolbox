@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/rohanpunj/iolab/supervisor/internal/bcap"
+	"github.com/rohanpunj/iolab/supervisor/internal/dirstat"
 	"github.com/rohanpunj/iolab/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolab/supervisor/internal/lab"
 	"github.com/rohanpunj/iolab/supervisor/internal/node"
@@ -41,6 +42,13 @@ type loadedLab struct {
 	// server) for links that have an active capture, keyed by link id. Guarded by
 	// mu.
 	bcaps map[int]*bcap.Capture
+	// dirstats holds the always-on per-endpoint-tap directional classifier for
+	// each fabric link (one per link id), opened at attach and closed at
+	// detach/teardown, so link.stats can carry per-direction per-protocol rates
+	// whether or not a bridge capture is running. A nil entry (or a link with no
+	// classifier, e.g. the non-root dev box) simply yields no directional data.
+	// Guarded by mu (Linux only; the classifier is a no-op stub off Linux).
+	dirstats map[int]*dirstat.Classifier
 }
 
 // nodeRuntime is the runtime state of a single node.
@@ -83,6 +91,7 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		tapBridges:  make(map[string]*labBridge),
 		fabricLinks: make(map[int]bool),
 		bcaps:       make(map[int]*bcap.Capture),
+		dirstats:    make(map[int]*dirstat.Classifier),
 	}
 }
 
