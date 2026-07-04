@@ -79,8 +79,90 @@ type consoleHub struct {
 	nmu sync.Mutex
 	neg *telnet.Negotiator
 
+	// turn is the v0.3.0 Phase 3/4 input-arbitration gate: while a programmatic
+	// caller (ClaimTurn/RunExec) holds it, interactive input from BOTH TCP
+	// clients (attach's reader) and in-process Subscriptions (Subscription.Write)
+	// is queued instead of written straight to the pty, then flushed verbatim on
+	// release — see docs/v0.3.0-console-unification.md §2.3/§7. Interactive
+	// writes never touch wmu directly anymore; they all funnel through
+	// gatedWrite, which either writes immediately (no turn active) or buffers
+	// (turn active).
+	turn inputTurn
+
 	done chan struct{}
 	once sync.Once
+}
+
+// turnQueueCap bounds the interactive-input queue held while a programmatic
+// turn is active (docs/v0.3.0-console-unification.md §2.3: "cap the queue...
+// and drop-oldest... only in the pathological case of someone holding a key
+// down across a stalled painter call"). A real turn finishes in well under a
+// second, so this is generous for anything a human could type in that window.
+const turnQueueCap = 256
+
+// inputTurn is the hub's exclusive-input-turn gate (v0.3.0 Phase 4). Only one
+// programmatic caller (painter's runShow today; any future scripted driver)
+// may hold it at a time per node. While held, interactive input from every
+// other source is queued (never dropped, never written straight to the pty)
+// and flushed in original order the instant the turn releases.
+type inputTurn struct {
+	mu     sync.Mutex // guards the fields below; held only briefly per operation
+	active bool
+	holder string // e.g. "painter:show:R1" — for the force-release warning log
+	queue  [][]byte
+}
+
+// claim marks the turn active for holder, or returns false if a turn is
+// already active (caller should treat that as "busy", though today's only
+// caller — ClaimTurn — retries under ctx rather than surfacing this).
+func (t *inputTurn) claim(holder string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active {
+		return false
+	}
+	t.active = true
+	t.holder = holder
+	return true
+}
+
+// enqueue buffers an interactive write while a turn is active. Bounded by
+// turnQueueCap; drop-oldest on overflow (documented policy, §2.3) — this only
+// matters if a turn hangs past its timeout, which is itself a bug the 8s
+// ClaimTurn deadline and force-release log below catch.
+func (t *inputTurn) enqueue(p []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	cp := make([]byte, len(p))
+	copy(cp, p)
+	t.queue = append(t.queue, cp)
+	for len(t.queue) > turnQueueCap {
+		t.queue = t.queue[1:]
+	}
+}
+
+// release clears the active turn and returns the queued interactive bytes (in
+// original order) for the caller to flush to the pty. Idempotent: releasing a
+// turn that isn't held (e.g. double-release race) is a no-op returning nil.
+func (t *inputTurn) release() [][]byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.active {
+		return nil
+	}
+	t.active = false
+	t.holder = ""
+	queued := t.queue
+	t.queue = nil
+	return queued
+}
+
+// isActive reports whether a turn is currently held (used by gatedWrite to
+// decide queue-vs-write-through without taking the turn itself).
+func (t *inputTurn) isActive() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.active
 }
 
 // replayRingSize is how many bytes of recent pty output are kept for replay to
@@ -125,16 +207,47 @@ type Subscription struct {
 	Out <-chan []byte
 }
 
-// Write sends raw application bytes to the pty, serialized against every
-// other writer (TCP clients and other in-process subscribers alike) through
-// the hub's wmu, exactly like a TCP client's decoded keystrokes.
+// Write sends raw application bytes toward the pty, subject to the hub's
+// input-arbitration gate (v0.3.0 Phase 3): if a programmatic turn is active
+// (ClaimTurn/RunExec), the bytes are queued and flushed verbatim on release
+// instead of being written immediately — exactly like a TCP client's (attach's
+// reader) interactive keystrokes. When no turn is active this is the same
+// direct wmu-serialized write as before Phase 3.
 func (s *Subscription) Write(p []byte) error {
+	return s.hub.gatedWrite(p)
+}
+
+// gatedWrite is the ONE interactive-input write path every non-programmatic
+// caller uses (TCP clients via attach's reader, in-process subscribers via
+// Subscription.Write) — v0.3.0 Phase 3. If a programmatic turn is active it
+// queues p (see inputTurn.enqueue); otherwise it writes straight to the pty
+// under wmu, unchanged from pre-Phase-3 behavior. A turn holder's OWN writes
+// never call this — RunExec/ClaimTurn callers write directly (see
+// writeDirect), since they already hold the gate and queuing their own bytes
+// behind themselves would deadlock the flush.
+func (h *consoleHub) gatedWrite(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	s.hub.wmu.Lock()
-	_, err := s.hub.pty.Write(p)
-	s.hub.wmu.Unlock()
+	if h.turn.isActive() {
+		h.turn.enqueue(p)
+		return nil
+	}
+	return h.writeDirect(p)
+}
+
+// writeDirect writes p straight to the pty under wmu, bypassing the turn gate
+// entirely. Used by: gatedWrite when no turn is active, the turn holder itself
+// (ClaimTurn/RunExec — it already serialized itself in front of every other
+// writer by holding the turn), and the turn-release flush (queued interactive
+// bytes, replayed in order after the turn's own output settles).
+func (h *consoleHub) writeDirect(p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	h.wmu.Lock()
+	_, err := h.pty.Write(p)
+	h.wmu.Unlock()
 	return err
 }
 
@@ -306,10 +419,13 @@ func (h *consoleHub) attach(conn net.Conn) {
 	}()
 
 	// Reader: strip/answer IAC via the hub's shared Negotiator, normalize NVT
-	// line endings, forward clean bytes to the pty (serialized). Negotiation
-	// replies are routed through the client's out queue — NOT written directly
-	// — so the writer goroutine stays the connection's single writer and a
-	// reply can never interleave into the middle of a data chunk.
+	// line endings, forward clean bytes toward the pty through gatedWrite
+	// (v0.3.0 Phase 3) — so native's keystrokes are queued, not written
+	// straight through, while a programmatic turn is active, exactly like an
+	// in-process Subscription's Write. Negotiation replies are routed through
+	// the client's out queue — NOT written directly — so the writer goroutine
+	// stays the connection's single writer and a reply can never interleave
+	// into the middle of a data chunk.
 	go func() {
 		defer h.detach(c)
 		buf := make([]byte, 4096)
@@ -329,10 +445,7 @@ func (h *consoleHub) attach(conn net.Conn) {
 				}
 				clean = normalizeNVTLineEndings(clean, &c.crPending)
 				if len(clean) > 0 {
-					h.wmu.Lock()
-					_, werr := h.pty.Write(clean)
-					h.wmu.Unlock()
-					if werr != nil {
+					if werr := h.gatedWrite(clean); werr != nil {
 						return
 					}
 				}

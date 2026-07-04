@@ -528,6 +528,160 @@ func TestHubOneNegotiatorSharedAcrossTCPClients(t *testing.T) {
 	_ = inR // pty input side unused in this test; keeping the handle for symmetry with other hub tests
 }
 
+// --- v0.3.0 Phase 3: input-arbitration write-path tests ---
+//
+// ClaimTurn/RunExec (the public turn API) land in Phase 4; these tests drive
+// the underlying inputTurn gate directly (h.turn.claim/release, both
+// package-internal) to prove gatedWrite's queue-then-flush behavior for BOTH
+// interactive input sources — in-process Subscriptions and TCP attach's
+// reader — independent of who ends up calling claim/release in Phase 4.
+
+// TestHubSubscriptionWriteQueuedDuringTurnThenFlushed: an in-process
+// Subscription's Write while a turn is active is NOT written to the pty until
+// the turn releases, and reaches the pty in original order after the turn
+// holder's own writes — never interleaved.
+func TestHubSubscriptionWriteQueuedDuringTurnThenFlushed(t *testing.T) {
+	pty, _, inR := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	if !h.turn.claim("test:turn") {
+		t.Fatal("claim should succeed on a fresh hub")
+	}
+
+	sub := h.Subscribe()
+	defer sub.Unsubscribe()
+
+	// Interactive write while the turn is held: must NOT reach the pty yet.
+	writeErr := make(chan error, 1)
+	go func() { writeErr <- sub.Write([]byte("x")) }()
+	if err := <-writeErr; err != nil {
+		t.Fatalf("queued Write returned error: %v", err)
+	}
+
+	// The turn holder's own direct write DOES go straight through.
+	holderWriteErr := make(chan error, 1)
+	go func() { holderWriteErr <- h.writeDirect([]byte("enable\r")) }()
+	buf := make([]byte, 16)
+	n, err := inR.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "enable\r" {
+		t.Fatalf("pty received %q before the queued write, want the holder's own write first", buf[:n])
+	}
+	if err := <-holderWriteErr; err != nil {
+		t.Fatal(err)
+	}
+
+	// Releasing the turn must flush the queued interactive byte, and ONLY
+	// after the turn holder's own write already landed (already proven above).
+	queued := h.turn.release()
+	if len(queued) != 1 || string(queued[0]) != "x" {
+		t.Fatalf("release() queue = %q, want [\"x\"]", queued)
+	}
+	flushErr := make(chan error, 1)
+	go func() { flushErr <- h.writeDirect(queued[0]) }()
+	n, err = inR.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "x" {
+		t.Fatalf("flushed write = %q, want %q", buf[:n], "x")
+	}
+	if err := <-flushErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHubTCPAttachInputQueuedDuringTurn confirms native's TCP-attach reader
+// (not just in-process Subscriptions) is subject to the same turn gate —
+// the Phase 3 requirement that ALL interactive input funnels through one
+// arbitrated write path, not just wsbridge's.
+func TestHubTCPAttachInputQueuedDuringTurn(t *testing.T) {
+	pty, _, inR := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	if !h.turn.claim("test:turn") {
+		t.Fatal("claim should succeed on a fresh hub")
+	}
+
+	conn := attachPipe(h)
+	defer conn.Close()
+	// Drain the attach preamble so it doesn't confuse anything.
+	_ = readWithDeadline(t, conn, 200*time.Millisecond)
+
+	if _, err := conn.Write([]byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	// Give the reader goroutine time to process the byte through gatedWrite;
+	// it must be queued, not forwarded — prove no read arrives on the pty side
+	// within a generous window (io.PipeReader has no deadline, so race a
+	// background read against a timer instead).
+	gotRead := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 8)
+		n, err := inR.Read(buf)
+		if err == nil {
+			gotRead <- buf[:n]
+		}
+	}()
+	select {
+	case got := <-gotRead:
+		t.Fatalf("native keystroke reached the pty while turn was active: %q", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	queued := h.turn.release()
+	if len(queued) != 1 || string(queued[0]) != "y" {
+		t.Fatalf("release() queue = %q, want [\"y\"]", queued)
+	}
+}
+
+// TestHubGatedWriteBypassesQueueWhenNoTurnActive confirms gatedWrite behaves
+// exactly like the pre-Phase-3 direct write when no turn is active — the
+// no-regression case for the common (no painter running) path.
+func TestHubGatedWriteBypassesQueueWhenNoTurnActive(t *testing.T) {
+	pty, _, inR := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	writeErr := make(chan error, 1)
+	go func() { writeErr <- h.gatedWrite([]byte("no turn here")) }()
+
+	buf := make([]byte, 32)
+	n, err := inR.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "no turn here" {
+		t.Fatalf("pty received %q", buf[:n])
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHubTurnClaimIsExclusive confirms only one turn can be active at a time
+// — a second claim attempt fails until the first releases.
+func TestHubTurnClaimIsExclusive(t *testing.T) {
+	pty, _, _ := newFakePty()
+	h := newConsoleHub(pty, "")
+	defer h.shutdown()
+
+	if !h.turn.claim("first") {
+		t.Fatal("first claim should succeed")
+	}
+	if h.turn.claim("second") {
+		t.Fatal("second claim should fail while first is active")
+	}
+	h.turn.release()
+	if !h.turn.claim("second") {
+		t.Fatal("claim should succeed after release")
+	}
+}
+
 // TestHubMixedTCPAndInProcessSubscribers confirms a TCP client and an
 // in-process Subscription attached to the same node both receive the same
 // broadcast output concurrently (the fan-out property predates Phase 1/2;
