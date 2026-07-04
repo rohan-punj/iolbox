@@ -161,6 +161,63 @@ func TestSessionRunExecAlreadyPrivileged(t *testing.T) {
 	}
 }
 
+// TestSessionRunExecConfigModeUsesDoPrefix confirms that when the shared
+// console is left in config mode ("R1(config)#"), RunExec runs exec commands
+// with a "do " prefix so they execute WITHOUT leaving config mode — instead of
+// failing with "% Invalid input". This is the fix for the STP painter reporting
+// "no VLANs" when a user had left the console in config mode. RunExec must NOT
+// send end/exit/enable (config mode is privileged and must stay intact for the
+// interactive user sharing the arbitrated console).
+func TestSessionRunExecConfigModeUsesDoPrefix(t *testing.T) {
+	f := &fakeConsole{}
+	f.sess = New(f.write)
+	f.chunks = [][]byte{
+		[]byte("R1(config)#"),                                      // initial sync: config mode
+		[]byte("R1(config)#"),                                      // after "do terminal length 0"
+		[]byte("do show spanning-tree\r\nVLAN0001\r\nR1(config)#"), // after the do-prefixed show
+	}
+	out, err := f.sess.RunExec(context.Background(), f.read, "show spanning-tree")
+	if err != nil {
+		t.Fatalf("RunExec: %v", err)
+	}
+	if out != "VLAN0001" {
+		t.Fatalf("got %q, want %q", out, "VLAN0001")
+	}
+	var sawDoShow, sawDoTermLen bool
+	for _, w := range f.written {
+		switch string(w) {
+		case "do show spanning-tree\r":
+			sawDoShow = true
+		case "do terminal length 0\r":
+			sawDoTermLen = true
+		case "end\r", "exit\r", "enable\r":
+			t.Fatalf("RunExec must not leave config mode, but wrote %q", w)
+		}
+	}
+	if !sawDoShow || !sawDoTermLen {
+		t.Fatalf("expected do-prefixed commands, writes = %q", f.written)
+	}
+}
+
+// TestIsConfigPrompt pins the config-mode detection used to pick the `do` prefix.
+func TestIsConfigPrompt(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want bool
+	}{
+		{"R1#", false},
+		{"R1>", false},
+		{"R1(config)#", true},
+		{"R1(config-if)#", true},
+		{"R1(config-router)#", true},
+		{"SW1(config-vlan)#", true},
+	} {
+		if got := IsConfigPrompt(c.in); got != c.want {
+			t.Errorf("IsConfigPrompt(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 // TestSessionSyncPromptReadError confirms a read failure aborts the sync loop
 // with the underlying error instead of hanging.
 func TestSessionSyncPromptReadError(t *testing.T) {

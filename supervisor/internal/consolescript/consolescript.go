@@ -131,44 +131,89 @@ func (s *Session) SyncPrompt(ctx context.Context, read ReadFunc) (priv bool, err
 	}
 }
 
-// RunExec performs the full scripted exec sequence against whatever console
-// the Session's Writer/ReadFunc are wired to: sync the prompt, ensure enable
-// mode + `terminal length 0`, run cmd, and return its trimmed output.
-//
-// This is the exact sequence runShow performed inline in painter_linux.go
-// before the v0.3.0 Phase 0 extraction; behavior is unchanged. Phase 0
-// decoupled it from a net.Conn-backed consoleSession so a connection-agnostic
-// caller could call it identically — consoleHub.RunExec (Phase 4) is that
-// caller today, feeding it a hub Subscription's decoded output instead of a
-// raw telnet socket.
-func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (string, error) {
+// IsConfigPrompt reports whether prompt is an IOS configuration-mode prompt —
+// global config ("R1(config)#") or any sub-mode ("R1(config-if)#",
+// "R1(config-router)#", "R1(config-line)#", ...). RunExec MUST leave config
+// mode before running exec `show` commands: an exec command typed at a
+// "(config)#" prompt returns "% Invalid input detected" and no output, which is
+// exactly what made the STP painter report "no VLANs" when a user had left the
+// shared console in config mode.
+func IsConfigPrompt(prompt string) bool {
+	return strings.Contains(prompt, "(config")
+}
+
+// ensureEnable enters privileged EXEC if the session is at user EXEC ("R1>").
+// It deliberately does NOT touch config mode: the console is shared with an
+// interactive user (v0.3.0 single arbitrated session), so RunExec must never
+// send `end`/`exit` and kick the user out of a config mode they were working
+// in. Config mode is already privileged, so RunExec instead runs exec commands
+// there with a `do ` prefix (see RunExec) — matching how PNetLab drives shared
+// device consoles. Returns whether the session is in config mode so RunExec
+// knows to use the `do ` prefix.
+func (s *Session) ensureEnable(ctx context.Context, read ReadFunc) (config bool, err error) {
 	priv, err := s.SyncPrompt(ctx, read)
+	if err != nil {
+		return false, err
+	}
+	prompt, _, _ := HasPromptSuffix(s.String())
+	if IsConfigPrompt(prompt) {
+		return true, nil // config mode: privileged already; use `do`, don't leave it.
+	}
+	if priv {
+		return false, nil // privileged EXEC ("R1#").
+	}
+	// User EXEC ("R1>") -> enable. Labs boot with no enable secret (injected
+	// default config), so `enable` drops straight to "#"; if a password is
+	// prompted we never reach "#" and the sync times out -> empty result
+	// (prior behavior preserved).
+	if err := s.Write([]byte("enable\r")); err != nil {
+		return false, err
+	}
+	if _, err := s.SyncPrompt(ctx, read); err != nil {
+		return false, err
+	}
+	prompt, _, _ = HasPromptSuffix(s.String())
+	return IsConfigPrompt(prompt), nil
+}
+
+// RunExec performs the full scripted exec sequence against whatever console
+// the Session's Writer/ReadFunc are wired to: ensure privileged EXEC (or, in
+// config mode, prepare the `do ` prefix), set `terminal length 0`, run cmd,
+// and return its trimmed output.
+//
+// Since v0.3.0 this runs over the hub's single arbitrated session
+// (consoleHub.RunExec), shared with an interactive user who may have left the
+// CLI in config mode. Rather than disruptively exiting config mode, RunExec
+// runs exec commands with a `do ` prefix while in config — so `show ...` /
+// `terminal length 0` execute in place and the user's CLI mode is left
+// untouched. This is the fix for the STP painter reporting "no VLANs" when the
+// console was in config mode (an exec command there returns "% Invalid input"
+// with no output).
+func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (string, error) {
+	config, err := s.ensureEnable(ctx, read)
 	if err != nil {
 		return "", err
 	}
-	if !priv {
-		// Enter enable mode. Labs boot with no enable secret (injected default
-		// config), so `enable` drops straight to `#`; if a password is prompted we
-		// simply won't reach `#` and the sync below times out -> empty result.
-		if err := s.Write([]byte("enable\r")); err != nil {
-			return "", err
-		}
-		if _, err := s.SyncPrompt(ctx, read); err != nil {
-			return "", err
-		}
+	prefix := ""
+	if config {
+		prefix = "do "
 	}
+
 	// Disable the pager so long output isn't broken by --More-- prompts.
 	s.Reset()
-	if err := s.Write([]byte("terminal length 0\r")); err != nil {
+	if err := s.Write([]byte(prefix + "terminal length 0\r")); err != nil {
 		return "", err
 	}
 	if _, err := s.SyncPrompt(ctx, read); err != nil {
 		return "", err
 	}
 
-	// Run the show command and capture until the prompt returns.
+	// Run the command (do-prefixed in config mode) and capture until the prompt
+	// returns. CleanShowOutput is passed the FULL sent command so it strips the
+	// echoed "do show ..." line correctly.
+	sent := prefix + cmd
 	s.Reset()
-	if err := s.Write([]byte(cmd + "\r")); err != nil {
+	if err := s.Write([]byte(sent + "\r")); err != nil {
 		return "", err
 	}
 	for {
@@ -182,7 +227,7 @@ func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (strin
 			return "", err
 		}
 	}
-	return CleanShowOutput(s.String(), cmd), nil
+	return CleanShowOutput(s.String(), sent), nil
 }
 
 // CleanShowOutput strips the echoed command line and the trailing prompt line
