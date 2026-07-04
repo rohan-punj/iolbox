@@ -342,7 +342,7 @@ Proxmox-side (see runtime/files/lxc/pct-create.md for the full recipe):
   pct create <vmid> local:vztmpl/$(basename "$OUT_TAR") \\
       --unprivileged 1 \\
       --hostname iolab \\
-      --cores 2 --memory 4096 --swap 512 \\
+      --cores 4 --memory 4096 --swap 512 \\
       --net0 name=eth0,bridge=vmbr0,ip=dhcp \\
       --features nesting=0
 

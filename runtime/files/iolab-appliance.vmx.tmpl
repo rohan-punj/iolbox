@@ -3,10 +3,14 @@
 ## result to runtime/build/iolab-appliance.vmx. Do not hand-edit the output;
 ## edit this template instead so rebuilds stay reproducible.
 ##
-## Modeled on the PROVEN reference runtime VM (iolab-rt: 2 vCPU / 4 GB,
+## Modeled on the PROVEN reference runtime VM (iolab-rt: 4 vCPU / 4 GB,
 ## host-only + NAT e1000e NICs) rather than the original scaffold's 768 MB
 ## single-NIC guess — IOL nodes default to 1024 MB RAM each and the NAT
 ## node needs an outbound path.
+##
+## numvcpus / memsize are templated tokens (@@VCPUS@@ / @@RAM_MB@@) that
+## pack-vmware.sh substitutes from runtime/resources.env — the single
+## source of truth for vCPU/RAM across every deployment target.
 
 .encoding = "UTF-8"
 config.version = "8"
@@ -17,9 +21,9 @@ displayName = "iolab-appliance"
 guestOS = "debian12-64"
 annotation = "iolab runtime appliance - autostarts the iolab supervisor; GUI at http://<vm-ip>:4001 from the Windows host via the host-only NIC. Built by runtime/pack-vmware.sh. No Cisco software included."
 
-numvcpus = "2"
+numvcpus = "@@VCPUS@@"
 cpuid.coresPerSocket = "1"
-memsize = "4096"
+memsize = "@@RAM_MB@@"
 
 ## PCIe root ports — REQUIRED for the e1000e NICs below (e1000e is a PCIe
 ## device; without a pcieRootPort bridge there is "No PCIe slot available

@@ -28,6 +28,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
 
+# resources.env is the single source of truth for vCPU/RAM across every
+# deployment target (VMware, OVA, LXC, Docker); the Windows QEMU launcher
+# mirrors it in its own flag defaults. See runtime/resources.env.
+# shellcheck source=resources.env
+source "$SCRIPT_DIR/resources.env"
+
 # --version stamps the artifact names. Default empty -> historical unversioned
 # names (iolab-appliance.vmdk/.vmx) so existing tooling keeps working.
 VERSION=""
@@ -147,6 +153,8 @@ echo "== pack-vmware: templating .vmx =="
 VMDK_FILENAME="$(basename "$OUT_VMDK")"
 sed \
     -e "s|@@VMDK_FILENAME@@|$VMDK_FILENAME|g" \
+    -e "s|@@VCPUS@@|$IOLAB_VCPUS|g" \
+    -e "s|@@RAM_MB@@|$IOLAB_RAM_MB|g" \
     "$SCRIPT_DIR/files/iolab-appliance.vmx.tmpl" > "$OUT_VMX"
 
 echo "== pack-vmware: done =="

@@ -59,7 +59,7 @@ runtime/
     wsl.conf                      /etc/wsl.conf for the WSL2 import (pins hostname!)
     80-ethernet-dhcp.network      networkd fallback: plain DHCP on en*
     99-iolab.conf                 sysctl drop-in (ip_forward off until NAT node starts)
-    iolab-appliance.vmx.tmpl      templated VMware VMX (2 vCPU / 4 GB / 2 NICs)
+    iolab-appliance.vmx.tmpl      templated VMware VMX (4 vCPU / 4 GB / 2 NICs)
   build/                   OUTPUT (git-ignored)
 ```
 
@@ -74,6 +74,19 @@ tars it).
 
 Rebuilding only one package does **not** require re-running
 `build-rootfs.sh` — just re-run the one pack script.
+
+## Resource sizing (vCPU / RAM)
+
+`runtime/resources.env` is the single place to change vCPU/RAM for every
+deployment target: `IOLAB_VCPUS` (default 4) and `IOLAB_RAM_MB` (default
+4096). `pack-vmware.sh` and `pack-ova.sh` both source it at build time and
+substitute the values into the `.vmx` / OVF descriptor. The Proxmox LXC
+container reads it via the `pct create` recipe (`files/lxc/pct-create.md`
+— `--cores`/`--memory`, editable live after creation with `pct set`).
+Docker reads `docker/.env` (kept in sync with this file). The Windows QEMU
+launcher (`tools/iolab-launcher`) isn't built from this file — its
+`--smp`/`--mem` flag defaults are hardcoded in `main.go` but kept in sync
+by hand, and remain overridable per-run regardless.
 
 ## Networking (and why there IS a default route now)
 

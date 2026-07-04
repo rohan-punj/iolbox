@@ -33,6 +33,14 @@ services:
     # that pin, done in one place instead of three).
     hostname: iolab
 
+    # vCPU/RAM: sourced from docker/.env (which mirrors runtime/resources.env,
+    # the single source of truth for every deployment target). `cpus:`/
+    # `mem_limit:` are the plain compose v2 limit keys — they work with
+    # `docker compose up/run` directly, unlike `deploy.resources.limits`
+    # which only applies under `docker stack deploy` (swarm).
+    cpus: "${IOLAB_VCPUS:-4}"
+    mem_limit: "${IOLAB_RAM_MB:-4096}m"
+
     # NET_ADMIN: required for the NAT node's `sudo -n ip/iptables/sysctl`
     # calls (tap creation, MASQUERADE/FORWARD rules, ip_forward toggle) and
     # for entrypoint.sh's own prestart tap/macvtap cleanup + sysctl calls.
@@ -91,13 +99,11 @@ services:
       # appliance's ExecStartPre cleanup.
 
     # Sizing note: each running IOL node is roughly 1 GB of guest RAM (same
-    # figure the appliance docs use). Size this for the number of
+    # figure the appliance docs use). The cpus:/mem_limit: keys above default
+    # to 4 vCPU / 4096 MB (docker/.env); size up for the number of
     # concurrent lab nodes you expect, e.g. a 6-node lab wants a good
-    # 6-8 GB budget. No default limit is set here — uncomment and tune:
-    # deploy:
-    #   resources:
-    #     limits:
-    #       memory: 8g
+    # 6-8 GB budget — override via docker/.env or `IOLAB_RAM_MB=8192 docker
+    # compose -f docker/compose.yml up -d`.
 
     restart: unless-stopped
 

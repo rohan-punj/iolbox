@@ -23,7 +23,7 @@ type must allow "CT Template".)
 pct create <vmid> local:vztmpl/iolab-ct-<ver>.tar.zst \
     --unprivileged 1 \
     --hostname iolab \
-    --cores 2 \
+    --cores 4 \
     --memory 4096 \
     --swap 512 \
     --net0 name=eth0,bridge=vmbr0,ip=dhcp \
@@ -46,12 +46,15 @@ Notes on each flag:
   `iolab`, pick it now, not later. (The hostname does NOT have to be
   literally `iolab` — any value is fine, `iolab` is just this doc's
   example — but it must be stable for the container's lifetime.)
-- `--cores 2 --memory 4096` — matches the VMware appliance's sizing (see
+- `--cores 4 --memory 4096` — matches the VMware appliance's sizing (see
   `runtime/files/iolab-appliance.vmx.tmpl`). 4 GB covers the supervisor +
   a handful of IOL nodes; IOL nodes default to roughly 1 GB of guest RAM
   each in typical images, so budget `--memory` up if you plan to run more
   than 2-3 nodes concurrently (Proxmox lets you resize later with
-  `pct set <vmid> --memory <mb>`, no rebuild needed).
+  `pct set <vmid> --memory <mb>`, no rebuild needed). These mirror
+  `runtime/resources.env` (the single source of truth for all targets);
+  change a running container live with `pct set <vmid> --cores <n>
+  --memory <mb>` — no rebuild needed.
 - `--net0 ... ip=dhcp` — adjust bridge/VLAN/static-IP to your Proxmox
   network layout; this is exactly the config `pct` injects into the
   container's networkd config for you (see "Networking" below) — no

@@ -48,6 +48,19 @@ docker compose -f docker/compose.yml up -d
 # browse to http://localhost:4001
 ```
 
+## Sizing (vCPU / RAM)
+
+`docker/compose.yml` sets `cpus:` and `mem_limit:` from `docker/.env`
+(`IOLAB_VCPUS=4`, `IOLAB_RAM_MB=4096`), which mirrors `runtime/resources.env`
+— the single source of truth for vCPU/RAM across every iolab deployment
+target (VMware appliance, OVA, Proxmox LXC, this container, and the Windows
+QEMU launcher's own flag defaults). Edit `docker/.env` and re-run `docker
+compose -f docker/compose.yml up -d` to change it, or override inline:
+
+```sh
+IOLAB_RAM_MB=8192 docker compose -f docker/compose.yml up -d
+```
+
 Native telnet consoles and Wireshark capture tees also work directly against
 the Docker host, same as they do against the appliance's IP:
 

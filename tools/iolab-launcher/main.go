@@ -49,9 +49,12 @@ type launchOpts struct {
 
 func main() {
 	var (
+		// mem/smp defaults mirror runtime/resources.env (IOLAB_RAM_MB=4096,
+		// IOLAB_VCPUS=4), the single source of truth for vCPU/RAM across every
+		// iolab deployment target; still overridable here via --mem/--smp.
 		backendFlag = flag.String("backend", "auto", "backend: qemu | wsl | auto")
-		memMB       = flag.Int("mem", 3072, "guest RAM in MB")
-		smp         = flag.Int("smp", 2, "guest vCPU count")
+		memMB       = flag.Int("mem", 4096, "guest RAM in MB")
+		smp         = flag.Int("smp", 4, "guest vCPU count")
 		noBrowser   = flag.Bool("no-browser", false, "do not open the default browser when the GUI is up")
 		portsOvr    = flag.String("ports", "", "override port ranges: gui:cStart:cCount:capStart:capCount (empty fields keep defaults)")
 		bootTO      = flag.Duration("boot-timeout", 6*time.Minute, "how long to wait for the GUI (TCG boots are slow)")

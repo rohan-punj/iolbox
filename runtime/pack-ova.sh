@@ -30,13 +30,19 @@
 # otherwise). grub tooling is installed inside the chroot.
 #
 # Sizing / minimums (also in the OVF annotation + docs/install.md):
-#   defaults 2 vCPU / 4096 MB; MINIMUM to boot + run one small IOL node is
+#   defaults 4 vCPU / 4096 MB; MINIMUM to boot + run one small IOL node is
 #   ~2 GB RAM / 1 vCPU. 16 GB virtual disk (the image library lives inside the
 #   appliance); the OVA file itself is a few hundred MB.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${IOLAB_BUILD_DIR:-$SCRIPT_DIR/build}"
+
+# resources.env is the single source of truth for vCPU/RAM across every
+# deployment target (VMware, OVA, LXC, Docker); the Windows QEMU launcher
+# mirrors it in its own flag defaults. See runtime/resources.env.
+# shellcheck source=resources.env
+source "$SCRIPT_DIR/resources.env"
 
 # --version stamps the artifact name + the OVF Product/VirtualSystem id.
 # Default "dev" (siblings use dev for the unversioned dev build).
@@ -179,6 +185,8 @@ sed \
     -e "s|@@VMDK_POPULATED@@|$VMDK_POPULATED|g" \
     -e "s|@@PRODUCT_VERSION@@|$VERSION|g" \
     -e "s|@@VSYS_ID@@|$VSYS_ID|g" \
+    -e "s|@@VCPUS@@|$IOLAB_VCPUS|g" \
+    -e "s|@@RAM_MB@@|$IOLAB_RAM_MB|g" \
     "$SCRIPT_DIR/files/ova/iolab-appliance.ovf.tmpl" > "$OVA_STAGE/$OVF_FILENAME"
 
 # ---------------------------------------------------------------------------
@@ -207,6 +215,6 @@ Import (LAN-only appliance - the GUI has NO authentication):
                then set adapter 1 to Host-only, adapter 2 to NAT.
   VMware WS:   ovftool "$STEM.ova" iolab.vmx    (or File > Open)
   ESXi:        ovftool "$STEM.ova" vi://root@<esxi-host>/
-  Defaults 2 vCPU / 4096 MB; minimum 2 GB / 1 vCPU. Then browse the guest's
+  Defaults $IOLAB_VCPUS vCPU / $IOLAB_RAM_MB MB; minimum 2 GB / 1 vCPU. Then browse the guest's
   "control"-NIC IP at http://<vm-ip>:4001.
 EOF
