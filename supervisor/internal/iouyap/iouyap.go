@@ -87,6 +87,27 @@ func (c Config) validate() error {
 	return nil
 }
 
+// validateTap checks the config fields relevant to tap-mode bridges
+// (TapBridge): everything validate checks except UDPLocal/UDPRemote, since
+// tap mode has no UDP side at all — the frame's other end is a Linux tap
+// device, not a UDP relay.
+func (c Config) validateTap() error {
+	if c.NetioPath == "" {
+		return errors.New("iouyap: NetioPath is required")
+	}
+	if c.LocalInstance < 1 || c.LocalInstance > 1024 {
+		return fmt.Errorf("iouyap: invalid LocalInstance %d (IOL accepts 1-1024)", c.LocalInstance)
+	}
+	if c.PseudoInstance < 1 || c.PseudoInstance > 1024 {
+		return fmt.Errorf("iouyap: invalid PseudoInstance %d (IOL accepts 1-1024)", c.PseudoInstance)
+	}
+	if c.LocalAdapter < 0 || c.LocalAdapter > 15 || c.LocalPort < 0 || c.LocalPort > 15 {
+		return fmt.Errorf("iouyap: interface %d/%d outside the 0-15 nibble range of the netio port byte",
+			c.LocalAdapter, c.LocalPort)
+	}
+	return nil
+}
+
 // stripToUDP is the netio->UDP transform: drop the 8-byte netio header so the
 // UDP mesh carries the raw ethernet frame. Datagrams too short to hold a
 // header are dropped (ok=false), like a runt frame on a real link.
