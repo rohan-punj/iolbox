@@ -691,8 +691,11 @@ export class MockTransport implements Transport {
     };
     const DEMO_DIR_DEFAULT: Record<string, [number, number]> = { CDP: [0.1, 0.1], ICMP: [1, 1] };
     // Per-subtype demo split so the packet-type dropdown is exercisable in dev:
-    // link 1's PING is half echo-request / half echo-reply, one per direction.
+    // link 1's PING is half echo-request / half echo-reply, one per direction;
+    // link 0's STP (one-way, from endpoints[0] per DEMO_DIR above) is all
+    // Configuration BPDUs so the STP subtype dropdown has something to match.
     const DEMO_SUBDIR: Record<number, Record<string, Record<string, [number, number]>>> = {
+      0: { STP: { config: [0.5, 0] } },
       1: { PING: { "echo-request": [1, 0], "echo-reply": [0, 1] } },
     };
     this.statsTimer = setInterval(() => {

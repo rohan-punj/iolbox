@@ -243,6 +243,16 @@ func bgpFrame(msgType byte) []byte {
 	return ipv4Proto(6, append(tcp, bgp...)...)
 }
 
+// stpBpduFrame builds an STP BPDU frame: 802.3 length field, dst
+// 01:80:c2:00:00:00, LLC DSAP/SSAP/ctrl 42 42 03, then the BPDU body —
+// protocol-id (2 bytes), protocol-version (1 byte), and the type byte
+// (bpduType) at LLC-payload offset 3 (frame offset l3+6).
+func stpBpduFrame(bpduType byte) []byte {
+	f := ethHdr(0x0026, 0x42, 0x42, 0x03, 0x00, 0x00, 0x00, bpduType)
+	copy(f[0:6], []byte{0x01, 0x80, 0xc2, 0x00, 0x00, 0x00})
+	return f
+}
+
 // TestClassifyDetailedSubtypes exercises the per-protocol subtype vocabulary
 // emitted by ClassifyDetailed with crafted frames per subtype, and confirms the
 // primary label + tagged bits still match Classify.
@@ -290,13 +300,19 @@ func TestClassifyDetailedSubtypes(t *testing.T) {
 		{"arp-reply", arpFrame(2), "ARP", "reply"},
 		{"arp-rarp", arpFrame(3), "ARP", ""},
 
-		// Labels with no subtype vocabulary → "".
-		{"tcp-plain", ipv4Ports(6, 12345, 23), "TCP", ""},
-		{"stp-no-subtype", func() []byte {
+		// STP BPDU type byte (LLC payload offset 3 / frame offset l3+6).
+		{"stp-config", stpBpduFrame(0x00), "STP", "config"},
+		{"stp-tcn", stpBpduFrame(0x80), "STP", "tcn"},
+		{"stp-rstp", stpBpduFrame(0x02), "STP", "rstp"},
+		{"stp-unknown", stpBpduFrame(0x99), "STP", ""},
+		{"stp-too-short-no-subtype", func() []byte {
 			f := ethHdr(0x0026, 0x42, 0x42, 0x03, 0x00, 0x00)
 			copy(f[0:6], []byte{0x01, 0x80, 0xc2, 0x00, 0x00, 0x00})
 			return f
 		}(), "STP", ""},
+
+		// Labels with no subtype vocabulary → "".
+		{"tcp-plain", ipv4Ports(6, 12345, 23), "TCP", ""},
 	}
 	for _, c := range cases {
 		label, subtype, _ := ClassifyDetailed(c.frame)

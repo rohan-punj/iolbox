@@ -9,6 +9,7 @@
     PROTO_ORDER,
     SUBTYPES,
     SUBTYPE_ANY,
+    SUBTYPE_LABELS,
     type ProtoKey,
   } from "../watcherStore.svelte";
 
@@ -117,7 +118,7 @@
             >
               <option value={SUBTYPE_ANY}>any</option>
               {#each SUBTYPES[row.proto] ?? [] as st (st)}
-                <option value={st}>{st}</option>
+                <option value={st}>{SUBTYPE_LABELS[st] ?? st}</option>
               {/each}
             </select>
           {/if}

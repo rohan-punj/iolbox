@@ -59,9 +59,14 @@ func ClassifyDetailed(frame []byte) (label, subtype string, tagged bool) {
 		return label, subtype, tagged
 	}
 	// et < 0x0600 is an 802.3 length field: the payload is an LLC/SNAP header,
-	// which is how STP, CDP, DTP, VTP and IS-IS appear on the wire. None of the
-	// LLC/SNAP labels carry a subtype we decode.
-	return classifyLLC(frame, l3), "", tagged
+	// which is how STP, CDP, DTP, VTP and IS-IS appear on the wire. Only STP
+	// carries a subtype we decode (the BPDU type byte); the other LLC/SNAP
+	// labels have none.
+	label = classifyLLC(frame, l3)
+	if label == "STP" {
+		subtype = classifySTPSubtype(frame, l3)
+	}
+	return label, subtype, tagged
 }
 
 // classifyEtherType handles DIX/Ethernet-II frames (ethertype >= 0x0600),
@@ -368,6 +373,28 @@ func udpPort(src, dst uint16) string {
 	case src == 1812 || dst == 1812 || src == 1813 || dst == 1813 ||
 		src == 1645 || dst == 1645 || src == 1646 || dst == 1646:
 		return "RADIUS"
+	}
+	return ""
+}
+
+// classifySTPSubtype reads the BPDU type byte carried in the LLC payload
+// classified as "STP": the 802.3 LLC header (DSAP/SSAP 0x42, control 0x03,
+// checked by classifyLLC) sits at l3, and the BPDU follows it — protocol-id
+// (2 bytes), protocol-version (1 byte), then the type byte at l3+6.
+// 0x00 = Configuration BPDU, 0x80 = Topology Change Notification, 0x02 =
+// RST/MST BPDU (802.1w/802.1s). Unreadable (short frame) or unrecognised →
+// "".
+func classifySTPSubtype(frame []byte, l3 int) string {
+	if len(frame) < l3+7 {
+		return ""
+	}
+	switch frame[l3+6] {
+	case 0x00:
+		return "config"
+	case 0x80:
+		return "tcn"
+	case 0x02:
+		return "rstp"
 	}
 	return ""
 }

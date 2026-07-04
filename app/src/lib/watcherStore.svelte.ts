@@ -75,6 +75,18 @@ export const SUBTYPES: Partial<Record<ProtoKey, string[]>> = {
   ospf: ["hello", "db-desc", "ls-request", "ls-update", "ls-ack"],
   eigrp: ["hello", "update", "query", "reply", "request"],
   arp: ["request", "reply"],
+  stp: ["config", "tcn", "rstp"],
+};
+
+/** Display label for a subtype value in the packet-type dropdown. Most
+ *  subtype strings (e.g. "echo-request", "hello") are readable as-is, so this
+ *  only overrides the STP BPDU-type abbreviations that read better cased
+ *  (matching PNetLab's Config/TCN/RSTP naming); anything absent here falls
+ *  back to the raw subtype string. */
+export const SUBTYPE_LABELS: Partial<Record<string, string>> = {
+  config: "Config",
+  tcn: "TCN",
+  rstp: "RSTP",
 };
 
 export interface WatcherRow {
