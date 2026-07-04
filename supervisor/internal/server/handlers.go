@@ -924,11 +924,35 @@ func (s *Server) handlePainterCollect(raw json.RawMessage) (any, error) {
 	default:
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "painter.collect: unknown proto %q (want stp|ospf|eigrp|bgp)", args.Proto)
 	}
+	if args.Proto == "stp" && args.VLAN <= 0 {
+		// STP is per-VLAN with exactly one root per VLAN: a paint must target
+		// one VLAN (chosen via painter.stpVlans) rather than falling back to
+		// "whichever VLAN block came first", which is what produced the old
+		// two-root-crowns bug.
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "painter.collect: proto \"stp\" requires a positive vlan (pick one via painter.stpVlans first)")
+	}
 	ll, err := s.currentLab(args.LabID)
 	if err != nil {
 		return nil, err
 	}
 	return s.painterCollect(context.Background(), ll, args)
+}
+
+// handlePainterSTPVlans enumerates the STP-enabled VLAN instances on ONE node
+// — step 1 of the STP painter flow (pick a node -> pick a VLAN -> paint every
+// bridge's tree for that VLAN). The heavy lifting is in the platform-specific
+// painterSTPVlans (Linux scrapes the console; the Windows stub reports
+// Linux-only).
+func (s *Server) handlePainterSTPVlans(raw json.RawMessage) (any, error) {
+	var args protocol.PainterVlansArgs
+	if err := decode(raw, &args); err != nil {
+		return nil, err
+	}
+	ll, err := s.currentLab(args.LabID)
+	if err != nil {
+		return nil, err
+	}
+	return s.painterSTPVlans(context.Background(), ll, args.NodeID)
 }
 
 func (s *Server) handleStatus(raw json.RawMessage) (any, error) {

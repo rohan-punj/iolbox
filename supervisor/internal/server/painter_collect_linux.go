@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
@@ -18,9 +19,15 @@ import (
 func (s *Server) painterCollect(ctx context.Context, ll *loadedLab, args protocol.PainterArgs) (protocol.PainterResult, error) {
 	proto := strings.ToLower(strings.TrimSpace(args.Proto))
 	res := protocol.PainterResult{Proto: proto, Dest: args.Dest, Nodes: []protocol.PainterNode{}}
+	if proto == "stp" {
+		res.VLAN = args.VLAN
+	}
 
 	ids := args.Nodes
 	if ids == nil {
+		// Auto-query ALL L2 bridges in the lab: every running IOL node (IOL
+		// nodes can be L2 or L3 — a non-STP/L3 node just reports empty+hint
+		// below, it is never crowned).
 		for _, n := range ll.doc.Nodes {
 			if n.Kind == lab.KindIOL {
 				ids = append(ids, n.ID)
@@ -46,7 +53,7 @@ func (s *Server) painterCollect(ctx context.Context, ll *loadedLab, args protoco
 		}
 		pn.Running = true
 
-		if err := s.collectNode(ctx, ll, id, proto, args.Dest, &pn); err != nil {
+		if err := s.collectNode(ctx, ll, id, proto, args.Dest, args.VLAN, &pn); err != nil {
 			pn.Hint = "could not read live protocol state (still converging or console busy)"
 		}
 		res.Nodes = append(res.Nodes, pn)
@@ -55,16 +62,21 @@ func (s *Server) painterCollect(ctx context.Context, ll *loadedLab, args protoco
 }
 
 // collectNode runs the protocol's show command(s) on one node and fills pn.
-func (s *Server) collectNode(ctx context.Context, ll *loadedLab, id int, proto, dest string, pn *protocol.PainterNode) error {
+func (s *Server) collectNode(ctx context.Context, ll *loadedLab, id int, proto, dest string, vlan int, pn *protocol.PainterNode) error {
 	switch proto {
 	case "stp":
-		out, err := s.runShow(ctx, ll, id, "show spanning-tree")
+		// Snapshot ONE VLAN's tree: `show spanning-tree vlan <N>` so a node
+		// that runs STP on several VLANs never bleeds a different VLAN's
+		// root/ports into this result (that was the root cause of the old
+		// "two root crowns" bug — it ran the unqualified, all-VLAN command
+		// and took whichever block happened first).
+		out, err := s.runShow(ctx, ll, id, fmt.Sprintf("show spanning-tree vlan %d", vlan))
 		if err != nil {
 			return err
 		}
-		st := painter.ParseSTP(out)
+		st := painter.ParseSTPVlanBlock(out, vlan)
 		if st.Empty() {
-			pn.Hint = "no spanning-tree data (not configured or still converging)"
+			pn.Hint = "no spanning-tree data for this VLAN (not configured on this node, L3-only, or still converging)"
 			return nil
 		}
 		pn.STP = mapSTP(st)
@@ -184,6 +196,7 @@ func mapSTP(st painter.STPResult) *protocol.PainterSTP {
 		})
 	}
 	return &protocol.PainterSTP{
+		VLAN:     st.VLAN,
 		RootID:   st.RootID,
 		BridgeID: st.BridgeID,
 		IsRoot:   st.IsRoot,
@@ -191,4 +204,41 @@ func mapSTP(st painter.STPResult) *protocol.PainterSTP {
 		RootPort: st.RootPort,
 		Ports:    ports,
 	}
+}
+
+// painterSTPVlans runs the VLAN-enumeration step of the STP painter flow on
+// ONE node: `show spanning-tree` (all-VLAN dump) to find which VLANs actually
+// have an STP instance running, enriched with `show vlan brief` for names
+// (best-effort — a parse failure there just leaves Name empty). Tolerant of
+// L3 nodes / no STP configured: yields an empty Vlans list with a Hint, never
+// an error.
+func (s *Server) painterSTPVlans(ctx context.Context, ll *loadedLab, nodeID int) (protocol.PainterVlansResult, error) {
+	res := protocol.PainterVlansResult{Node: nodeID, Vlans: []protocol.PainterVlan{}}
+
+	if dn := ll.findNode(nodeID); dn == nil || dn.Kind != lab.KindIOL {
+		res.Hint = "node has no IOS console"
+		return res, nil
+	}
+	nr := ll.get(nodeID)
+	if nr == nil || nr.proc == nil {
+		res.Hint = "node is not running — start the lab to enumerate live STP VLANs"
+		return res, nil
+	}
+	res.Running = true
+
+	stpOut, err := s.runShow(ctx, ll, nodeID, "show spanning-tree")
+	if err != nil {
+		res.Hint = "could not read live STP state (console busy)"
+		return res, nil
+	}
+	// Best-effort VLAN name enrichment; ignore errors, names stay empty.
+	vlanBriefOut, _ := s.runShow(ctx, ll, nodeID, "show vlan brief")
+
+	for _, v := range painter.ParseSTPVlans(stpOut, vlanBriefOut) {
+		res.Vlans = append(res.Vlans, protocol.PainterVlan{ID: v.ID, Name: v.Name})
+	}
+	if len(res.Vlans) == 0 {
+		res.Hint = "no spanning-tree VLANs on this node (L3-only or STP not configured)"
+	}
+	return res, nil
 }

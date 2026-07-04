@@ -154,6 +154,7 @@ func (s *Server) register() {
 	s.disp.Handle("config.save", s.handleConfigExtract)
 	s.disp.Handle("config.extract", s.handleConfigExtract)
 	s.disp.Handle("painter.collect", s.handlePainterCollect)
+	s.disp.Handle("painter.stpVlans", s.handlePainterSTPVlans)
 	s.disp.Handle("status", s.handleStatus)
 }
 

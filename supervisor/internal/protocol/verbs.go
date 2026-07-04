@@ -276,9 +276,42 @@ type PainterArgs struct {
 	// "10.0.0.1", or a nodeId reference the caller has resolved to an address).
 	// Ignored for STP. Optional for OSPF/EIGRP (path highlight only when set).
 	Dest string `json:"dest,omitempty"`
+	// VLAN scopes an STP collect to one VLAN's spanning tree (proto == "stp"
+	// only). STP is per-VLAN with exactly one root per VLAN, so a paint always
+	// targets a single VLAN chosen via the painter.stpVlans step; VLAN==0 is
+	// invalid for a "stp" collect (the handler rejects it) rather than
+	// silently falling back to "first VLAN found", which is what produced the
+	// old two-roots-per-lab bug.
+	VLAN int `json:"vlan,omitempty"`
 	// Nodes optionally restricts the scrape to these node ids; empty = all
-	// running IOL nodes in the lab.
+	// running IOL nodes in the lab (all L2 bridges, auto-queried for the
+	// chosen VLAN's tree).
 	Nodes []int `json:"nodes,omitempty"`
+}
+
+// PainterVlansArgs targets the painter.stpVlans verb: enumerate the
+// STP-enabled VLAN instances on ONE node, the first step of the painter STP
+// flow (pick a node -> pick a VLAN -> auto-query every bridge for that VLAN).
+type PainterVlansArgs struct {
+	LabID  string `json:"labId"`
+	NodeID int    `json:"nodeId"`
+}
+
+// PainterVlan is one STP-enabled VLAN instance on the queried node.
+type PainterVlan struct {
+	ID   int    `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// PainterVlansResult is the painter.stpVlans response. Running=false / an
+// empty Vlans list (with Hint set) covers a stopped node, an L3-only node, or
+// a node with no STP configured — never an error, so the frontend can render
+// a clear "no VLANs with STP here" state.
+type PainterVlansResult struct {
+	Node    int           `json:"node"`
+	Running bool          `json:"running"`
+	Vlans   []PainterVlan `json:"vlans"`
+	Hint    string        `json:"hint,omitempty"`
 }
 
 // PainterNode is one node's painter result. Exactly one of the protocol-shaped
@@ -301,10 +334,12 @@ type PainterNode struct {
 }
 
 // PainterResult is the painter.collect response: one entry per targeted node,
-// plus the echoed proto/dest so the frontend knows what snapshot it holds.
+// plus the echoed proto/dest/vlan so the frontend knows what snapshot it holds.
 type PainterResult struct {
-	Proto string        `json:"proto"`
-	Dest  string        `json:"dest,omitempty"`
+	Proto string `json:"proto"`
+	Dest  string `json:"dest,omitempty"`
+	// VLAN echoes the requested VLAN for a "stp" collect (omitted otherwise).
+	VLAN  int           `json:"vlan,omitempty"`
 	Nodes []PainterNode `json:"nodes"`
 }
 
@@ -320,8 +355,12 @@ type PainterSTPPort struct {
 	Reason        string `json:"reason,omitempty"`
 }
 
-// PainterSTP is a node's spanning-tree decision.
+// PainterSTP is a node's spanning-tree decision for the ONE VLAN the paint
+// request targeted (see PainterArgs.VLAN). IsRoot is true on at most one node
+// across the whole painter.collect response — the node whose BridgeID equals
+// RootID.
 type PainterSTP struct {
+	VLAN     int              `json:"vlan,omitempty"`
 	RootID   string           `json:"rootId,omitempty"`
 	BridgeID string           `json:"bridgeId,omitempty"`
 	IsRoot   bool             `json:"isRoot"`

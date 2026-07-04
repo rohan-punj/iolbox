@@ -19,6 +19,9 @@ func (s *Server) runShow(ctx context.Context, ll *loadedLab, nodeID int, cmd str
 // reports not-running with a hint. Keeps the Windows cross-compile green.
 func (s *Server) painterCollect(ctx context.Context, ll *loadedLab, args protocol.PainterArgs) (protocol.PainterResult, error) {
 	res := protocol.PainterResult{Proto: args.Proto, Dest: args.Dest, Nodes: []protocol.PainterNode{}}
+	if args.Proto == "stp" {
+		res.VLAN = args.VLAN
+	}
 	for _, n := range ll.doc.Nodes {
 		res.Nodes = append(res.Nodes, protocol.PainterNode{
 			Node: n.ID,
@@ -26,4 +29,15 @@ func (s *Server) painterCollect(ctx context.Context, ll *loadedLab, args protoco
 		})
 	}
 	return res, nil
+}
+
+// painterSTPVlans is a stub off Linux: no nodes run here, so the VLAN
+// enumeration step reports not-running with a hint. Keeps the Windows
+// cross-compile green.
+func (s *Server) painterSTPVlans(ctx context.Context, ll *loadedLab, nodeID int) (protocol.PainterVlansResult, error) {
+	return protocol.PainterVlansResult{
+		Node:  nodeID,
+		Vlans: []protocol.PainterVlan{},
+		Hint:  "protocol painter runs on the Linux runtime only",
+	}, nil
 }
