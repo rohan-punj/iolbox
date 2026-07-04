@@ -40,6 +40,11 @@ type launchOpts struct {
 	diskPath string
 	wslTar   string
 	wslDir   string
+
+	// folder sync (images\/labs\ <-> guest, see foldersync.go)
+	noSync    bool
+	imagesDir string
+	labsDir   string
 }
 
 func main() {
@@ -58,6 +63,10 @@ func main() {
 		wslTar     = flag.String("wsl-tar", "", "override path to iolab-rootfs.tar (dev)")
 		wslDir     = flag.String("wsl-dir", "", "override WSL install dir (default %LOCALAPPDATA%\\iolab)")
 		detectOnly = flag.Bool("detect", false, "print backend detection and exit (no launch)")
+
+		noSync    = flag.Bool("no-sync", false, "disable images\\/labs\\ folder sync (pure ephemeral; folders untouched)")
+		imagesDir = flag.String("images-dir", "", "override the images folder (default <exeDir>\\images)")
+		labsDir   = flag.String("labs-dir", "", "override the labs folder (default <exeDir>\\labs)")
 	)
 	flag.Parse()
 
@@ -88,6 +97,9 @@ func main() {
 		diskPath:      *diskPath,
 		wslTar:        *wslTar,
 		wslDir:        *wslDir,
+		noSync:        *noSync,
+		imagesDir:     *imagesDir,
+		labsDir:       *labsDir,
 	}
 
 	// Detect once; used for the decision and printed for transparency.

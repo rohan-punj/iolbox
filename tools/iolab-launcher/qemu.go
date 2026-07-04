@@ -77,6 +77,18 @@ func (q *qemuBackend) locate() error {
 // Disk is attached if=virtio: Debian's generic linux-image-amd64 builds in
 // virtio_blk (and the initramfs MODULES=most carries it), so the stock kernel
 // boots off virtio with no extra build. virtio is the faster path under TCG.
+//
+// snapshot=on makes the OS disk ephemeral: qemu opens iolab-disk.qcow2
+// READ-ONLY and redirects every guest write to a temporary overlay file (in
+// the Windows %TMP% dir) that is discarded when qemu exits. A hard kill (task
+// kill, power loss, crash) can therefore never corrupt the shipped golden
+// disk, and every run boots from the same clean state. The tradeoff is the
+// one this project accepts deliberately: OS-disk writes don't persist across
+// runs — which is exactly why user data (images/labs) is synced to/from the
+// Windows filesystem instead (see foldersync.go). NOTE: if qemu is hard-killed
+// (not given a chance to clean up), its temp overlay file can be orphaned in
+// %TMP%; this is harmless — it's plain scratch space and Windows/the user can
+// clean %TMP% at any time.
 func (q *qemuBackend) buildArgs(fwdPorts []int) []string {
 	args := []string{
 		"-machine", "pc",
@@ -92,7 +104,7 @@ func (q *qemuBackend) buildArgs(fwdPorts []int) []string {
 	args = append(args,
 		"-m", strconv.Itoa(q.opts.memMB),
 		"-smp", strconv.Itoa(q.opts.smp),
-		"-drive", "file="+q.diskPath+",format=qcow2,if=virtio",
+		"-drive", "file="+q.diskPath+",format=qcow2,if=virtio,snapshot=on",
 		"-netdev", qemuNetdevArgFor(fwdPorts),
 		"-device", "virtio-net-pci,netdev=net0",
 		"-display", "none",
@@ -130,7 +142,7 @@ func (q *qemuBackend) run(ctx context.Context) error {
 	args := q.buildArgs(fwdPorts)
 	logf("Starting QEMU (%s backend)", accelDescr(q.det))
 	logf("  qemu:  %s", q.qemuExe)
-	logf("  disk:  %s", q.diskPath)
+	logf("  disk:  %s (ephemeral: snapshot=on — guest writes go to a discarded overlay; the golden disk never changes)", q.diskPath)
 	logf("  mem:   %d MB   smp: %d", q.opts.memMB, q.opts.smp)
 	logf("  GUI:   http://localhost:%d", q.ranges.guiPort)
 	if q.opts.verbose {
@@ -175,6 +187,32 @@ func (q *qemuBackend) run(ctx context.Context) error {
 	}
 
 	logf("GUI is up: %s", guiURL)
+
+	// Folder sync: since the OS disk is now ephemeral, user data (IOL images,
+	// saved labs) is persisted on the Windows FS instead and synced into/out
+	// of the guest via the supervisor's existing HTTP upload + WS control
+	// APIs. --no-sync disables this entirely (pure ephemeral, folders
+	// untouched). A connect failure logs a warning and does NOT fail the
+	// launch — the GUI still works without sync.
+	var sync *syncSession
+	if !q.opts.noSync {
+		exeDir := ""
+		if exePath, err := os.Executable(); err == nil {
+			exeDir = filepath.Dir(exePath)
+		}
+		imagesDir, labsDir := defaultSyncDirs(exeDir, q.opts.imagesDir, q.opts.labsDir)
+		s, syncErr := startSyncSession(ctx, q.ranges.guiPort, imagesDir, labsDir)
+		if syncErr != nil {
+			logf("WARNING: folder sync setup failed: %v (continuing without sync)", syncErr)
+		} else {
+			sync = s
+		}
+	}
+	syncStop := make(chan struct{})
+	if sync != nil {
+		go sync.runPeriodicSyncOut(ctx, 30*time.Second, syncStop)
+	}
+
 	if !q.opts.noBrowser {
 		openBrowser(guiURL)
 	}
@@ -184,9 +222,18 @@ func (q *qemuBackend) run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		logf("Shutdown requested — asking the guest to power down (QMP system_powerdown)...")
+		close(syncStop)
+		if sync != nil {
+			sync.finalSyncOut()
+			sync.close()
+		}
 		q.powerdown(cmd, procDone)
 		return nil
 	case <-procDone:
+		close(syncStop)
+		if sync != nil {
+			sync.close()
+		}
 		if procErr != nil {
 			return fmt.Errorf("qemu exited: %w", procErr)
 		}

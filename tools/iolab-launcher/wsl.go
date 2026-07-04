@@ -68,6 +68,32 @@ func (w *wslBackend) run(ctx context.Context) error {
 			guiURL, w.distro)
 	}
 	logf("GUI is up: %s", guiURL)
+
+	// Folder sync (see foldersync.go / qemu.go for the full rationale): the
+	// WSL backend has no persistent-vs-ephemeral qcow2 distinction (its distro
+	// filesystem persists across runs on the Windows FS already), but we wire
+	// the SAME images\/labs\ sync here anyway for a consistent user experience
+	// across backends — the supervisor's HTTP upload + WS control APIs are
+	// identical on both. --no-sync disables it entirely.
+	var sync *syncSession
+	if !w.opts.noSync {
+		exeDir := ""
+		if exePath, err := os.Executable(); err == nil {
+			exeDir = filepath.Dir(exePath)
+		}
+		imagesDir, labsDir := defaultSyncDirs(exeDir, w.opts.imagesDir, w.opts.labsDir)
+		s, syncErr := startSyncSession(ctx, w.ranges.guiPort, imagesDir, labsDir)
+		if syncErr != nil {
+			logf("WARNING: folder sync setup failed: %v (continuing without sync)", syncErr)
+		} else {
+			sync = s
+		}
+	}
+	syncStop := make(chan struct{})
+	if sync != nil {
+		go sync.runPeriodicSyncOut(ctx, 30*time.Second, syncStop)
+	}
+
 	if !w.opts.noBrowser {
 		openBrowser(guiURL)
 	}
@@ -75,6 +101,11 @@ func (w *wslBackend) run(ctx context.Context) error {
 
 	<-ctx.Done()
 	logf("Shutdown requested — terminating the %q distro...", w.distro)
+	close(syncStop)
+	if sync != nil {
+		sync.finalSyncOut()
+		sync.close()
+	}
 	w.terminate()
 	return nil
 }
