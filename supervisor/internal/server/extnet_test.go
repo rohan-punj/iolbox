@@ -67,47 +67,6 @@ func TestStartNatUnsupported(t *testing.T) {
 	}
 }
 
-// TestBridgePlanExtnetUDP pins that a nat endpoint on a LEGACY link (here
-// VPCS<->NAT — an IOL<->NAT link now takes the static-tap fabric, P2) is bridged
-// like VPCS: it gets relay UDP ports (no pseudo-instance, not marked vpcs), and
-// extnetUDPFor maps send=relay.LocalPort / listen=relay.RemotePort.
-func TestBridgePlanExtnetUDP(t *testing.T) {
-	// capture forces the legacy relay path (a plain p2p link between two fabric
-	// kinds — VPCS and NAT — is on the static-tap fabric now).
-	doc := &lab.Lab{Version: 1, ID: "l", Name: "n",
-		Nodes: []lab.Node{vpcsNode(0), natNode(1)},
-		Links: []lab.Link{{ID: 5, Type: lab.LinkP2P, Capture: &lab.Capture{Enabled: true},
-			Endpoints: []lab.Endpoint{{Node: 0, Interface: "eth0"}, {Node: 1, Interface: "eth0"}}}},
-	}
-	plan, err := buildBridgePlan(doc, 1000, newUDP(), nil, "", map[int]*linkAssign{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.links) != 1 {
-		t.Fatalf("expected 1 bridged link, got %d", len(plan.links))
-	}
-	var natEP *bridgedEndpoint
-	for i := range plan.links[0].endpoints {
-		ep := &plan.links[0].endpoints[i]
-		if ep.kind == lab.KindNAT {
-			natEP = ep
-		}
-	}
-	if natEP == nil {
-		t.Fatal("nat endpoint missing from plan")
-	}
-	if natEP.isIOL || natEP.vpcs || natEP.pseudo != 0 {
-		t.Fatalf("nat endpoint must be non-IOL, non-vpcs, no pseudo: %+v", natEP)
-	}
-	send, listen, ok := plan.extnetUDPFor(1)
-	if !ok {
-		t.Fatal("extnetUDPFor(1) must resolve")
-	}
-	if send != natEP.relayEP.LocalPort || listen != natEP.relayEP.RemotePort {
-		t.Fatalf("extnet UDP mapping wrong: send=%d listen=%d ep=%+v", send, listen, natEP.relayEP)
-	}
-}
-
 // TestExtnetLinkIsBridged confirms a link touching a nat/mgmt node is bridged
 // (never native), like any non-IOL endpoint.
 func TestExtnetLinkIsBridged(t *testing.T) {

@@ -12,21 +12,19 @@ import (
 // isFabricLink reports whether a link is realised by the STATIC-TAP LINUX-BRIDGE
 // FABRIC (the P1 migration path) rather than the legacy iouyap-UDP + relay path.
 //
-// Scope grows per phase: P1 = IOL<->IOL; P2 adds IOL<->NAT. VPCS/mgmt/segment
-// links and links with capture.enabled stay on the legacy relay path until P3
-// (VPCS) and P4 (capture) move them onto the fabric and P5 retires the relay.
-// captureReady is deliberately NOT consulted: in the fabric model every link is
-// capturable (via tcpdump on the bridge, P4), so a fabric-eligible link always
-// takes the fabric regardless of the lab-level capture-ready flag.
+// A link is realised on the fabric iff it has at least two endpoints and every
+// endpoint's node kind can live on the fabric (see fabricNodes). Both p2p links
+// (a 2-port bridge) and segment links (an N-port bridge) qualify. captureReady
+// and capture.enabled are deliberately NOT consulted: in the fabric model every
+// link is capturable via tcpdump on its bridge (bcap), so a fabric-eligible link
+// always takes the fabric regardless of any capture flag.
 //
 // fabricOK maps node id -> whether the node's kind can live on the fabric (see
-// fabricNodes: IOL and NAT today).
+// fabricNodes). With mgmt retired, every node kind (IOL/NAT/VPCS) is fabric, so
+// every well-formed link is a fabric link.
 func isFabricLink(l *lab.Link, fabricOK map[int]bool) bool {
-	if l.EffectiveType() != lab.LinkP2P || len(l.Endpoints) != 2 {
+	if len(l.Endpoints) < 2 {
 		return false
-	}
-	if l.Capture != nil && l.Capture.Enabled {
-		return false // active capture still uses the relay tee until P4
 	}
 	for _, ep := range l.Endpoints {
 		if !fabricOK[ep.Node] {
