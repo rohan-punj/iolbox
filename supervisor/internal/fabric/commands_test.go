@@ -38,7 +38,7 @@ func TestTapDeleteCmds(t *testing.T) {
 func TestBridgeCreateCmds(t *testing.T) {
 	got := joinArgv(bridgeCreateCmds("iolbr12"))
 	for _, want := range []string{
-		"ip link add iolbr12 type bridge",
+		"ip link add iolbr12 type bridge group_fwd_mask 0xfff8",
 		"ip link set iolbr12 up",
 	} {
 		if !strings.Contains(got, want) {

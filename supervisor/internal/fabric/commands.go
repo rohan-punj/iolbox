@@ -29,9 +29,19 @@ func tapDeleteCmds(name string) [][]string {
 }
 
 // bridgeCreateCmds returns the argv to create a bridge device and bring it up.
+//
+// group_fwd_mask is set to 0xfff8 at create time so the bridge forwards the
+// reserved link-local multicast range 01:80:C2:00:00:03-0F instead of
+// dropping it — this is what lets LLDP (...:0E) and 802.1X/EAPOL (...:03)
+// cross the per-link bridge fabric. It is deliberately NOT 0xffff: bits 0/1/2
+// of that range are STP (...:00), the "reserved for future standardization"
+// pause-like group (...:01), and 802.1X/LACP-adjacent (...:02); the kernel
+// refuses to forward those and returns EIO if you try to set them via
+// group_fwd_mask, so 0xfff8 (bits 3-15) is the widest value the kernel
+// actually accepts.
 func bridgeCreateCmds(name string) [][]string {
 	return [][]string{
-		{"ip", "link", "add", name, "type", "bridge"},
+		{"ip", "link", "add", name, "type", "bridge", "group_fwd_mask", "0xfff8"},
 		{"ip", "link", "set", name, "up"},
 	}
 }
