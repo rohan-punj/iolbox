@@ -87,3 +87,62 @@ func TestPathTraversalIsContained(t *testing.T) {
 		t.Fatalf("traversal did not resolve to index.html: %q", body)
 	}
 }
+
+func TestIndexCacheHeadersAndConditionalGet(t *testing.T) {
+	h := Handler()
+	rr := get(t, h, "/")
+	if cc := rr.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("GET / Cache-Control = %q, want no-cache (app shell must revalidate)", cc)
+	}
+	tag := rr.Header().Get("ETag")
+	if tag == "" {
+		t.Fatal("GET / has no ETag; embed.FS carries no modtime, so without our ETag there is no validator at all")
+	}
+
+	// Revalidation with the same ETag must be answered 304 with no body.
+	rr2 := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("If-None-Match", tag)
+	h.ServeHTTP(rr2, req)
+	if rr2.Code != http.StatusNotModified {
+		t.Fatalf("conditional GET / with matching ETag = %d, want 304", rr2.Code)
+	}
+
+	// SPA fallback carries index.html's policy: a stale cached shell after an
+	// upgrade is the failure mode no-cache exists to prevent.
+	rr3 := get(t, h, "/some/spa/route")
+	if cc := rr3.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("SPA fallback Cache-Control = %q, want no-cache", cc)
+	}
+	if rr3.Header().Get("ETag") != tag {
+		t.Fatalf("SPA fallback ETag = %q, want index.html's %q", rr3.Header().Get("ETag"), tag)
+	}
+}
+
+func TestSetCacheHeadersSplitsAssetsFromShell(t *testing.T) {
+	// assets/* filenames are content-hashed by Vite, so the same URL can never
+	// serve different bytes: cache forever, immutable. Everything else keeps a
+	// stable name across releases and must always revalidate.
+	etags := map[string]string{
+		"assets/index-C-hazZTN.js": `"aa"`,
+		"index.html":               `"bb"`,
+	}
+	rr := httptest.NewRecorder()
+	setCacheHeaders(rr, "assets/index-C-hazZTN.js", etags)
+	if cc := rr.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+		t.Fatalf("assets Cache-Control = %q, want immutable year-long", cc)
+	}
+	if rr.Header().Get("ETag") != `"aa"` {
+		t.Fatalf("assets ETag = %q, want map value", rr.Header().Get("ETag"))
+	}
+
+	rr2 := httptest.NewRecorder()
+	setCacheHeaders(rr2, "favicon.svg", etags)
+	if cc := rr2.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("non-asset Cache-Control = %q, want no-cache", cc)
+	}
+	// No ETag entry for favicon.svg in the map: header simply absent, not bogus.
+	if rr2.Header().Get("ETag") != "" {
+		t.Fatalf("unexpected ETag %q for un-hashed file with no map entry", rr2.Header().Get("ETag"))
+	}
+}
