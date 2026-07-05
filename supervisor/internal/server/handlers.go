@@ -104,6 +104,21 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 		return nil, protocol.Errorf(protocol.CodeSchemaInvalid, "%v", err)
 	}
 
+	// ADOPT PATH (WS2): a lab.load for the SAME id, SAME topology, while at
+	// least one node of the currently-loaded lab is actually up, must NOT go
+	// through the teardown-and-reload path below. This is what makes a
+	// second browser tab (or a GUI refresh that still ends up here, e.g. the
+	// labGetDoc-failed fallback) safe to open on top of a lab someone is
+	// already running: without this, opening the SAME lab a second time
+	// looked identical to loading a different one and evicted every running
+	// node out from under the first tab. Cosmetic-only differences (name,
+	// position, annotations, startupConfig text) do not block adoption but
+	// DO get persisted into the stored doc, so edits made in the second tab
+	// before the reload aren't silently dropped.
+	if res, ok := s.tryAdoptLoad(&doc); ok {
+		return res, nil
+	}
+
 	ll := newLoadedLab(&doc, s.cfg.RunDir)
 	var nodes []protocol.NodeConsole
 	var warnings []string
@@ -154,6 +169,147 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	}
 
 	return protocol.LabLoadResult{LabID: doc.ID, Nodes: nodes, Warnings: warnings}, nil
+}
+
+// tryAdoptLoad services a lab.load WITHOUT any teardown when it targets the
+// SAME lab id as the one currently loaded, that lab has at least one node
+// that is actually up (not merely loaded-but-stopped — an idle lab gets the
+// normal reload path, which is cheap and correctness-neutral there), and the
+// new doc's topology is identical to the loaded one (see sameTopology). The
+// second return value is false when none of those hold, meaning the caller
+// must fall through to the ordinary teardown-and-reload path.
+//
+// On adoption: the stored doc's cosmetic fields (name/position/annotations/
+// startupConfig/description/canvas — everything sameTopology ignores) are
+// copied onto the RUNNING lab's doc so edits made before the reload are not
+// lost, but the runtime (nodes map, fabric, captures) is left completely
+// untouched. Console ports in the result come from the live nodeRuntimes,
+// never freshly allocated — a fresh allocation here would desync the GUI
+// (which still has the old ports) from the actual listening sockets.
+func (s *Server) tryAdoptLoad(doc *lab.Lab) (protocol.LabLoadResult, bool) {
+	s.mu.Lock()
+	ll := s.lab
+	s.mu.Unlock()
+	if ll == nil || ll.doc.ID != doc.ID {
+		return protocol.LabLoadResult{}, false
+	}
+	anyUp := false
+	for _, nr := range ll.nodes {
+		if nr.machine.State() != node.StateStopped {
+			anyUp = true
+			break
+		}
+	}
+	if !anyUp {
+		return protocol.LabLoadResult{}, false
+	}
+	if !sameTopology(ll.doc, doc) {
+		return protocol.LabLoadResult{}, false
+	}
+
+	// Swap in the new doc's cosmetic content while keeping the loaded lab's
+	// runtime (ll.nodes/fabric/captures) — topology is identical so every
+	// node id used by the runtime maps still lines up against the new doc.
+	// Guard the swap with ll.mu (the same lock handleStatus/fabricStats hold
+	// when they walk ll.doc.Links) so a concurrent stats/status reader can't
+	// tear the ll.doc pointer; no s.mu is held here, so there's no lock nesting.
+	ll.mu.Lock()
+	ll.doc = doc
+	ll.mu.Unlock()
+
+	var nodes []protocol.NodeConsole
+	for i := range doc.Nodes {
+		n := &doc.Nodes[i]
+		nr := ll.get(n.ID)
+		if nr == nil {
+			// Should be unreachable (sameTopology guarantees identical node id
+			// sets), but fall back to the teardown path rather than panic or
+			// return a bogus port if it ever happens.
+			return protocol.LabLoadResult{}, false
+		}
+		nodes = append(nodes, protocol.NodeConsole{ID: n.ID, ConsolePort: nr.consolePort})
+	}
+	return protocol.LabLoadResult{LabID: doc.ID, Nodes: nodes, Adopted: true}, true
+}
+
+// sameTopology reports whether a and b describe the same runtime shape: the
+// same set of nodes (by id, kind, image id, ethernet/serial adapter counts)
+// and the same set of links (by id and its endpoints as an unordered set).
+// Names, positions, icons, annotations, canvas view state, and startupConfig
+// text are COSMETIC and deliberately excluded — changing them must not block
+// lab.load adoption (see tryAdoptLoad), since none of them affect the running
+// fabric/process set. Node and link ORDER is irrelevant (compared as sets),
+// only membership.
+func sameTopology(a, b *lab.Lab) bool {
+	if len(a.Nodes) != len(b.Nodes) || len(a.Links) != len(b.Links) {
+		return false
+	}
+	an := make(map[int]lab.Node, len(a.Nodes))
+	for _, n := range a.Nodes {
+		an[n.ID] = n
+	}
+	for _, nb := range b.Nodes {
+		na, ok := an[nb.ID]
+		if !ok || !sameNodeShape(na, nb) {
+			return false
+		}
+	}
+
+	al := make(map[int]lab.Link, len(a.Links))
+	for _, l := range a.Links {
+		al[l.ID] = l
+	}
+	for _, lb := range b.Links {
+		la, ok := al[lb.ID]
+		if !ok || !sameEndpointSet(la.Endpoints, lb.Endpoints) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameNodeShape compares the runtime-relevant fields of two nodes sharing an
+// id: kind, image id (empty string when Image is nil, on both sides, for a
+// non-iol node), and ethernet/serial adapter counts (nil treated as the same
+// as an explicit 0 — buildSpec's intOr default — so a doc that never set the
+// field matches one that set it to the default explicitly).
+func sameNodeShape(a, b lab.Node) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	if imageID(a) != imageID(b) {
+		return false
+	}
+	return intOr(a.Ethernet, 1) == intOr(b.Ethernet, 1) && intOr(a.Serial, 1) == intOr(b.Serial, 1)
+}
+
+func imageID(n lab.Node) string {
+	if n.Image == nil {
+		return ""
+	}
+	return n.Image.ID
+}
+
+// sameEndpointSet compares two links' endpoints as an unordered set of
+// {node,interface} pairs (a link's two endpoints can be listed in either
+// order without changing its meaning).
+func sameEndpointSet(a, b []lab.Endpoint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	count := make(map[lab.Endpoint]int, len(a))
+	for _, e := range a {
+		count[e]++
+	}
+	for _, e := range b {
+		count[e]--
+	}
+	for _, c := range count {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // nodeStateCallback returns a state-machine callback that emits node.state.

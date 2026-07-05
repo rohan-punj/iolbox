@@ -139,6 +139,13 @@ export interface LabLoadResult {
   labId: string;
   nodes: { id: number; consolePort: number }[];
   warnings: string[];
+  /** WS2: true when the supervisor matched this load against the ALREADY
+   *  RUNNING lab (same id, same topology) and serviced it without any
+   *  teardown — the returned node console ports are the EXISTING runtime's,
+   *  not freshly allocated. loadLab() must not reset nodeStates to all-
+   *  "stopped" in this case (see labStore.svelte.ts). Absent/false on every
+   *  ordinary load. */
+  adopted?: boolean;
 }
 
 export interface NodeRuntimeStatus {

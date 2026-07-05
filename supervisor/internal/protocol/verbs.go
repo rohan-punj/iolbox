@@ -97,6 +97,13 @@ type LabLoadResult struct {
 	LabID    string        `json:"labId"`
 	Nodes    []NodeConsole `json:"nodes"`
 	Warnings []string      `json:"warnings"`
+	// Adopted is true when this lab.load matched the already-running lab
+	// (same id, same topology) and was serviced WITHOUT tearing anything
+	// down — see handleLabLoad's adopt path in the server package. The
+	// returned Nodes carry the EXISTING runtime's console ports, not freshly
+	// allocated ones. Omitted (false) on every ordinary load/reload, so old
+	// clients that don't look at this field see no behavioural difference.
+	Adopted bool `json:"adopted,omitempty"`
 }
 
 // --- lab.saveDoc / lab.listDocs / lab.getDoc / lab.deleteDoc ---

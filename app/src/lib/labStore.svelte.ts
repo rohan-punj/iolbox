@@ -7,7 +7,7 @@ import { MockTransport } from "./mockTransport";
 import { selectTransport } from "./transportSelect";
 import { consoleUiStore } from "./consoleUiStore.svelte";
 import { encodePcapng, type CapturedPacket } from "./pcapng";
-import type { SupervisorEvent } from "./protocol";
+import type { StatusResult, SupervisorEvent } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
 export type ProviderStatus = "unknown" | "connecting" | "connected" | "error";
@@ -239,19 +239,97 @@ class LabStore {
       } finally {
         this.imagesLoading = false;
       }
-      // Reload the last lab the user was working on (so a browser refresh keeps
-      // their additions) instead of the throwaway seed. Falls back to the seed
-      // when there's no remembered lab or it's gone from the store.
-      const restored = await this.restoreLastActiveLab();
-      if (!restored) {
-        this.reconcileNodeImages();
-        await this.loadLab(this.lab);
+      // WS2 — "adopt, don't load": if the supervisor is already running a lab
+      // (survived our disconnect — e.g. this is a browser refresh, not a fresh
+      // supervisor boot), hydrate the GUI from its live status INSTEAD of
+      // calling lab.load, which deliberately tears down the previously-loaded
+      // lab first (the orphan-fix in handleLabLoad). Without this, every
+      // refresh killed the user's running IOL nodes. Only fall back to the
+      // restore/seed+load path when nothing is actually up.
+      const status = await this.client.status();
+      const anyUp = status.nodes.some((n) => n.state !== "stopped");
+      const adopted = status.labId && anyUp ? await this.adoptRunningLab(status) : false;
+      if (!adopted) {
+        // Reload the last lab the user was working on (so a browser refresh
+        // keeps their additions) instead of the throwaway seed. Falls back to
+        // the seed when there's no remembered lab or it's gone from the store.
+        const restored = await this.restoreLastActiveLab();
+        if (!restored) {
+          this.reconcileNodeImages();
+          await this.loadLab(this.lab);
+        }
       }
     } catch (e) {
       this.providerStatus = "error";
       this.lastError = `connect failed: ${(e as Error).message}`;
       this.pushLog("error", `connect failed: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * WS2 — hydrate the GUI from a lab the supervisor is ALREADY running,
+   * without calling lab.load (which tears the running lab down first). The
+   * target is always `status.labId` — if the supervisor is running a
+   * DIFFERENT lab than the one this browser last remembered, the supervisor
+   * wins (it reflects reality; the GUI's memory does not) and we adopt
+   * whatever it reports. Returns true on success; false only in the rare case
+   * the doc can't be fetched from the durable store (e.g. it was deleted from
+   * under a still-running lab), in which case the caller falls back to the
+   * normal restore/seed+load path — that path still calls loadLab, but there
+   * is no doc to adopt into, so there is nothing more graceful to do here.
+   */
+  private async adoptRunningLab(status: StatusResult): Promise<boolean> {
+    let lab: LabDocument;
+    try {
+      const res = await this.client.labGetDoc(status.labId!);
+      if (!res.lab || !Array.isArray(res.lab.nodes)) throw new Error("empty doc");
+      lab = res.lab;
+    } catch (e) {
+      this.pushLog(
+        "warn",
+        `lab ${status.labId} is running but its stored doc could not be read (${(e as Error).message}) — falling back to the normal load path`
+      );
+      return false;
+    }
+
+    this.lab = lab;
+    this.reconcileNodeImages();
+
+    // Clear stale per-lab UI state exactly like loadLab does, EXCEPT the live
+    // runtime maps (nodeStates/consolePorts/capturePorts), which we are about
+    // to populate from the supervisor's actual status instead of resetting.
+    this.linkStats = {};
+    this.openConsoleTabs = [];
+    this.openCaptureTabs = [];
+    this.captureBuffers.clear();
+    this.captureRecorded = {};
+    this.activeConsoleTab = null;
+
+    const states: Record<number, NodeState> = {};
+    const ports: Record<number, number> = {};
+    for (const n of status.nodes) {
+      states[n.id] = n.state;
+      if (n.consolePort) ports[n.id] = n.consolePort;
+    }
+    // A node in the doc that the supervisor didn't report (shouldn't happen —
+    // status always mirrors the loaded doc's node set — but keep the GUI from
+    // showing an undefined state) defaults to stopped.
+    for (const n of lab.nodes) {
+      if (!(n.id in states)) states[n.id] = "stopped";
+    }
+    this.nodeStates = states;
+    this.consolePorts = ports;
+
+    const capPorts: Record<number, number> = {};
+    for (const l of status.links) {
+      if (l.capturePort) capPorts[l.id] = l.capturePort;
+    }
+    this.capturePorts = capPorts;
+
+    this.savedDocIds.add(lab.id);
+    this.rememberActiveLab(lab.id);
+    this.pushLog("info", `adopted already-running lab "${lab.name}" — no restart`);
+    return true;
   }
 
   /**
@@ -398,14 +476,40 @@ class LabStore {
     this.activeConsoleTab = null;
     const res = await this.client.labLoad(lab);
     const ports: Record<number, number> = {};
-    const states: Record<number, NodeState> = {};
     for (const n of res.nodes) {
       ports[n.id] = n.consolePort;
     }
+    this.consolePorts = ports;
+    if (res.adopted) {
+      // Server-side adopt (WS2): this happened because the lab we just "loaded"
+      // was ALREADY running (e.g. a second browser tab opening the same lab) —
+      // the supervisor serviced it without any teardown and handed back the
+      // EXISTING console ports (already captured above). Resetting nodeStates
+      // to all-"stopped" here would lie to this tab about a lab that is
+      // actually up, so query real state instead.
+      try {
+        const status = await this.client.status();
+        const states: Record<number, NodeState> = {};
+        for (const n of status.nodes) states[n.id] = n.state;
+        for (const n of lab.nodes) if (!(n.id in states)) states[n.id] = "stopped";
+        this.nodeStates = states;
+        const capPorts: Record<number, number> = {};
+        for (const l of status.links) if (l.capturePort) capPorts[l.id] = l.capturePort;
+        this.capturePorts = capPorts;
+      } catch {
+        // status() failing here is unusual (we just got a reply from the same
+        // supervisor) — fall back to "stopped" rather than throw, same as the
+        // non-adopted path below would have shown anyway.
+        const states: Record<number, NodeState> = {};
+        for (const n of lab.nodes) states[n.id] = "stopped";
+        this.nodeStates = states;
+      }
+      return;
+    }
+    const states: Record<number, NodeState> = {};
     for (const n of lab.nodes) {
       states[n.id] = "stopped";
     }
-    this.consolePorts = ports;
     this.nodeStates = states;
   }
 
