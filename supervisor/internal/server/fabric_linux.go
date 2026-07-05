@@ -15,6 +15,7 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/iouyap"
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/slowtee"
 	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
@@ -329,6 +330,7 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 	ll.fabricLinks[l.ID] = true
 	ll.mu.Unlock()
 	s.openLinkDirstat(ll, l)
+	s.openLinkSlowTee(ll, l)
 	return nil
 }
 
@@ -373,6 +375,68 @@ func (s *Server) closeLinkDirstat(ll *loadedLab, linkID int) {
 	dc.Close()
 }
 
+// openLinkSlowTee (re)opens the userspace LACP slow-protocols tee for a fabric
+// link, mirroring openLinkDirstat: any existing tee is closed first so
+// sockets/goroutines don't leak across re-attaches.
+//
+// SCOPE: p2p fabric links only. A tee only makes sense between exactly two
+// endpoint taps (fabricLinkTapDevs returns 2) where BOTH endpoints are IOL
+// nodes — a LACP port-channel is switch<->switch; a NAT or VPCS endpoint, or
+// an N-port segment (hub), is skipped (N-port flood-to-all-members is out of
+// scope for v1 — see the slowtee package doc). A link that doesn't qualify,
+// or whose taps can't be bound, simply gets no tee and no LACP passthrough;
+// every other protocol on the link is unaffected.
+func (s *Server) openLinkSlowTee(ll *loadedLab, l *lab.Link) {
+	ll.mu.Lock()
+	old := ll.slowtees[l.ID]
+	delete(ll.slowtees, l.ID)
+	ll.mu.Unlock()
+	old.Close()
+
+	if !linkIsIOLToIOL(ll, l) {
+		return
+	}
+	devs := s.fabricLinkTapDevs(ll, l)
+	if len(devs) != 2 {
+		return
+	}
+
+	t, err := slowtee.Open(devs)
+	if err != nil {
+		log.Printf("slowtee: link %d LACP tee degraded: %v", l.ID, err)
+	}
+	if t != nil {
+		ll.mu.Lock()
+		ll.slowtees[l.ID] = t
+		ll.mu.Unlock()
+	}
+}
+
+// closeLinkSlowTee stops and drops a fabric link's LACP slow-protocols tee.
+// Idempotent (nil-safe Close). Mirrors closeLinkDirstat.
+func (s *Server) closeLinkSlowTee(ll *loadedLab, linkID int) {
+	ll.mu.Lock()
+	t := ll.slowtees[linkID]
+	delete(ll.slowtees, linkID)
+	ll.mu.Unlock()
+	t.Close()
+}
+
+// linkIsIOLToIOL reports whether both of a link's endpoints are IOL nodes —
+// the only case a LACP port-channel is relevant for (switch<->switch).
+func linkIsIOLToIOL(ll *loadedLab, l *lab.Link) bool {
+	if len(l.Endpoints) != 2 {
+		return false
+	}
+	for _, ep := range l.Endpoints {
+		n := ll.findNode(ep.Node)
+		if n == nil || n.Kind != lab.KindIOL {
+			return false
+		}
+	}
+	return true
+}
+
 // attachFabricForNode (re)attaches the fabric link that a just-started node
 // participates in — used by startExtnetNode so a NAT that comes up after its
 // bridge already exists gets wired in. No-op if the node is on no fabric link.
@@ -400,6 +464,8 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 	s.stopBridgeCapture(ll, l.ID)
 	// Stop the directional classifier: its taps are about to be detached/removed.
 	s.closeLinkDirstat(ll, l.ID)
+	// Stop the LACP slow-protocols tee for the same reason.
+	s.closeLinkSlowTee(ll, l.ID)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	for _, ep := range l.Endpoints {
@@ -602,6 +668,8 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	ll.bcaps = make(map[int]*bcap.Capture)
 	dcs := ll.dirstats
 	ll.dirstats = make(map[int]*dirstat.Classifier)
+	tees := ll.slowtees
+	ll.slowtees = make(map[int]*slowtee.Tee)
 	nodes := make([]*nodeRuntime, 0, len(ll.nodes))
 	for _, nr := range ll.nodes {
 		nodes = append(nodes, nr)
@@ -613,6 +681,9 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	}
 	for _, dc := range dcs {
 		dc.Close()
+	}
+	for _, t := range tees {
+		t.Close()
 	}
 	for _, b := range tbs {
 		_ = b.close()

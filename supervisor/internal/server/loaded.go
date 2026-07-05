@@ -10,6 +10,7 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/slowtee"
 	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
@@ -49,6 +50,13 @@ type loadedLab struct {
 	// classifier, e.g. the non-root dev box) simply yields no directional data.
 	// Guarded by mu (Linux only; the classifier is a no-op stub off Linux).
 	dirstats map[int]*dirstat.Classifier
+	// slowtees holds the userspace LACP slow-protocols tee for each p2p fabric
+	// link (one per link id, switch<->switch only), opened at attach and closed
+	// at detach/teardown. A nil entry means the link has no tee (segment/NAT/
+	// VPCS endpoint, a bind failure, or a non-Linux build) and simply carries no
+	// LACP passthrough — every other protocol is unaffected. Guarded by mu
+	// (Linux only; the tee is a no-op stub off Linux).
+	slowtees map[int]*slowtee.Tee
 }
 
 // nodeRuntime is the runtime state of a single node.
@@ -92,6 +100,7 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		fabricLinks: make(map[int]bool),
 		bcaps:       make(map[int]*bcap.Capture),
 		dirstats:    make(map[int]*dirstat.Classifier),
+		slowtees:    make(map[int]*slowtee.Tee),
 	}
 }
 
