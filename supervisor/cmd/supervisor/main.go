@@ -39,7 +39,16 @@ func main() {
 	captureBind := flag.String("capture-bind", "127.0.0.1", "host each link's pcapng capture tee listener binds; 0.0.0.0 lets a native Wireshark on the GUI host attach with `wireshark -k -i TCP@<vm-ip>:<capturePort>`")
 	egressMode := flag.String("egress", "auto", "NAT internet-egress capability advertised in hello: auto (detect QEMU slirp signature), slirp (force ICMP-limited: DHCP/TCP only), or routed (force full ICMP/traceroute)")
 	genIourc := flag.Bool("gen-iourc", false, "generate the IOU license file to stdout from this host's hostid+hostname, then exit (used by the runtime firstboot script)")
+	showVersion := flag.Bool("version", false, "print the build version and exit (used by the console banner generator)")
 	flag.Parse()
+
+	// Version-only mode: print the build version and exit without starting the
+	// server. The runtime's console-banner generator (iolbox-issue.sh) reads
+	// this; keep it side-effect-free so it's safe to call on a live appliance.
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	// Keygen-only mode: print ~/.iourc content and exit without starting the
 	// server. The runtime's firstboot-iourc.sh relies on this exact flag.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Regenerate the iolbox pre-login console banner (/etc/issue)
+# Ordered after the network and the supervisor so the first render already has
+# an IP and a real service state; the timer re-runs it regardless, so an early
+# miss (DHCP not up yet) self-corrects within one interval.
+After=network-online.target iolbox-supervisor.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/iolbox/iolbox-issue.sh

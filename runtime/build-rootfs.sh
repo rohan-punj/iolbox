@@ -275,6 +275,10 @@ install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolbox/vpcs"
 # fallback init script) + the ExecStartPre stale-state sweep.
 install -m 0755 -o root -g root "$SCRIPT_DIR/files/firstboot-iourc.sh" "$ROOTFS_DIR/opt/iolbox/firstboot-iourc.sh"
 install -m 0755 -o root -g root "$SCRIPT_DIR/files/prestart-clean.sh" "$ROOTFS_DIR/opt/iolbox/prestart-clean.sh"
+# Console banner generator: rewrites /etc/issue with the IOLBOX wordmark +
+# Web GUI URL + supervisor state so the pre-login VM console tells the user
+# where to browse. Driven by iolbox-issue.timer (Stage 5).
+install -m 0755 -o root -g root "$SCRIPT_DIR/files/console/iolbox-issue.sh" "$ROOTFS_DIR/opt/iolbox/iolbox-issue.sh"
 
 # ---------------------------------------------------------------------------
 # Stage 5: systemd units + non-systemd fallback
@@ -286,6 +290,10 @@ install -m 0644 "$SCRIPT_DIR/files/iolbox-supervisor.service" \
     "$ROOTFS_DIR/etc/systemd/system/iolbox-supervisor.service"
 install -m 0644 "$SCRIPT_DIR/files/iolbox-firstboot-iourc.service" \
     "$ROOTFS_DIR/etc/systemd/system/iolbox-firstboot-iourc.service"
+install -m 0644 "$SCRIPT_DIR/files/console/iolbox-issue.service" \
+    "$ROOTFS_DIR/etc/systemd/system/iolbox-issue.service"
+install -m 0644 "$SCRIPT_DIR/files/console/iolbox-issue.timer" \
+    "$ROOTFS_DIR/etc/systemd/system/iolbox-issue.timer"
 
 # Enable both units the "offline" way (symlink into multi-user.target.wants)
 # rather than `systemctl enable` inside a chroot, which needs a running
@@ -298,6 +306,11 @@ ln -sf ../iolbox-supervisor.service \
     "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-supervisor.service"
 ln -sf ../iolbox-firstboot-iourc.service \
     "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-firstboot-iourc.service"
+# The console-banner refresh is timer-driven (WantedBy=timers.target); enable
+# the timer the same offline way. The .service it triggers needs no enable.
+install -d -m 0755 "$ROOTFS_DIR/etc/systemd/system/timers.target.wants"
+ln -sf ../iolbox-issue.timer \
+    "$ROOTFS_DIR/etc/systemd/system/timers.target.wants/iolbox-issue.timer"
 
 # Non-systemd fallback (see files/iolbox-init.sh's header comment for when
 # this path is actually used — qemu-compat initrd boots, mainly).

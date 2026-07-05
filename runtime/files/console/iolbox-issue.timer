@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the iolbox console banner (keeps the IP + service state live)
+
+[Timer]
+# First render shortly after boot, then every 20s so the banner tracks a late
+# DHCP lease and the supervisor going active/failed without anyone logging in.
+OnBootSec=5s
+OnUnitActiveSec=20s
+AccuracySec=2s
+
+[Install]
+WantedBy=timers.target
