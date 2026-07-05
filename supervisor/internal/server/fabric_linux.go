@@ -18,6 +18,15 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
+// tapDeviceExists reports whether the named tap netdev currently exists, via a
+// cheap sysfs stat (no privileged call). startFabric uses it to skip the
+// `sudo ip` EnsureTap cost for taps that are already up, while still recreating
+// any whose device has gone missing under a lingering bookkeeping entry.
+func tapDeviceExists(name string) bool {
+	_, err := os.Stat("/sys/class/net/" + name)
+	return err == nil
+}
+
 // startFabric realises the static-tap fabric for the current plan, BEFORE any
 // IOL spawns: it pre-creates every fabric-eligible IOL interface's tap
 // (persistent, owned by this uid, unbridged) and starts a netio<->tap iouyap for
@@ -40,19 +49,30 @@ func (s *Server) startFabric(ll *loadedLab) error {
 
 	for _, m := range ll.staticTaps {
 		for _, t := range m {
-			// startFabric runs on EVERY node.start (via startNodes), but the
-			// static-tap set spans the whole lab. Once a tap's bridge+pump exist,
-			// its device was already created and brought up — re-running EnsureTap
-			// (two `sudo ip` calls apiece) for every tap of every node on each
-			// start is pure waste that grows O(taps) per start and made later node
-			// starts visibly slow (a 6-switch lab = ~100 taps = ~200 redundant
-			// sudo calls, ~2s, per start). Skip anything already realised; only
-			// ensure+open taps we have not brought up yet.
+			// startFabric runs on EVERY node.start (via startNodes) over the
+			// WHOLE-lab static-tap set. Skip only taps that are FULLY realised —
+			// the DEVICE is present AND its pump is running — so a repeat start
+			// issues no redundant `sudo ip` (re-running EnsureTap for every tap of
+			// every node made later starts slow: ~100 taps => ~200 sudo, ~2s).
+			//
+			// Gate on the actual device existing, NOT just the tapBridge map: a
+			// device can be torn out from under a lingering map entry by a
+			// mid-session reshape/cleanup, and trusting the map alone left the
+			// device un-recreated so a later fabric attach failed outright
+			// ("Cannot find device iolN_M"). If either the device or the pump is
+			// missing, rebuild both — closing any stale pump first (its fd points
+			// at the now-gone device) so the fresh device gets a live pump.
 			ll.mu.Lock()
-			_, exists := ll.tapBridges[t.netioPath]
+			lb, hasPump := ll.tapBridges[t.netioPath]
 			ll.mu.Unlock()
-			if exists {
+			if hasPump && tapDeviceExists(t.tapName) {
 				continue
+			}
+			if hasPump {
+				_ = lb.close()
+				ll.mu.Lock()
+				delete(ll.tapBridges, t.netioPath)
+				ll.mu.Unlock()
 			}
 			if err := mgr.EnsureTap(ctx, t.tapName, uid); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tap %s: %v", t.tapName, err)
