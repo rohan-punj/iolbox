@@ -40,3 +40,7 @@ Thumbs.db
 # index.html at build time via "npm run build:embed" -- never commit the bundle)
 /supervisor/internal/web/dist/*
 !/supervisor/internal/web/dist/index.html
+
+# Launcher binaries (extensionless default-named build outputs; *.exe covers the .exe)
+/tools/iolab-launcher/iolab-launcher
+/tools/iolab-launcher/iolbox-launcher
