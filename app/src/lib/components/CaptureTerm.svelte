@@ -74,15 +74,13 @@
   /** One-shot idle hint. Honest: printed only while genuinely idle (no packets
    *  yet) and only once — the transport keeps retrying in the background, so
    *  the tab is never a tombstone; packets simply start appearing when the
-   *  capture comes up. */
+   *  capture comes up. Every link is on the static-tap Linux-bridge fabric, so
+   *  capture attaches live with no node restart — nothing else to explain. */
   function writeHint() {
     if (hintShown || sawData) return;
     hintShown = true;
     term?.write(
-      `${DIM}Waiting for packets on this link…${RESET}\r\n\r\n` +
-        `${DIM}This view reconnects automatically. An IOL-to-IOL link that was\r\n` +
-        `started without capture only carries capture traffic after its nodes\r\n` +
-        `restart (IOL reads its wiring once at boot).${RESET}\r\n\r\n`
+      `${DIM}Waiting for packets on this link…${RESET}\r\n\r\n`
     );
   }
 
