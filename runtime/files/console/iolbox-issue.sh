@@ -60,8 +60,8 @@ BANNER
     printf '   Service : iolbox-supervisor is %s\n' "$STATE"
     printf '   Host    : %s\n' "$HOST"
     echo   '   ----------------------------------------------------'
-    echo   '   Console login: root / iolbox   (no SSH — console only)'
-    echo   '   The GUI has no password of its own — keep it on a'
+    echo   '   Console login: root / iolbox   (no SSH - console only)'
+    echo   '   The GUI has no password of its own - keep it on a'
     echo   '   network you trust.'
     echo
 } > "$tmp"
