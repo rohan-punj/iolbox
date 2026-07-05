@@ -1,4 +1,4 @@
-// Unit tests for the v2 stream colorizer (see app/src/lib/consoleColorizer.ts).
+// Unit tests for the console colorizer (see app/src/lib/consoleColorizer.ts).
 // Run with plain node (>= 22.6, type stripping): from app/:
 //   node --test tests/consoleColorizer.test.ts
 // Deliberately outside src/ so svelte-check's tsconfig (no
@@ -7,11 +7,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ConsoleColorizer, colorizeLine } from "../src/lib/consoleColorizer.ts";
 
+// SecureCRT "Cisco Words" truecolor SGR the ported rule set emits.
+const CYAN = "\x1b[38;2;0;255;255m"; // prompts ending in '#', interfaces
+const AQUA = "\x1b[38;2;127;255;212m"; // user-exec prompts ending in '>'
+const R39 = "\x1b[39m"; // reset foreground only (SecureCRT rules use [39m, not [0m)
 const ESC = "\x1b[";
-const RESET = "\x1b[0m";
-const CYAN_BOLD = `${ESC}1;36m`;
-const GREEN = `${ESC}32m`;
-const RED = `${ESC}31m`;
+// Any 24-bit foreground colour (a rule fired on the span).
+const TRUECOLOR = /\x1b\[38;2;\d+;\d+;\d+m/;
+const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 /** Collects sink output; helpers to wait for the flush window. */
 function harness(flushMs = 5) {
@@ -25,71 +28,61 @@ function harness(flushMs = 5) {
   };
 }
 
-// ---- colorizeLine (pure) ----
+// ---- colorizeLine (pure, SecureCRT rule set) ----
 
-test("colorizeLine: up green, down red, IPs blue", () => {
-  const line = "Ethernet0/0  10.0.0.1  YES NVRAM  up  up";
-  const got = colorizeLine(line);
-  assert.ok(got.includes(`${GREEN}up${RESET}`), "up must be green");
-  assert.ok(got.includes(`${ESC}38;5;75m10.0.0.1${RESET}`), "IP must be blue");
+test("colorizeLine: privileged prompt '#' is cyan, whole prompt only", () => {
+  assert.equal(colorizeLine("R1#"), `${CYAN}R1#${R39}`);
+  assert.equal(colorizeLine("SW1(config-if)#"), `${CYAN}SW1(config-if)#${R39}`);
 });
 
-test("colorizeLine: administratively down is ONE red phrase", () => {
-  const got = colorizeLine("Ethernet0/1  unassigned  YES unset  administratively down down");
-  assert.ok(got.includes(`${RED}administratively down${RESET}`));
+test("colorizeLine: user-exec prompt '>' is aquamarine", () => {
+  assert.equal(colorizeLine("R1>"), `${AQUA}R1>${R39}`);
+});
+
+test("colorizeLine: prompt PREFIX only — command text after #/> keeps its own rules", () => {
+  // SecureCRT's `^\w[^>]*#` claims only up to the prompt '#', so the command echo
+  // is not swept into the prompt colour.
+  const got = colorizeLine("R1#do sh run");
+  assert.ok(got.startsWith(`${CYAN}R1#${R39}`), "prompt prefix cyan");
+  assert.equal(strip(got), "R1#do sh run", "content preserved");
+});
+
+test("colorizeLine: interface names get colour", () => {
+  const got = colorizeLine("Ethernet0/0 is up, line protocol is up");
+  assert.match(got, TRUECOLOR, "an interface/keyword span is coloured");
+  assert.equal(strip(got), "Ethernet0/0 is up, line protocol is up");
+});
+
+test("colorizeLine: IPv4 address gets colour", () => {
+  const got = colorizeLine("  Internet address is 10.0.0.1/24");
+  assert.match(got, TRUECOLOR);
+  assert.equal(strip(got), "  Internet address is 10.0.0.1/24");
+});
+
+test("colorizeLine: content is always preserved modulo SGR", () => {
+  const line = "Ethernet0/1  unassigned  YES unset  administratively down  down";
+  assert.equal(strip(colorizeLine(line)), line);
 });
 
 test("colorizeLine: ESC-bearing lines untouched", () => {
-  const line = `already ${ESC}31mred${RESET} here up down`;
+  const line = `already ${ESC}31mred${ESC}0m here up down`;
   assert.equal(colorizeLine(line), line);
 });
 
-test("colorizeLine: prompt PREFIX only is cyan, command/body stays plain (bug1)", () => {
-  // Root cause of the "show run body renders cyan" bug: PROMPT_RE was unanchored,
-  // so a whole line beginning with a prompt token went cyan — including command
-  // echo AND config-body text that merged onto a held prompt tail. Fix colors
-  // only the prompt prefix.
-  assert.equal(colorizeLine("R1#do sh run"), `${CYAN_BOLD}R1#${RESET}do sh run`);
-  // A synthetic merged line as produced when a held prompt tail ("…\r\nR1#")
-  // meets the first config-body fragment in the next chunk (real IOL framing):
-  assert.equal(colorizeLine("R1#version 17.18"), `${CYAN_BOLD}R1#${RESET}version 17.18`);
-  // Bare prompt still fully cyan.
-  assert.equal(colorizeLine("R1(config)#"), `${CYAN_BOLD}R1(config)#${RESET}`);
-  // Rest-of-line still gets its own rules (IP tinted) — no double-cyan.
-  const got = colorizeLine("R1#show ip route 10.0.0.1");
-  assert.ok(got.startsWith(`${CYAN_BOLD}R1#${RESET}`), "prompt prefix cyan");
-  assert.ok(got.includes(`${ESC}38;5;75m10.0.0.1${RESET}`), "IP in command still blue");
-  assert.ok(!got.slice(`${CYAN_BOLD}R1#${RESET}`.length).includes(CYAN_BOLD), "no cyan after prompt");
+test("colorizeLine: empty and no-match lines returned unchanged", () => {
+  assert.equal(colorizeLine(""), "");
+  assert.equal(colorizeLine("     "), "     "); // whitespace: no rule claims it
 });
 
-test("bug1 regression: held prompt tail merging with bulk config body — body NOT cyan", async () => {
-  // Reproduces the exact wire behavior traced against IOL 17.18.02: the prompt
-  // arrives as an unterminated tail and is HELD; a fast config dump follows in
-  // the next chunk, merging "R1#" onto the first body line. Body lines must NOT
-  // be cyan (only the prompt token may be).
-  const h = harness();
-  h.c.push("\r\nR1#"); // prompt tail — held for the flush window
-  // config dump arrives before the window elapses (bulk output), merging on:
-  h.c.push("version 17.18\r\n!\r\nservice timestamps debug\r\nhostname R1\r\nboot-start-marker\r\n");
-  const got = h.text();
-  // The merged first line: prompt cyan, "version 17.18" plain.
-  assert.ok(got.includes(`${CYAN_BOLD}R1#${RESET}version 17.18`), "prompt-only cyan on merged line");
-  // No config-body line is wholesale cyan.
-  for (const body of ["version 17.18", "service timestamps debug", "hostname R1", "boot-start-marker"]) {
-    assert.ok(!got.includes(`${CYAN_BOLD}${body}`), `"${body}" must not be cyan-wrapped`);
-  }
-  await h.settle();
-});
+// ---- streaming transformer (unchanged machinery) ----
 
-// ---- streaming transformer ----
-
-test("bulk multi-line chunk: every complete line colorized", () => {
+test("bulk multi-line chunk: every complete line colorized, terminators exact", () => {
   const h = harness();
-  h.c.push("Ethernet0/0  10.0.0.1  YES NVRAM  up  up\r\nEthernet0/1  unassigned  YES unset  administratively down down\r\n");
+  h.c.push("Ethernet0/0 is up\r\nEthernet0/1 is administratively down\r\n");
   const got = h.text();
-  assert.ok(got.includes(`${GREEN}up${RESET}`), "green up");
-  assert.ok(got.includes(`${RED}administratively down${RESET}`), "red admin-down");
+  assert.match(got, TRUECOLOR, "lines colorized");
   assert.ok(got.endsWith("\r\n"), "terminators preserved exactly");
+  assert.equal(strip(got), "Ethernet0/0 is up\r\nEthernet0/1 is administratively down\r\n");
 });
 
 test("typed echo byte-by-byte: instant, raw, synchronous", () => {
@@ -102,33 +95,33 @@ test("typed echo byte-by-byte: instant, raw, synchronous", () => {
   }
 });
 
-test("NEW: line split across chunks (body + terminator) still colorized", async () => {
+test("line split across chunks (body + terminator) still colorized", async () => {
   const h = harness();
-  h.c.push("Ethernet0/0  10.0.0.1  YES NVRAM  up  up"); // no terminator: held
+  h.c.push("Ethernet0/0 is up"); // no terminator: held
   h.c.push("\r\n"); // terminator lands in the NEXT chunk
   const got = h.text();
-  assert.ok(got.includes(`${GREEN}up${RESET}`), "split line must still color");
+  assert.match(got, TRUECOLOR, "split line must still color");
   assert.ok(got.endsWith("\r\n"));
-  await h.settle(); // nothing further may arrive
+  await h.settle();
   assert.equal(h.text(), got);
 });
 
-test("NEW: mid-word splits (real IOL framing) reassemble and colorize", () => {
+test("mid-word splits (real IOL framing) reassemble and colorize", () => {
   const h = harness();
-  // Mirrors observed frames: "...Ethernet0/2            " | "u" | "nassigned ... down\r\n"
+  // Mirrors observed frames: "...Ethernet0/2            " | "u" | "nassigned ...\r\n"
   h.c.push("Ethernet0/2            ");
   h.c.push("u");
   h.c.push("nassigned      YES unset  administratively down down    \r\n");
   const got = h.text();
-  assert.ok(got.includes(`${RED}administratively down${RESET}`));
+  assert.match(got, TRUECOLOR);
   assert.equal(
-    got.replace(/\x1b\[[0-9;]*m/g, ""),
+    strip(got),
     "Ethernet0/2            unassigned      YES unset  administratively down down    \r\n",
     "byte content identical modulo SGR"
   );
 });
 
-test("held tail flushes raw after the window (no color for non-prompts)", async () => {
+test("held non-prompt tail flushes raw after the window", async () => {
   const h = harness();
   h.c.push("partial line without termina");
   assert.equal(h.text(), "", "tail held during the window");
@@ -140,14 +133,14 @@ test("prompt tail is colorized on flush", async () => {
   const h = harness();
   h.c.push("\r\nR1>"); // exactly how the prompt arrives on the wire
   await h.settle();
-  assert.equal(h.text(), `\r\n${CYAN_BOLD}R1>${RESET}`);
+  assert.equal(h.text(), `\r\n${AQUA}R1>${R39}`);
 });
 
 test("config-mode prompt tail colorized; prompt+typed-echo tail is NOT", async () => {
   const h = harness();
   h.c.push("SW1(config-if)#");
   await h.settle();
-  assert.equal(h.text(), `${CYAN_BOLD}SW1(config-if)#${RESET}`);
+  assert.equal(h.text(), `${CYAN}SW1(config-if)#${R39}`);
 
   const h2 = harness();
   h2.c.push("R1#show ru"); // tail already carries typed text
@@ -155,13 +148,32 @@ test("config-mode prompt tail colorized; prompt+typed-echo tail is NOT", async (
   assert.equal(h2.text(), "R1#show ru", "not wholesale-colored");
 });
 
+test("bug1 regression: held prompt tail merging with bulk body — body NOT swept into prompt colour", async () => {
+  const h = harness();
+  h.c.push("\r\nR1#"); // prompt tail — held for the flush window
+  h.c.push("version 17.18\r\n!\r\nservice timestamps debug\r\nhostname R1\r\n");
+  const got = h.text();
+  // Merged first line: the prompt colour is RESET right after "R1#" (SecureCRT's
+  // `^\w[^>]*#` claims only the prompt), so body keywords get their own colours
+  // instead of being swept into the prompt cyan — the original "whole body cyan"
+  // bug. ("version" here is separately tinted by the version rule, not cyan.)
+  assert.ok(got.includes(`${CYAN}R1#${R39}`), "prompt cyan reset before the body");
+  assert.ok(!got.includes(`${CYAN}R1#${R39}version 17.18${R39}`), "body not inside the prompt span");
+  assert.equal(
+    strip(got),
+    "\r\nR1#version 17.18\r\n!\r\nservice timestamps debug\r\nhostname R1\r\n",
+    "content preserved"
+  );
+  await h.settle();
+});
+
 test("dirty line is never recolored, terminator preserved", async () => {
   const h = harness();
   for (const ch of "up down 10.0.0.1") h.c.push(ch); // echo path → all raw
-  h.c.push("\r\nnext up\r\n"); // terminator for the dirty line + a fresh line
+  h.c.push("\r\nEthernet0/0 is up\r\n"); // terminator for the dirty line + a fresh line
   const got = h.text();
   assert.ok(got.startsWith("up down 10.0.0.1\r\n"), "dirty line stays raw");
-  assert.ok(got.includes(`next ${GREEN}up${RESET}`), "following fresh line colorized");
+  assert.match(got.slice("up down 10.0.0.1\r\n".length), TRUECOLOR, "following fresh line colorized");
 });
 
 test("ESC in tail is never held (emitted immediately, raw)", () => {
@@ -177,7 +189,7 @@ test("reset drops held bytes (reconnect semantics)", async () => {
   await h.settle();
   assert.equal(h.text(), "", "held bytes dropped by reset");
   h.c.push("R1#\r\n"); // fresh stream colorizes normally
-  assert.ok(h.text().includes(CYAN_BOLD));
+  assert.match(h.text(), TRUECOLOR);
 });
 
 test("flushHeld emits held bytes on demand (colorize-toggle-off path)", () => {
@@ -196,7 +208,6 @@ test("equivalence: same text bulk vs split renders identical modulo SGR", async 
   const split = harness();
   for (let i = 0; i < text.length; i += 7) split.c.push(text.slice(i, i + 7));
   await split.settle();
-  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
   assert.equal(strip(bulk.text()), text);
   assert.equal(strip(split.text()), text);
 });
