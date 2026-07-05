@@ -42,11 +42,29 @@ See [PLAN.md](PLAN.md) and [docs/](docs/) for the full design.
 - One-file JSON labs — diffable, shareable
 - Automatic iourc licensing inside the runtime
 
+## Install
+
+Grab the artifact for your platform from the [latest release](../../releases/latest)
+and follow **[docs/INSTALL.md](docs/INSTALL.md)** — step-by-step setup for all six
+targets:
+
+| Situation | Artifact |
+|---|---|
+| Windows desktop, simplest path | `iolbox-disk-*.qcow2` + the `iolbox-launcher.exe` bundle |
+| VMware Workstation / ESXi / VirtualBox | `iolbox-appliance-*.ova` (or the `.vmdk`+`.vmx`) |
+| WSL2 box | `iolbox-rootfs.tar` |
+| Proxmox homelab | `iolbox-ct-*.tar.zst` |
+| Existing Linux server | `iolbox-server-*.tar.gz` |
+
+The GUI comes up at `http://<host>:4001` (no login — keep it on localhost or a
+trusted network). **You supply your own IOL images.**
+
 ## Status
 
-**Scaffold complete — pre-P0.** All components build and verify in isolation; the
-end-to-end run against a real IOL image ([P0 spike](docs/p0-spike.md)) is the next
-milestone. Not yet released.
+**v0.4.0 — validated end-to-end on real IOL 17.18.02.** Full stack works through
+the real supervisor (register → load → start → console → native wiring → capture)
+across every runtime provider; the six release artifacts are built and smoke-tested.
+See [docs/INSTALL.md](docs/INSTALL.md) to get started.
 
 | Component | State |
 |---|---|
@@ -54,7 +72,7 @@ milestone. Not yet released.
 | Runtime (rootfs + WSL/VMware appliance) | ✅ build scripts authored, `bash -n` clean |
 | Capture helper (Wireshark bridge) | ✅ builds windows/amd64 |
 | GUI (Tauri + Svelte Flow) | ✅ frontend verified interactive (mock backend); native compile in CI |
-| P0 end-to-end (real IOL) | ⏳ needs a user-supplied image |
+| End-to-end (real IOL 17.18.02) | ✅ validated across VMware/WSL/LXC/native/QEMU; v0.4.0 artifacts smoke-tested |
 
 See [PLAN.md](PLAN.md) for the roadmap and [docs/p0-spike.md](docs/p0-spike.md) for
 the exact next steps.
