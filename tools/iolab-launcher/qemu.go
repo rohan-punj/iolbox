@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -152,12 +151,14 @@ func (q *qemuBackend) run(ctx context.Context) error {
 	cmd := exec.Command(q.qemuExe, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	// CREATE_NEW_PROCESS_GROUP: detach qemu from console Ctrl-C delivery
-	// (Windows disables CTRL_C_EVENT for processes started in a new group).
-	// Without this, the user's Ctrl-C kills qemu directly and abruptly —
-	// bypassing the graceful QMP system_powerdown path below and leaving the
-	// guest fs to journal-recover on next boot.
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
+	// detachFromConsoleCtrlC (qemu_windows.go / qemu_other.go): Windows needs
+	// CREATE_NEW_PROCESS_GROUP so the user's Ctrl-C doesn't kill qemu directly
+	// and abruptly — bypassing the graceful QMP system_powerdown path below
+	// and leaving the guest fs to journal-recover on next boot. Split into a
+	// GOOS-gated file (rather than an inline syscall.SysProcAttr literal,
+	// which is Windows-only) so `GOOS=linux go build` keeps working for CI
+	// even though qemu-on-Linux isn't a supported deployment target.
+	detachFromConsoleCtrlC(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start qemu: %w", err)
 	}
