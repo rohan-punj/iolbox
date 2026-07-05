@@ -38,8 +38,6 @@
       source?: EndpointInfo;
       target?: EndpointInfo;
       capture?: boolean;
-      parallelIndex?: number;
-      parallelCount?: number;
     } | undefined) ?? {}
   );
 
@@ -141,11 +139,35 @@
   // by fanSign * ENDPOINT_SPACING, clamped to the node radius so anchors stay on
   // the node face. This makes parallel cables arrive visibly separated.
   const ENDPOINT_SPACING = 10;
+  // Parallel-link grouping derived LIVE from the lab doc rather than the edge's
+  // `data.parallelIndex/Count`. xyflow does not reliably push updated `data` into
+  // an ALREADY-MOUNTED edge component when a *sibling* parallel link is added, so
+  // the pre-existing link kept parallelCount=1 and both cables collapsed onto one
+  // path (the second appeared to "hide" the first). Reading labStore.lab.links
+  // here makes every parallel edge recompute its fan slot whenever the link set
+  // changes — independent of xyflow's data propagation. The pair key sorts the
+  // two node ids so A↔B and B↔A share a group; group order matches doc order, so
+  // each sibling gets a stable, distinct slot.
+  const parallel = $derived.by(() => {
+    const links = labStore.lab.links;
+    const linkId = info.linkId;
+    if (linkId === undefined) return { index: 0, count: 1 };
+    const pairKey = (l: (typeof links)[number]) => {
+      const a = l.endpoints[0]?.node ?? 0;
+      const b = l.endpoints[1]?.node ?? 0;
+      return a < b ? `${a}-${b}` : `${b}-${a}`;
+    };
+    const me = links.find((l) => l.id === linkId);
+    if (!me) return { index: 0, count: 1 };
+    const key = pairKey(me);
+    const group = links.filter((l) => pairKey(l) === key);
+    const index = group.findIndex((l) => l.id === linkId);
+    return { index: index < 0 ? 0 : index, count: group.length };
+  });
   const parallelSign = $derived.by(() => {
-    const idx = info.parallelIndex ?? 0;
-    const count = info.parallelCount ?? 1;
+    const { index, count } = parallel;
     if (count <= 1) return 0;
-    return idx - (count - 1) / 2;
+    return index - (count - 1) / 2;
   });
   const parallelOffset = $derived(parallelSign * PARALLEL_SPACING);
 
@@ -212,9 +234,9 @@
     // on-curve placement separates them for free. A tiny per-index t-shift keeps
     // chips of adjacent parallels from landing at the same distance-along, so
     // they don't collide where curves happen to cross near the node.
-    const count = info.parallelCount ?? 1;
+    const count = parallel.count;
     const single = count <= 1;
-    const idx = info.parallelIndex ?? 0;
+    const idx = parallel.index;
     // Base chip t at 0.22 / 0.78; nudge by a small signed per-index amount.
     const tShift = single ? 0 : (idx - (count - 1) / 2) * 0.03;
     const su = 0.22 + tShift;
