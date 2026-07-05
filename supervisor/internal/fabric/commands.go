@@ -60,6 +60,21 @@ func detachCmds(tap string) [][]string {
 	}
 }
 
+// sudoArgv chooses how to exec a privileged argv given the caller's effective
+// uid: root (euid 0, the supervisor's normal systemd identity) needs no sudo
+// at all — `sudo -n ip ...` still costs a fork+exec of sudo plus its PAM/policy
+// checks (~9ms measured vs ~2ms bare on the real OVA) for a command that's
+// already privileged. Non-root callers (e.g. the builder's `iolab` smoke user,
+// which relies on NOPASSWD sudo) keep the `sudo -n` prefix. Pure data/no I/O so
+// it's unit-testable without a process exec on any OS.
+func sudoArgv(euid int, argv []string) (name string, args []string) {
+	if euid == 0 {
+		return argv[0], argv[1:]
+	}
+	full := append([]string{"-n"}, argv...)
+	return "sudo", full
+}
+
 // TapName returns the tap device name for a node instance's flat port index
 // (netmap's adapter*16+port), e.g. "iol3_17". It errors if the resulting name
 // would exceed the Linux IFNAMSIZ limit (15 usable bytes).

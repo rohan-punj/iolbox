@@ -77,6 +77,32 @@ func TestNatBridgeDetachMirrorsAttach(t *testing.T) {
 	}
 }
 
+// TestSudoArgv pins the euid-branch: root execs the argv directly (no sudo
+// fork+exec overhead), any non-root euid keeps the `sudo -n` wrapper the
+// builder's NOPASSWD-sudo smoke user relies on. Mirrors fabric's TestSudoArgv.
+func TestSudoArgv(t *testing.T) {
+	argv := []string{"ip", "tuntap", "add", "dev", "iolnat9", "mode", "tap", "user", "iolbox"}
+
+	name, args := sudoArgv(0, argv)
+	if name != "ip" {
+		t.Fatalf("root: name = %q, want %q", name, "ip")
+	}
+	if strings.Join(args, " ") != "tuntap add dev iolnat9 mode tap user iolbox" {
+		t.Fatalf("root: args = %q", args)
+	}
+
+	for _, euid := range []int{1, 1000, 65534} {
+		name, args = sudoArgv(euid, argv)
+		if name != "sudo" {
+			t.Fatalf("euid %d: name = %q, want %q", euid, name, "sudo")
+		}
+		want := "-n ip tuntap add dev iolnat9 mode tap user iolbox"
+		if strings.Join(args, " ") != want {
+			t.Fatalf("euid %d: args = %q, want %q", euid, strings.Join(args, " "), want)
+		}
+	}
+}
+
 // TestDevName pins the device names (bounded by IFNAMSIZ) per kind.
 func TestDevName(t *testing.T) {
 	if n, _ := devName(KindNAT, 3); n != "iolnat3" {

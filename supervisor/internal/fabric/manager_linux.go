@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -75,12 +76,12 @@ func (m *Manager) Detach(ctx context.Context, tap string) error {
 	return m.runIdempotent(ctx, opDetach, detachCmds(tap))
 }
 
-// runIdempotent runs each argv in cmds via `sudo -n`, capturing combined
-// output. A failure on the first command of a create/delete pair is tolerated
-// when isBenign classifies its output as an idempotent no-op (device already
-// exists / already gone); the remaining commands still run so e.g. `up` is
-// applied even when create found the device already there. Any other failure
-// aborts and is returned.
+// runIdempotent runs each argv in cmds (via runOne — bare if we're already
+// root, else `sudo -n`), capturing combined output. A failure on the first
+// command of a create/delete pair is tolerated when isBenign classifies its
+// output as an idempotent no-op (device already exists / already gone); the
+// remaining commands still run so e.g. `up` is applied even when create found
+// the device already there. Any other failure aborts and is returned.
 func (m *Manager) runIdempotent(ctx context.Context, o op, cmds [][]string) error {
 	for i, argv := range cmds {
 		out, err := runOne(ctx, argv)
@@ -88,21 +89,24 @@ func (m *Manager) runIdempotent(ctx context.Context, o op, cmds [][]string) erro
 			if i == 0 && isBenign(o, strings.ToLower(out)) {
 				continue
 			}
-			return fmt.Errorf("fabric: `sudo -n %s` failed: %v: %s",
+			return fmt.Errorf("fabric: `%s` failed: %v: %s",
 				strings.Join(argv, " "), err, strings.TrimSpace(out))
 		}
 	}
 	return nil
 }
 
-// runOne executes one argv as `sudo -n <argv...>` under cmdTimeout, returning
-// its combined stdout+stderr.
+// runOne executes one argv under cmdTimeout, returning its combined
+// stdout+stderr. When the supervisor is already running as root (its normal
+// systemd identity), the argv runs directly with no `sudo` wrapper — see
+// sudoArgv. Non-root callers (builder smokes as the `iolab` NOPASSWD-sudo
+// user) keep the `sudo -n` prefix.
 func runOne(ctx context.Context, argv []string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
-	full := append([]string{"-n"}, argv...)
+	name, args := sudoArgv(os.Geteuid(), argv)
 	out := &bytes.Buffer{}
-	cmd := exec.CommandContext(cctx, "sudo", full...)
+	cmd := exec.CommandContext(cctx, name, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	err := cmd.Run()

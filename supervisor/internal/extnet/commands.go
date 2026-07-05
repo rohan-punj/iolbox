@@ -115,6 +115,22 @@ func delRule(add []string) []string {
 	return out
 }
 
+// sudoArgv chooses how to exec a privileged argv given the caller's effective
+// uid: root (euid 0, the supervisor's normal systemd identity) needs no sudo
+// at all — `sudo -n` still costs a fork+exec of sudo plus its PAM/policy checks
+// for a command that's already privileged. Non-root callers (e.g. the
+// builder's `iolab` smoke user, which relies on NOPASSWD sudo) keep the
+// `sudo -n` prefix. Pure data/no I/O so it's unit-testable on any OS. Mirrors
+// fabric.sudoArgv (kept as an unexported duplicate rather than a new shared
+// dependency between the two leaf packages).
+func sudoArgv(euid int, argv []string) (name string, args []string) {
+	if euid == 0 {
+		return argv[0], argv[1:]
+	}
+	full := append([]string{"-n"}, argv...)
+	return "sudo", full
+}
+
 // devName returns the tap device name for a node of the given kind.
 func devName(kind Kind, nodeID int) (string, error) {
 	switch kind {

@@ -23,14 +23,23 @@ import (
 // It is idempotent and safe to call before every (re)start; it only (re)writes
 // the shared files, never touching a node's runtime state. Called by startNodes
 // on Linux before spawning any node (after refreshFabric).
-func (s *Server) prepareLabDir(ll *loadedLab) error {
+//
+// ids scopes the two PER-NODE steps — the fabric link-attach loop
+// (startFabric) and the NVRAM injection loop below — to the node ids being
+// started: a per-node restart of an N-node lab no longer re-walks every other
+// node's NVRAM or re-attaches every other fabric link. The NETMAP write and
+// the shared iourc copy stay whole-lab (topology-global, and cheap regardless).
+// Pass nil/empty ids for a whole-lab start (lab.start), which preserves the
+// original process-everything behavior.
+func (s *Server) prepareLabDir(ll *loadedLab, ids []int) error {
 	dir := ll.labDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "lab dir %s: %v", dir, err)
 	}
 
 	// Whole-lab static-tap NETMAP (topology-independent; already computed by
-	// startNodes -> refreshFabric).
+	// startNodes -> refreshFabric). Cheap and topology-global, so this always
+	// runs regardless of ids.
 	netmapPath := filepath.Join(dir, "NETMAP")
 	if err := os.WriteFile(netmapPath, []byte(s.netmapFor(ll)), 0o644); err != nil {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "write NETMAP: %v", err)
@@ -38,8 +47,10 @@ func (s *Server) prepareLabDir(ll *loadedLab) error {
 
 	// Realise the static-tap fabric: pre-create every IOL interface's tap +
 	// netio<->tap iouyap (so its socket exists before IOL connects), and attach
-	// each fabric link's member taps to its bridge. Must run before any IOL spawns.
-	if err := s.startFabric(ll); err != nil {
+	// each fabric link's member taps to its bridge. Must run before any IOL
+	// spawns. The static-tap half stays whole-lab; only the link-attach loop is
+	// scoped to ids (see startFabric).
+	if err := s.startFabric(ll, ids); err != nil {
 		return err
 	}
 
@@ -48,10 +59,20 @@ func (s *Server) prepareLabDir(ll *loadedLab) error {
 		return err
 	}
 
-	// Per-node NVRAM startup-config injection.
+	// Per-node NVRAM startup-config injection, scoped to ids when given (a
+	// specific-node restart has no reason to rewrite every other IOL node's
+	// nvram_<id> file — that file only the node being (re)spawned reads at
+	// this boot).
+	idSet := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
 	for i := range ll.doc.Nodes {
 		n := &ll.doc.Nodes[i]
 		if n.Kind != lab.KindIOL {
+			continue
+		}
+		if len(idSet) > 0 && !idSet[n.ID] {
 			continue
 		}
 		if err := s.injectNVRAM(ll, n); err != nil {

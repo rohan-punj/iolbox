@@ -353,7 +353,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 	// either. It is deterministic and runs on every platform so control-plane
 	// tests see the same NETMAP.
 	s.refreshFabric(ll)
-	if err := s.prepareLabDir(ll); err != nil {
+	if err := s.prepareLabDir(ll, ids); err != nil {
 		return nil, err
 	}
 	// Announce every armed capture (idempotent): the GUI (re)learns each
@@ -721,7 +721,7 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	// tap (both idempotent). An unlinked node whose tap isn't up yet is attached
 	// by startFabric.
 	s.refreshFabric(ll)
-	if err := s.startFabric(ll); err != nil {
+	if err := s.startFabric(ll, nil); err != nil {
 		return nil, err
 	}
 	s.emit(protocol.EventLinkUp, protocol.LinkData{Link: args.Link.ID})

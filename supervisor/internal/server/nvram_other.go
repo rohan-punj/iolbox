@@ -6,7 +6,7 @@ package server
 // dir, NETMAP, iourc, or NVRAM files are written. Control-plane tests exercise
 // lab.load/start wiring without touching the filesystem. On Linux the real
 // implementation (nvram_linux.go) writes the whole-lab artifacts before spawn.
-func (s *Server) prepareLabDir(ll *loadedLab) error {
+func (s *Server) prepareLabDir(ll *loadedLab, ids []int) error {
 	return nil
 }
 

@@ -27,6 +27,27 @@ func tapDeviceExists(name string) bool {
 	return err == nil
 }
 
+// tapMasterIs reports whether the named netdev's current bridge master
+// (/sys/class/net/<dev>/master, a symlink to the master device's own sysfs
+// dir) is exactly bridgeName. A cheap sysfs readlink — no privileged call —
+// so fabricLinkFullyAttached can gate the skip decision on the KERNEL's
+// current wiring, not just our bookkeeping. Any error (dev or master link
+// missing, dev unbridged) reads as false: a mismatch, which the caller treats
+// as "must re-attach".
+func tapMasterIs(dev, bridgeName string) bool {
+	target, err := os.Readlink("/sys/class/net/" + dev + "/master")
+	if err != nil {
+		return false
+	}
+	// target looks like "../br-12" (or similar relative path); compare the
+	// final path element only.
+	base := target
+	if i := strings.LastIndexByte(target, '/'); i >= 0 {
+		base = target[i+1:]
+	}
+	return base == bridgeName
+}
+
 // startFabric realises the static-tap fabric for the current plan, BEFORE any
 // IOL spawns: it pre-creates every fabric-eligible IOL interface's tap
 // (persistent, owned by this uid, unbridged) and starts a netio<->tap iouyap for
@@ -35,7 +56,15 @@ func tapDeviceExists(name string) bool {
 // link's member taps to their br-<linkid> bridge. Idempotent across restarts
 // and mid-session link.add: EnsureTap/EnsureBridge tolerate existing objects,
 // and an already-running tap bridge is left as-is. Called by prepareLabDir.
-func (s *Server) startFabric(ll *loadedLab) error {
+//
+// ids scopes the LINK-ATTACH loop (not the static-tap loop, which stays
+// whole-lab — taps are cheap-skipped already and topology-independent): when
+// non-empty (a startNodes for specific node ids), only links that touch one of
+// ids, or that have NEVER been attached, are processed — a per-node restart of
+// an N-node lab no longer re-walks every one of the lab's other links. Pass
+// nil/empty for a whole-lab start (lab.start, link.add) to process every link,
+// the original behavior.
+func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	uid := currentUID()
@@ -96,9 +125,18 @@ func (s *Server) startFabric(ll *loadedLab) error {
 		}
 	}
 
-	// Attach every fabric link's taps to its bridge, and (re)start a bridge
-	// capture for any fabric link that already has an armed capture port (doc
-	// capture.enabled auto-armed at lab start, or a capture that survived a
+	// ids scoping: build a lookup set once so the loop below is O(1) per link
+	// instead of O(len(ids)) per link. Empty/nil ids means "whole lab" (the set
+	// stays empty and idSet[n] is always false, so the `len(idSet) > 0 &&`
+	// guard below short-circuits to "process everything").
+	idSet := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	// Attach every in-scope fabric link's taps to its bridge, and (re)start a
+	// bridge capture for any fabric link that already has an armed capture port
+	// (doc capture.enabled auto-armed at lab start, or a capture that survived a
 	// hot-connect). The bridge exists now, so tcpdump can attach.
 	fabricOK := fabricNodes(ll.doc)
 	for i := range ll.doc.Links {
@@ -106,9 +144,31 @@ func (s *Server) startFabric(ll *loadedLab) error {
 		if !isFabricLink(l, fabricOK) {
 			continue
 		}
-		if err := s.attachFabricLink(ll, l); err != nil {
-			return err
+		// Scoped start: skip a link that touches none of the started ids AND
+		// has already been attached at least once. A link never attached must
+		// still be processed even when out of scope — e.g. a link whose OTHER
+		// endpoint just started for the first time — attachFabricLink itself
+		// safely no-ops on any endpoint that isn't up yet.
+		ll.mu.Lock()
+		everAttached := ll.fabricLinks[l.ID]
+		ll.mu.Unlock()
+		if len(idSet) > 0 && everAttached && !linkTouchesAny(l, idSet) {
+			continue
 		}
+		// Skip the attach itself (and the dirstat reopen it triggers) when the
+		// link is ALREADY fully wired at the kernel level: gate on the actual
+		// devices, not just the bookkeeping map, so a link whose bridge or
+		// tap-membership was torn out from under a lingering map entry still
+		// self-heals via the normal attachFabricLink path below.
+		if !s.fabricLinkFullyAttached(ll, l) {
+			if err := s.attachFabricLink(ll, l); err != nil {
+				return err
+			}
+		}
+		// Always run the armed-capture check, even for a skipped (already
+		// fully-attached) link: a supervisor restart can lose the in-memory
+		// bcap while the bridge device itself persists, so a link that looks
+		// "already attached" can still need its capture restarted.
 		ll.mu.Lock()
 		port, armed := ll.captures[l.ID]
 		_, capturing := ll.bcaps[l.ID]
@@ -120,6 +180,62 @@ func (s *Server) startFabric(ll *loadedLab) error {
 		}
 	}
 	return nil
+}
+
+// linkTouchesAny reports whether l has an endpoint whose node id is in idSet.
+func linkTouchesAny(l *lab.Link, idSet map[int]bool) bool {
+	for _, ep := range l.Endpoints {
+		if idSet[ep.Node] {
+			return true
+		}
+	}
+	return false
+}
+
+// fabricLinkFullyAttached reports whether a fabric link is already completely
+// realised at the KERNEL level, so startFabric can skip the redundant
+// EnsureBridge + per-endpoint Attach (each a `sudo ip` round-trip) and the
+// dirstat reopen that follows a real attach. It requires ALL of:
+//
+//  1. bookkeeping agrees the link was attached (ll.fabricLinks[l.ID]);
+//  2. the link's bridge device exists in the kernel;
+//  3. EVERY endpoint that currently has a tap device is a MEMBER of that
+//     bridge (master symlink matches).
+//
+// An endpoint with no tap device yet (a NAT/VPCS node not yet started) is
+// treated as a MISMATCH — not "vacuously attached" — so the link falls
+// through to attachFabricLink, whose per-endpoint switch already tolerates a
+// not-yet-started NAT/VPCS by skipping it (idempotent; that endpoint gets
+// wired when it starts, via attachFabricForNode). This mirrors the static-tap
+// loop's "gate on the device, not just the map" invariant: never trust
+// bookkeeping alone to skip a privileged step.
+func (s *Server) fabricLinkFullyAttached(ll *loadedLab, l *lab.Link) bool {
+	ll.mu.Lock()
+	attached := ll.fabricLinks[l.ID]
+	ll.mu.Unlock()
+	if !attached {
+		return false
+	}
+	br, err := fabric.BridgeName(l.ID)
+	if err != nil || !tapDeviceExists(br) {
+		return false
+	}
+	devs := s.fabricLinkTapDevs(ll, l)
+	// fabricLinkTapDevs only returns devs for endpoints that currently HAVE a
+	// tap (it silently skips a not-yet-started NAT/VPCS). A link whose
+	// endpoint count exceeds the number of tap devs found has at least one
+	// endpoint with no tap yet — that is a mismatch (fall through so
+	// attachFabricLink wires whatever IS up and leaves the rest to
+	// attachFabricForNode later), not a vacuous "fully attached".
+	if len(devs) < len(l.Endpoints) {
+		return false
+	}
+	for _, dev := range devs {
+		if !tapMasterIs(dev, br) {
+			return false
+		}
+	}
+	return true
 }
 
 // startBridgeCapture starts (or reuses) a tcpdump-on-bridge pcapng capture for a

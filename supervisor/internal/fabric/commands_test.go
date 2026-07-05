@@ -106,6 +106,32 @@ func TestTapName(t *testing.T) {
 	}
 }
 
+// TestSudoArgv pins the euid-branch: root execs the argv directly (no sudo
+// fork+exec overhead), any non-root euid keeps the `sudo -n` wrapper the
+// builder's NOPASSWD-sudo smoke user relies on.
+func TestSudoArgv(t *testing.T) {
+	argv := []string{"ip", "link", "set", "iol3_17", "master", "iolbr12"}
+
+	name, args := sudoArgv(0, argv)
+	if name != "ip" {
+		t.Fatalf("root: name = %q, want %q", name, "ip")
+	}
+	if strings.Join(args, " ") != "link set iol3_17 master iolbr12" {
+		t.Fatalf("root: args = %q", args)
+	}
+
+	for _, euid := range []int{1, 1000, 65534} {
+		name, args = sudoArgv(euid, argv)
+		if name != "sudo" {
+			t.Fatalf("euid %d: name = %q, want %q", euid, name, "sudo")
+		}
+		want := "-n ip link set iol3_17 master iolbr12"
+		if strings.Join(args, " ") != want {
+			t.Fatalf("euid %d: args = %q, want %q", euid, strings.Join(args, " "), want)
+		}
+	}
+}
+
 // TestBridgeName pins the format and the IFNAMSIZ length guard at its
 // boundary. Prefix "iolbr" = 5 fixed chars, leaving 10 bytes for the decimal
 // linkID.
