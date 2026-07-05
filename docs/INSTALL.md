@@ -311,27 +311,28 @@ qemu\
 and `iolbox-disk.qcow2` relative to its own exe path; both are overridable
 for dev via `--qemu`/`--disk`.)
 
-3. Double-click `iolbox-launcher.exe`. It boots the disk under QEMU/TCG
-   (software emulation — no KVM/WHPX needed) and opens your browser to the
-   GUI once it's up.
+3. Double-click `iolbox-launcher.exe`. A console window opens and asks two
+   questions — `vCPUs for the guest [4]:` and `RAM MB for the guest [4096]:`
+   (press Enter twice to accept the defaults; passing `--smp`/`--mem` on the
+   command line skips the questions entirely). It then boots the disk under
+   QEMU/TCG (software emulation — no KVM/WHPX needed) and opens your browser
+   to the GUI once it's up.
 
 ### What comes up
 
-- **Control console:** `http://127.0.0.1:4002` — the launcher's own local
-  HTTP server that owns starting/stopping the backend (source:
-  `tools/iolab-launcher/main.go`, `--console-addr` flag, default
-  `127.0.0.1:4002`).
 - **GUI:** `http://localhost:4001` — forwarded to `127.0.0.1` **only**;
   the launcher's own log output states this explicitly ("the GUI has no
   auth; the launcher forwards it to 127.0.0.1 only").
+- Boot progress, and later a clean Ctrl-C shutdown, live in the launcher's
+  console window.
 
 ### Be patient on first boot
 
 TCG (pure software CPU emulation, no hardware acceleration) is slow — this
 is the documented tradeoff of the zero-prerequisite fallback path (see
 `runtime/qemu-compat.md`). Expect the guest to take **minutes**, not
-seconds, to reach a running supervisor. If the console page shows "waiting
-for GUI", let it sit before assuming something's wrong.
+seconds, to reach a running supervisor. While the launcher window shows
+"still booting", let it sit before assuming something's wrong.
 
 ### Your data survives; the guest OS disk doesn't
 
@@ -384,8 +385,8 @@ per-node port range needs to be pre-reserved (e.g. 9000-9099 consoles,
 `-netdev user` instance.
 
 **It worked if:** the browser opens to `http://localhost:4001` and the
-Palette footer shows `build <version>`; the control console at
-`http://127.0.0.1:4002` reports the backend as running.
+Palette footer shows `build <version>`; the launcher's console window
+reports "GUI is up".
 
 ---
 
@@ -408,8 +409,8 @@ Palette footer shows `build <version>`; the control console at
 
 - **GUI not reachable at `:4001`:**
   - Confirm the supervisor is actually running: `systemctl status
-    iolbox-supervisor` (native/LXC/WSL/appliance) or the control console
-    at `:4002` (launcher/QEMU).
+    iolbox-supervisor` (native/LXC/WSL/appliance), or for the launcher/QEMU
+    path check the launcher's console window for "GUI is up" vs an error.
   - Confirm you're using the right host/IP for the target — a VMware/LXC
     appliance needs its guest IP (`vmrun getGuestIPAddress` /
     `pct exec <vmid> -- ip -4 addr show eth0`), not `localhost`; the
@@ -421,8 +422,8 @@ Palette footer shows `build <version>`; the control console at
     first, not the supervisor.
 - **TCG (QEMU launcher) boot is slow:** this is expected — software CPU
   emulation with no hardware acceleration. Give it a few minutes on first
-  launch rather than assuming it hung; the launcher's control console at
-  `:4002` reflects boot progress.
+  launch rather than assuming it hung; the launcher's console window
+  prints "still booting" progress lines while it waits.
 - **Console / root access (appliance targets):** the OVA, vmdk/vmx, WSL, and
   LXC guests all use the default console login `root` / `iolbox` (fixed and
   deliberately non-secret — `runtime/build-rootfs.sh`). You normally never
