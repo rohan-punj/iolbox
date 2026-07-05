@@ -40,14 +40,22 @@ func (s *Server) startFabric(ll *loadedLab) error {
 
 	for _, m := range ll.staticTaps {
 		for _, t := range m {
-			if err := mgr.EnsureTap(ctx, t.tapName, uid); err != nil {
-				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tap %s: %v", t.tapName, err)
-			}
+			// startFabric runs on EVERY node.start (via startNodes), but the
+			// static-tap set spans the whole lab. Once a tap's bridge+pump exist,
+			// its device was already created and brought up — re-running EnsureTap
+			// (two `sudo ip` calls apiece) for every tap of every node on each
+			// start is pure waste that grows O(taps) per start and made later node
+			// starts visibly slow (a 6-switch lab = ~100 taps = ~200 redundant
+			// sudo calls, ~2s, per start). Skip anything already realised; only
+			// ensure+open taps we have not brought up yet.
 			ll.mu.Lock()
 			_, exists := ll.tapBridges[t.netioPath]
 			ll.mu.Unlock()
 			if exists {
 				continue
+			}
+			if err := mgr.EnsureTap(ctx, t.tapName, uid); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tap %s: %v", t.tapName, err)
 			}
 			cfg := iouyap.Config{
 				NetioPath:      t.netioPath,
