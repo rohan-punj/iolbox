@@ -1,5 +1,8 @@
 name: Release
 
+# Triggers: a version tag builds+drafts a release; workflow_dispatch lets a
+# maintainer dry-run the whole pipeline (build/test artifacts, no publish)
+# without cutting a tag.
 on:
   push:
     tags: ["v*"]
@@ -9,27 +12,89 @@ permissions:
   contents: write
 
 jobs:
+  # ---------------------------------------------------------------------
+  # Windows: the ACTUAL shipped Windows deliverable is tools/iolab-launcher,
+  # a plain Go exe (browser-first GUI — the Tauri/Rust shell under app/
+  # src-tauri was abandoned when the project pivoted browser-first and is
+  # not known to still build). Do not resurrect the Tauri bundle here.
+  # ---------------------------------------------------------------------
   build-windows:
-    name: Build Windows app + helpers
+    name: Build Windows launcher + capture-helper
     runs-on: windows-latest
     steps:
+      # fetch-depth: 0 so `git describe --tags` (used by build-release.sh
+      # in the Linux job, and good practice here too for parity) sees real
+      # tag history instead of the shallow single commit `checkout` gives
+      # by default.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
 
-      - name: Build capture-helper.exe
+      - name: Vet + test iolab-launcher
+        working-directory: tools/iolab-launcher
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build iolbox-launcher.exe
+        working-directory: tools/iolab-launcher
+        run: go build -o iolbox-launcher.exe .
+
+      - name: Vet + test capture-helper
         working-directory: tools/capture-helper
         run: |
-          go build -o ../../app/src-tauri/binaries/capture-helper.exe .
+          go vet ./...
+          go test ./...
 
-      - name: Cross-build supervisor (linux/amd64) for bundling into the runtime
-        working-directory: supervisor
-        env:
-          GOOS: linux
-          GOARCH: amd64
-        run: go build -o ../app/src-tauri/binaries/supervisor-linux-amd64 ./cmd/supervisor
+      - name: Build capture-helper.exe
+        working-directory: tools/capture-helper
+        run: go build -o capture-helper.exe .
+
+      # NOTE: both exes are UNSIGNED. A code-signing step (e.g. Azure Trusted
+      # Signing, or a self-hosted signtool + cert) slots in here later,
+      # between the build steps above and this upload. Until then, Windows
+      # SmartScreen will warn on first run — expected, not a CI bug.
+      #
+      # NOTE: this job does NOT assemble the full launcher bundle (the
+      # qemu/ subdirectory and iolbox-disk.qcow2 that tools/iolab-launcher
+      # expects alongside it — see runtime/pack-qemu.sh and docs/INSTALL.md
+      # "QEMU disk (Windows launcher)"). Neither qemu's third-party binaries
+      # nor the multi-GB qcow2 disk live in this repo, so that bundle is
+      # assembled by hand on the private builder and attached to the draft
+      # release alongside this job's two exes.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iolbox-windows
+          path: |
+            tools/iolab-launcher/iolbox-launcher.exe
+            tools/capture-helper/capture-helper.exe
+
+  # ---------------------------------------------------------------------
+  # Linux: builds the GUI-embedded supervisor the ONLY correct way, then
+  # bakes every Linux-hostable packaging target that doesn't need loop
+  # devices/chroot/grub (those three — vmdk/vmx, OVA, qcow2 — need a
+  # root-capable builder and are attached to the release by hand; see the
+  # release job's draft body).
+  # ---------------------------------------------------------------------
+  build-linux:
+    name: Build supervisor + Linux packaging targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build-release.sh stamps the binary's version via
+          # `git describe --tags`; a shallow checkout has no tag history,
+          # so the stamp silently degrades to a bare commit hash instead of
+          # e.g. "v0.4.0". fetch-depth 0 keeps that stamp meaningful.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
 
       - uses: actions/setup-node@v4
         with:
@@ -37,67 +102,124 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: app/src-tauri
-
       - name: Install frontend deps
         working-directory: app
         run: npm ci
 
-      - name: Build Tauri bundle (msi + nsis)
-        working-directory: app
-        run: npx tauri build
+      # THE ONLY correct way to produce a deployable supervisor binary.
+      # build-release.sh runs `npm run build:embed` before compiling and
+      # then asserts the embedded index.html isn't the committed
+      # placeholder. A bare `go build ./cmd/supervisor` skips build:embed
+      # entirely and ships that placeholder ("GUI not bundled in this
+      # build") straight into a release artifact — which is exactly what
+      # the previous version of this workflow did. Never shortcut this.
+      - name: Build supervisor (build-release.sh — GUI embedded)
+        run: bash build-release.sh
 
-      - name: Upload installers
-        uses: actions/upload-artifact@v4
-        with:
-          name: iolbox-windows
-          path: |
-            app/src-tauri/target/release/bundle/msi/*.msi
-            app/src-tauri/target/release/bundle/nsis/*.exe
-
-  # The runtime rootfs/appliance is baked on Linux and attached to the release.
-  build-runtime:
-    name: Bake runtime (WSL tar)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-      - name: Build supervisor for the runtime
-        working-directory: supervisor
-        env: { GOOS: linux, GOARCH: amd64 }
-        run: go build -o bin/supervisor-linux-amd64 ./cmd/supervisor
-      - name: Bake rootfs + WSL tar
+      - name: Install rootfs/packaging build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap
-          sudo runtime/build-rootfs.sh
-          sudo runtime/pack-wsl.sh
+          sudo apt-get install -y debootstrap zstd build-essential
+
+      # fetch-vpcs.sh needs git + make + a C compiler (all covered by
+      # build-essential + the runner's preinstalled git) to clone and
+      # statically link the GNS3/vpcs fork; it caches its output at
+      # runtime/build/vpcs/vpcs and no-ops on a second run if that binary
+      # already exists. build-rootfs.sh does NOT call it automatically —
+      # it hard-fails if the vpcs binary is missing — so it must run here
+      # as an explicit step before build-rootfs.sh.
+      - name: Fetch/build VPCS
+        run: runtime/fetch-vpcs.sh
+
+      # build-rootfs.sh must run as root (debootstrap needs to mknod/chroot).
+      # Its defaults already match this job's layout: --supervisor-bin
+      # defaults to supervisor/bin/supervisor-linux-amd64 (build-release.sh's
+      # output) and --build-dir defaults to runtime/build (fetch-vpcs.sh's
+      # cache location), so no flags are needed here.
+      - name: Bake shared rootfs
+        run: sudo runtime/build-rootfs.sh
+
+      # pack-wsl.sh doesn't strictly need root (plain tar of an existing
+      # dir) but debootstrap can leave a few root-only files behind, so run
+      # it as root too, per its own header comment.
+      - name: Pack WSL rootfs tarball
+        run: sudo runtime/pack-wsl.sh --build-dir runtime/build
+
+      # workflow_dispatch runs (no tag) have no meaningful semver — fall
+      # back to the branch/ref name, which pack-lxc.sh only uses as an
+      # opaque label in the output filename (iolbox-ct-<VERSION>.tar.zst).
+      - name: Resolve version string
+        id: version
+        run: echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack Proxmox LXC template
+        run: sudo runtime/pack-lxc.sh --build-dir runtime/build --version "${{ steps.version.outputs.value }}"
+
+      # pack-native.sh does NOT consume the debootstrap rootfs at all — per
+      # its own header, a native install runs on the operator's own distro,
+      # so it only needs the supervisor + vpcs binaries plus files under
+      # runtime/files/{,native/}. It could run before build-rootfs.sh, but
+      # is kept after here so every packaging step reads top-to-bottom in
+      # one pass; it needs no root (no loop devices/chroot involved).
+      - name: Pack native (systemd) server tarball
+        run: runtime/pack-native.sh --supervisor-bin supervisor/bin/supervisor-linux-amd64 --build-dir runtime/build --version "${{ steps.version.outputs.value }}"
+
+      - name: Generate checksums
+        working-directory: runtime/build
+        run: |
+          sha256sum iolbox-rootfs.tar iolbox-ct-*.tar.zst iolbox-server-*.tar.gz > SHA256SUMS-ci.txt
+          cat SHA256SUMS-ci.txt
+
       - uses: actions/upload-artifact@v4
         with:
-          name: iolbox-runtime
-          path: runtime/build/iolbox-rootfs.tar
+          name: iolbox-linux
+          path: |
+            runtime/build/iolbox-rootfs.tar
+            runtime/build/iolbox-ct-*.tar.zst
+            runtime/build/iolbox-server-*.tar.gz
+            runtime/build/SHA256SUMS-ci.txt
 
+  # ---------------------------------------------------------------------
+  # Release: only on an actual tag push (workflow_dispatch runs stop after
+  # producing/testing artifacts — no draft is created). Published as a
+  # DRAFT, never live, because three artifacts CI cannot build (vmdk/vmx,
+  # OVA, qcow2 — all need loop devices/chroot/grub on a root-capable
+  # builder) plus the Windows launcher's qemu+disk bundle must be attached
+  # by hand before this is fit to publish.
+  # ---------------------------------------------------------------------
   release:
-    needs: [build-windows, build-runtime]
+    name: Draft GitHub Release
+    needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v4
-      - name: Publish GitHub Release
+
+      - name: Publish draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: |
             iolbox-windows/**/*
-            iolbox-runtime/**/*
+            iolbox-linux/**/*
           body: |
             iolbox ${{ github.ref_name }}
 
-            **Contains no Cisco software.** Supply your own IOL/IOU images.
-            Download the Windows installer and, on first run, pick a runtime
-            provider (VMware / WSL2). See README for details.
+            **Contains no Cisco software.** Supply your own IOL/IOU images
+            and hold the appropriate licenses for them.
+
+            ---
+
+            **THIS DRAFT IS INCOMPLETE.** CI only builds what it can build
+            without loop devices/chroot/grub or a real QEMU disk. Before
+            publishing, attach the following — built by hand on the private
+            root-capable builder — to this draft:
+
+            - `iolbox-appliance-${{ github.ref_name }}.vmdk` + `.vmx` (VMware Workstation/Player drop-in appliance)
+            - `iolbox-appliance-${{ github.ref_name }}.ova` (ESXi / VirtualBox / generic OVF import)
+            - `iolbox-disk-${{ github.ref_name }}.qcow2` + the Windows launcher bundle zip (qemu/ + iolbox-launcher.exe + iolbox-disk.qcow2)
+
+            Everything else — `iolbox-rootfs.tar` (WSL2), `iolbox-ct-${{ github.ref_name }}.tar.zst` (Proxmox LXC), `iolbox-server-${{ github.ref_name }}.tar.gz` (native systemd), `iolbox-launcher.exe`, `capture-helper.exe`, `SHA256SUMS-ci.txt` — is already attached by this workflow.
+
+            See [docs/INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md) for which artifact matches your situation, and un-draft only once the manually-built artifacts above are attached.
           generate_release_notes: true
