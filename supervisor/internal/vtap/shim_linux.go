@@ -44,7 +44,14 @@ func openTap(name string) (*os.File, error) {
 		return nil, fmt.Errorf("vtap: tap device name %q must be 1-%d bytes", name, maxIfNameSize-1)
 	}
 
-	f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	// Open the clone device raw and issue TUNSETIFF BEFORE the fd reaches the Go
+	// runtime. os.OpenFile registers the fd with the network poller at open time —
+	// before TUNSETIFF turns it into a concrete tap — and that early registration
+	// is unreliable for tun devices, so a later read flakily fails with
+	// "not pollable"/EFAULT and kills the pump (dropping all inbound frames for
+	// the VPCS node). Registering post-TUNSETIFF via os.NewFile on a non-blocking
+	// configured tap is reliable.
+	fd, err := syscall.Open("/dev/net/tun", syscall.O_RDWR|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("vtap: open /dev/net/tun: %w", err)
 	}
@@ -55,12 +62,16 @@ func openTap(name string) (*os.File, error) {
 	copy(req[:16], name)
 	binary.LittleEndian.PutUint16(req[16:], iffTap|iffNoPI)
 
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), tunsetiff, uintptr(unsafe.Pointer(&req[0]))); errno != 0 {
-		_ = f.Close()
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), tunsetiff, uintptr(unsafe.Pointer(&req[0]))); errno != 0 {
+		_ = syscall.Close(fd)
 		return nil, fmt.Errorf("vtap: TUNSETIFF %s: %w", name, errno)
 	}
 
-	return f, nil
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("vtap: set nonblock %s: %w", name, err)
+	}
+	return os.NewFile(uintptr(fd), "/dev/net/tun"), nil
 }
 
 // Shim bridges one VPCS UDP tunnel to one tap device: a udp<->tap frame pump

@@ -40,7 +40,16 @@ func openTap(name string) (*os.File, error) {
 		return nil, fmt.Errorf("iouyap: tap device name %q must be 1-%d bytes", name, maxIfNameSize-1)
 	}
 
-	f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	// Open the clone device with a raw syscall and issue TUNSETIFF BEFORE handing
+	// the fd to the Go runtime. os.OpenFile registers the fd with the network
+	// poller at open time — while it is still the bare /dev/net/tun clone device,
+	// before TUNSETIFF turns it into a concrete tap — and that early registration
+	// is unreliable for tun devices: a later read then flakily fails with
+	// "not pollable" or EFAULT, which permanently kills the read pump and silently
+	// drops every inbound frame for the interface (a lab node then never receives
+	// e.g. its DHCP OFFER). Registering with the poller only after TUNSETIFF, via
+	// os.NewFile on a fully-configured non-blocking tap, is reliable.
+	fd, err := syscall.Open("/dev/net/tun", syscall.O_RDWR|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("iouyap: open /dev/net/tun: %w", err)
 	}
@@ -51,10 +60,17 @@ func openTap(name string) (*os.File, error) {
 	copy(req[:16], name)
 	binary.LittleEndian.PutUint16(req[16:], iffTap|iffNoPI)
 
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), tunsetiff, uintptr(unsafe.Pointer(&req[0]))); errno != 0 {
-		_ = f.Close()
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), tunsetiff, uintptr(unsafe.Pointer(&req[0]))); errno != 0 {
+		_ = syscall.Close(fd)
 		return nil, fmt.Errorf("iouyap: TUNSETIFF %s: %w", name, errno)
 	}
 
-	return f, nil
+	// Non-blocking so os.NewFile registers the configured tap with the poller:
+	// reads park until a frame arrives and Close() unblocks them by evicting the
+	// fd from the poller.
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("iouyap: set nonblock %s: %w", name, err)
+	}
+	return os.NewFile(uintptr(fd), "/dev/net/tun"), nil
 }

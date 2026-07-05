@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// errBridgeClosed is returned by the tap read loop when the bridge is being
+// torn down (Close closed b.closed / the fd), so runPump stops cleanly rather
+// than treating shutdown as a transient error to retry.
+var errBridgeClosed = errors.New("iouyap: tap bridge closed")
+
 // TapBridge relays datagrams between one IOL netio unix-domain socket and one
 // Linux tap device, in place of the UDP relay Bridge uses. Frames read from
 // the netio socket have the netio header stripped and are written raw to the
@@ -169,18 +174,35 @@ func (b *TapBridge) pumpNetioToTap(ctx context.Context, errs chan<- error) {
 func (b *TapBridge) pumpTapToNetio(ctx context.Context, errs chan<- error) {
 	buf := make([]byte, 65536)
 	read := func() ([]byte, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-b.closed:
+				return nil, errBridgeClosed
+			default:
+			}
+			n, err := b.tap.Read(buf)
+			if err != nil {
+				// On shutdown (Close evicts the fd / ctx cancelled) exit cleanly.
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-b.closed:
+					return nil, errBridgeClosed
+				default:
+				}
+				// An unexpected read error must NOT permanently kill inbound
+				// delivery for this interface (that would silently strand the
+				// node — e.g. its DHCP OFFER never arrives). Drop and retry after
+				// a brief pause instead of tearing the pump down.
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			out := make([]byte, n)
+			copy(out, buf[:n])
+			return out, nil
 		}
-		n, err := b.tap.Read(buf)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]byte, n)
-		copy(out, buf[:n])
-		return out, nil
 	}
 	write := func(datagram []byte) error {
 		b.peerMu.RLock()
@@ -190,8 +212,12 @@ func (b *TapBridge) pumpTapToNetio(ctx context.Context, errs chan<- error) {
 			// No netio peer has connected yet; nothing to deliver to.
 			return nil
 		}
-		_, err := b.unixConn.WriteToUnix(datagram, peer)
-		return err
+		// A transient write error (e.g. ECONNREFUSED while IOL is still booting
+		// and has not yet bound its netio socket) must not kill the pump — that
+		// would permanently stop inbound delivery. Drop the frame; a DHCP client
+		// or any retransmitting sender will try again once IOL is listening.
+		_, _ = b.unixConn.WriteToUnix(datagram, peer)
+		return nil
 	}
 	runPump(ctx, read, write, b.cfg.wrapToNetio, errs)
 }

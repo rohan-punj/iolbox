@@ -314,7 +314,14 @@ func (e *Endpoint) runTeardown() {
 // frames with no 4-byte packet-info prefix). The device itself was created by
 // `ip tuntap add` in setup; this just grabs a data fd for it.
 func openTap(name string) (*os.File, error) {
-	f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	// Open the clone device raw and issue TUNSETIFF BEFORE the fd reaches the Go
+	// runtime. os.OpenFile registers the fd with the network poller at open time —
+	// before TUNSETIFF makes it a concrete tap — and that early registration is
+	// unreliable for tun devices, so a later read/deadline flakily fails with
+	// "not pollable"/EFAULT and kills the pump (dropping all inbound frames, e.g.
+	// a node's DHCP requests). Registering post-TUNSETIFF via os.NewFile on a
+	// non-blocking configured tap is reliable.
+	fd, err := syscall.Open("/dev/net/tun", syscall.O_RDWR|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("extnet: open /dev/net/tun: %w", err)
 	}
@@ -324,11 +331,15 @@ func openTap(name string) (*os.File, error) {
 	flags := uint16(iffTap | iffNoPI)
 	ifr[ifnamsiz] = byte(flags)
 	ifr[ifnamsiz+1] = byte(flags >> 8)
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), tunSetIff, uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
-		_ = f.Close()
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), tunSetIff, uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
+		_ = syscall.Close(fd)
 		return nil, fmt.Errorf("extnet: TUNSETIFF %s: %v", name, errno)
 	}
-	return f, nil
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("extnet: set nonblock %s: %w", name, err)
+	}
+	return os.NewFile(uintptr(fd), "/dev/net/tun"), nil
 }
 
 // currentUser returns the username that should own the tap (the process user,
