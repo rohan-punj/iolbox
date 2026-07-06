@@ -20,7 +20,14 @@
 *.tar.gz
 rootfs/
 appliance/
-iourc*
+# The generated IOL license file is always a bare "iourc" (no extension),
+# written at runtime to paths like /opt/iolbox/iourc — never inside this repo
+# in normal operation. Ignore that bare filename, but re-include the SOURCE
+# PACKAGE supervisor/internal/iourc/ (iourc.go + iourc_test.go), which the
+# old glob "iourc*" collided with and silently kept out of every commit
+# (supervisor failed to build from a fresh clone: package never existed).
+iourc
+!supervisor/internal/iourc/
 
 # Lab runtime state
 *.pcap
