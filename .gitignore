@@ -44,3 +44,6 @@ Thumbs.db
 # Launcher binaries (extensionless default-named build outputs; *.exe covers the .exe)
 /tools/iolab-launcher/iolab-launcher
 /tools/iolab-launcher/iolbox-launcher
+
+# Local dev-machine launch/proxy configs (private VM IPs, developer-specific)
+.claude/
