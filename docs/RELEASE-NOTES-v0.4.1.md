@@ -56,7 +56,7 @@ round focused on trustworthiness of the shipped binaries and a real build fix.
 
 | Situation | Artifact |
 |---|---|
-| Windows desktop, simplest path | `iolbox-launcher.exe` + `iolbox-disk-v0.4.1.qcow2` (bundle instructions in INSTALL.md) |
+| Windows desktop, simplest path | `iolbox-launcher-v0.4.1-windows.zip` (launcher + disk + bundled QEMU, all in one archive) |
 | VMware Workstation / ESXi / VirtualBox | `iolbox-appliance-v0.4.1.ova` |
 | WSL2 already enabled | `iolbox-rootfs.tar` |
 | Proxmox homelab | `iolbox-ct-v0.4.1.tar.zst` |
