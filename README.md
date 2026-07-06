@@ -1,4 +1,5 @@
 # iolbox
+<img width="1851" height="1161" alt="{914C57B9-2B87-485A-A5ED-23CBE02AD2E3}" src="https://github.com/user-attachments/assets/d8e7470f-59bc-4125-8202-742994a7b632" />
 
 **A lightweight, Windows-native lab for Cisco IOL and VPCS.** Draw topologies,
 console into every node, and live-capture any link straight into Wireshark. No
