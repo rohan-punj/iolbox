@@ -168,15 +168,22 @@
   --border-strong: rgba(16, 26, 42, 0.18);
   --border-subtle: rgba(16, 26, 42, 0.06);
 
-  /* Ink — darkened secondary/tertiary to clear WCAG AA on the cool white. */
+  /* Ink — secondary/tertiary darkened to clear WCAG AA on the cool white.
+     ink-3 is the tertiary/placeholder/eyebrow face; 4.8:1 on ground, 5.4:1 on
+     white (was #71808f ≈ 3.6:1 — the light-theme legibility bug). */
   --ink: #1b2431;
   --ink-2: #4a5769;
-  --ink-3: #71808f;
+  --ink-3: #5f6b78;
 
-  --accent: #0a84ff;
-  --accent-strong: #0a84ff;
+  /* Accent — Apple's deeper *on-white* system blue (dark mode uses #0a84ff;
+     on a light surface Apple drops to a deeper blue). Dark enough that it
+     clears AA both ways: as link/label text (5.6:1 on white, 5.0:1 on ground)
+     AND as a solid fill under white text (--accent-ink). The bright #0a84ff
+     failed both at ~3.7:1. */
+  --accent: #0060df;
+  --accent-strong: #0a6ad9;
   --accent-ink: #ffffff;
-  --accent-muted: rgba(10, 132, 255, 0.14);
+  --accent-muted: rgba(0, 96, 223, 0.14);
 
   --dot: #d4dbe6;
   --cable: #9fb0c4;
@@ -213,15 +220,25 @@
   --text-tertiary: var(--ink-3);
   --text-disabled: #a8b3c0;
 
-  --accent-hover: #3d9bff;
-  --accent-active: #0060df;
+  --accent-hover: #0a6ad9;
+  --accent-active: #004fc0;
   --accent-contrast: var(--accent-ink);
 
   --state-stopped-bg: rgba(91, 107, 127, 0.16);
   --state-starting-bg: rgba(240, 180, 41, 0.18);
   --state-running-bg: rgba(57, 217, 138, 0.18);
   --state-crashed-bg: rgba(255, 90, 95, 0.16);
-  --danger-hover: #ff787c;
+
+  /* Semantic INK (Glass). Same meanings as the --state-* LEDs, but darkened so
+     they pass WCAG AA when used as TEXT / borders on the light surfaces. The
+     --state-* tokens stay vivid for their graphical LED/fill role (3:1); these
+     ink variants are what components use to *color type*. Bench keeps the vivid
+     values (they already clear AA on the dark ground), so it inherits the
+     :root aliases and needs no override. */
+  --danger: #c9262b;
+  --danger-hover: #b01e25;
+  --success: #0d7d3e;
+  --warning: #8a5a00;
 
   --node-iol-l3: var(--accent);
   --node-iol-l2: #7a5cff;

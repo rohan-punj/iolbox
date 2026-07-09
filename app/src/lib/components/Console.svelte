@@ -426,7 +426,7 @@
     border-bottom-color: var(--state-starting);
   }
   .tab-capture :global(svg) {
-    color: var(--state-starting);
+    color: var(--warning);
     flex-shrink: 0;
   }
   .tab.active .tab-label {

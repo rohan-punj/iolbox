@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-08T00:00:00.000Z",
+  "title": "Design System: iolbox",
+  "extensions": {
+    "colorMeta": {
+      "accent-cable-cyan": { "role": "primary", "displayName": "Cable-Cyan", "canonical": "#4bc6d1", "tonalRamp": ["#0a1f22", "#123a3f", "#1a555c", "#227079", "#2a8b96", "#3aabb6", "#4bc6d1", "#7bd8df", "#b4ecf0"] },
+      "accent-apple-blue": { "role": "primary", "displayName": "Apple Blue (on-white)", "canonical": "#0060df", "tonalRamp": ["#02132e", "#04224f", "#063271", "#08429a", "#0a52c2", "#0060df", "#3d86ea", "#7db0f2", "#bdd8f9"] },
+      "node-iol-l2-bench": { "role": "secondary", "displayName": "Patch Violet", "canonical": "#9d8bff", "tonalRamp": ["#1c1740", "#2c2263", "#3d3186", "#4f41a8", "#6455c9", "#7d6ee6", "#9d8bff", "#bcb0ff", "#dcd6ff"] },
+      "ground-bench": { "role": "neutral", "displayName": "Slate Ground", "canonical": "#0a0e14", "tonalRamp": ["#0a0e14", "#10161f", "#151d28", "#1a2430", "#223041", "#30455a", "#7286a0", "#a7bacf", "#eaf0f7"] },
+      "ground-glass": { "role": "neutral", "displayName": "Cool Studio White", "canonical": "#eef1f6", "tonalRamp": ["#1b2431", "#2c3948", "#4a5769", "#71808f", "#9fb0c4", "#c9d3df", "#dfe6ee", "#eef1f6", "#ffffff"] },
+      "state-running": { "role": "tertiary", "displayName": "Running Green", "canonical": "#39d98a", "tonalRamp": ["#0c3323", "#124832", "#185f43", "#1f7754", "#279066", "#2fb178", "#39d98a", "#77e6b0", "#b6f2d6"] },
+      "state-starting": { "role": "tertiary", "displayName": "Starting Amber", "canonical": "#f0b429", "tonalRamp": ["#3a2905", "#57400a", "#755710", "#946f16", "#b4881d", "#d49f23", "#f0b429", "#f6cd67", "#fbe6a8"] },
+      "state-crashed": { "role": "tertiary", "displayName": "Crashed Red", "canonical": "#ff5a5f", "tonalRamp": ["#3d0d0f", "#5c1518", "#7c1d21", "#9d262b", "#c03035", "#e2454b", "#ff5a5f", "#ff9296", "#ffc5c7"] },
+      "state-stopped": { "role": "tertiary", "displayName": "Stopped Grey", "canonical": "#5b6b7f", "tonalRamp": ["#161b21", "#232b34", "#313b47", "#404c5b", "#4f5d6f", "#5b6b7f", "#7c8b9d", "#a6b2c0", "#d2d9e2"] },
+      "term-bg-bench": { "role": "neutral", "displayName": "Phosphor Black", "canonical": "#08090c", "tonalRamp": ["#08090c", "#0f1218", "#171b24", "#20252f", "#2b313d", "#3a414f", "#7be0a0", "#a8ebc2", "#cfe6d8"] }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Dialog and panel headings — the largest type in the app (20px). No display type above this." },
+      "body": { "displayName": "Body", "purpose": "Default UI text, labels, prose (13px, UI face)." },
+      "label": { "displayName": "Label / Eyebrow", "purpose": "Rationed uppercase micro-labels and pills (12px, 0.06em tracking)." },
+      "data-mono": { "displayName": "Data (mono)", "purpose": "Anything the CLI would print — hostnames, interfaces, telnet ports, RAM, config." },
+      "chip-mono": { "displayName": "Port chip (mono)", "purpose": "The smallest data face; sits on the cable and grows on hover." }
+    },
+    "shadows": [
+      { "name": "shadow-sm", "value": "0 1px 2px rgba(0,0,0,0.4)", "purpose": "Resting hairline lift on small controls (Bench)." },
+      { "name": "shadow-md", "value": "0 8px 24px rgba(0,0,0,0.45)", "purpose": "Node faces, dialogs, popovers, the hover-popped chip (Bench)." },
+      { "name": "shadow-lg", "value": "0 18px 48px rgba(0,0,0,0.55)", "purpose": "Largest modal surfaces (Bench)." },
+      { "name": "shadow-ring", "value": "0 0 0 3px var(--accent-muted)", "purpose": "Accent focus / selection ring." },
+      { "name": "led-glow-running", "value": "0 0 0 2px color-mix(in oklab, #39d98a 24%, transparent)", "purpose": "Running-state LED halo (state glows are the primary expressive elevation)." }
+    ],
+    "motion": [
+      { "name": "transition-fast", "value": "120ms ease", "purpose": "Hover cues on controls, connector affordance, LED, cable glow." },
+      { "name": "transition-base", "value": "180ms ease", "purpose": "Default state transitions (theme fade, panel changes)." },
+      { "name": "chip-pop", "value": "140ms cubic-bezier(0.2, 0.9, 0.3, 1.2)", "purpose": "The PNetLab hover-pop on port chips — a slight spring, never a bounce." },
+      { "name": "led-pulse", "value": "1.1s ease-in-out infinite", "purpose": "The transitional Starting-state LED pulse." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single loud action per bar (e.g. Start lab).",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Start lab</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; font-family: 'Segoe UI Variable Text', Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12px; font-weight: 550; border-radius: 8px; border: 1px solid #30455a; background: #151d28; color: #eaf0f7; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; } .ds-btn-primary { background: #4bc6d1; border-color: #4bc6d1; color: #05161a; font-weight: 600; } .ds-btn-primary:hover { background: #63d6e0; border-color: #63d6e0; } .ds-btn-primary:focus-visible { outline: 2px solid #4bc6d1; outline-offset: 1px; }"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Standard toolbar button; hover shifts the border to the accent (a quiet cue, not a fill change).",
+      "html": "<button class=\"ds-btn ds-btn-default\">Images</button>",
+      "css": ".ds-btn-default { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; font-family: 'Segoe UI Variable Text', Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12px; font-weight: 550; border-radius: 8px; border: 1px solid #30455a; background: #151d28; color: #eaf0f7; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; } .ds-btn-default:hover { border-color: #4bc6d1; } .ds-btn-default:active { background: #24333f; } .ds-btn-default:focus-visible { outline: 2px solid #4bc6d1; outline-offset: 1px; }"
+    },
+    {
+      "name": "Segmented Toggle",
+      "kind": "custom",
+      "refersTo": "button",
+      "description": "Pill-shaped group for the theme switch; active segment fills with the accent.",
+      "html": "<div class=\"ds-seg\" role=\"group\" aria-label=\"Theme\"><button class=\"ds-seg-btn on\" aria-pressed=\"true\">Bench</button><button class=\"ds-seg-btn\" aria-pressed=\"false\">Glass</button></div>",
+      "css": ".ds-seg { display: inline-flex; padding: 3px; gap: 2px; background: #151d28; border: 1px solid #30455a; border-radius: 999px; } .ds-seg-btn { font-family: 'Segoe UI Variable Text', Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; border: 0; background: transparent; color: #7286a0; padding: 4px 12px; border-radius: 999px; cursor: pointer; transition: color 120ms ease, background 120ms ease; } .ds-seg-btn:hover { color: #eaf0f7; } .ds-seg-btn.on { background: #4bc6d1; color: #05161a; }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "pill",
+      "description": "Provider/connection state pill with a leading LED dot that recolors and halos by state.",
+      "html": "<span class=\"ds-pill ds-status-pill\"><span class=\"ds-led\"></span>vmware</span>",
+      "css": ".ds-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-family: 'Segoe UI Variable Text', Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; border: 1px solid #30455a; color: #a7bacf; background: #151d28; } .ds-led { width: 7px; height: 7px; border-radius: 50%; background: #39d98a; box-shadow: 0 0 0 3px color-mix(in oklab, #39d98a 22%, transparent); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Standard field; focus shifts the border to the accent.",
+      "html": "<input class=\"ds-input\" placeholder=\"R1\" spellcheck=\"false\" />",
+      "css": ".ds-input { font-family: 'Segoe UI Variable Text', Inter, 'Segoe UI', system-ui, sans-serif; font-size: 12px; background: #10161f; color: #eaf0f7; border: 1px solid #30455a; border-radius: 5px; padding: 6px 8px; } .ds-input::placeholder { color: #7286a0; } .ds-input:focus { border-color: #4bc6d1; outline: none; }"
+    },
+    {
+      "name": "Node Face (signature)",
+      "kind": "custom",
+      "refersTo": "node-face",
+      "description": "The 64px device tile: gradient face, centered tintable glyph, mono name chip with a status LED, and a corner connector affordance that surfaces on hover.",
+      "html": "<div class=\"ds-node\"><div class=\"ds-node-face\"><svg class=\"ds-node-glyph\" viewBox=\"0 0 24 24\" width=\"30\" height=\"30\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"2.5\" y=\"7\" width=\"19\" height=\"10\" rx=\"2\"/><path d=\"M6 11h2M6 13.5h2M16 11h2M16 13.5h2\"/><path d=\"M11 4.5l1 2 1-2M11 19.5l1-2 1 2\"/></svg><button class=\"ds-node-connector\" aria-label=\"Connect\"><svg viewBox=\"0 0 24 24\" width=\"12\" height=\"12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M9 15l6-6M8.5 9.5a3 3 0 0 1 4-.5M15.5 14.5a3 3 0 0 1-4 .5\"/></svg></button></div><div class=\"ds-node-name\"><span class=\"ds-led\"></span>R1</div></div>",
+      "css": ".ds-node { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 64px; } .ds-node-face { position: relative; width: 64px; height: 64px; border-radius: 14px; background: linear-gradient(160deg, #131b26, #0e1620); border: 1px solid #30455a; display: grid; place-items: center; box-shadow: 0 8px 24px rgba(0,0,0,0.45); color: #eaf0f7; transition: border-color 120ms ease, box-shadow 120ms ease; } .ds-node-face:hover { border-color: #4bc6d1; } .ds-node-connector { all: unset; position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; background: #4bc6d1; color: #05161a; display: grid; place-items: center; cursor: crosshair; opacity: 0; transform: scale(0.6); transition: opacity 120ms ease, transform 120ms ease; box-shadow: 0 8px 24px rgba(0,0,0,0.45); } .ds-node-face:hover .ds-node-connector, .ds-node-connector:focus-visible { opacity: 1; transform: scale(1); } .ds-node-name { display: inline-flex; align-items: center; gap: 5px; font-family: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 13px; color: #eaf0f7; background: color-mix(in oklab, #121a25 92%, #0a0e14); border: 1px solid #223041; border-radius: 5px; padding: 1px 7px; letter-spacing: 0.02em; } .ds-led { width: 7px; height: 7px; border-radius: 50%; background: #39d98a; box-shadow: 0 0 0 2px color-mix(in oklab, #39d98a 24%, transparent); }"
+    },
+    {
+      "name": "Port Chip (signature hover-pop)",
+      "kind": "custom",
+      "refersTo": "port-chip",
+      "description": "PNetLab-style interface label riding on a cable; scales 1.65x on hover and reveals the full detail. Hover it to see the pop.",
+      "html": "<span class=\"ds-port-chip\"><span class=\"ds-chip-detail\">R1&nbsp;</span>Gi0/0</span>",
+      "css": ".ds-port-chip { display: inline-block; font-family: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1; color: #eaf0f7; background: linear-gradient(#121a25, #121a25), #0a0e14; border: 1px solid #223041; border-radius: 5px; padding: 2px 5px; white-space: nowrap; cursor: default; transform: scale(1); transform-origin: left center; transition: transform 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2), background 140ms ease, box-shadow 140ms ease, border-color 140ms ease; } .ds-chip-detail { display: none; color: #a7bacf; } .ds-port-chip:hover { transform: scale(1.65); background: rgba(21,30,42,0.96); border-color: #4bc6d1; box-shadow: 0 8px 24px rgba(0,0,0,0.45); } .ds-port-chip:hover .ds-chip-detail { display: inline; } @media (prefers-reduced-motion: reduce) { .ds-port-chip:hover { transform: scale(1.18); } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Bench & Glass",
+    "overview": "iolbox is a network-lab instrument, and its identity is the duality named in its two themes. Bench is the instrument at rest on a dark workbench — a blue-black slate ground, not pure black, biased toward the accent so it reads as chosen. Glass is the same instrument under studio light — Apple-vibrancy frosted panels floating over a faintly-cool white, the topology reading through the material. One token system, one layout; only the surface treatment changes. The system draws exclusively from the subject's own world: rack equipment, terminal phosphor, LED status indicators, color-coded patch cabling, the monospace CLI. Anything the CLI would print is set in mono; the UI chrome is set in the system UI face. That single split is the signature. The system explicitly rejects the AI-coded default, metrics-dashboard chrome, and the dated heavy feel of the incumbent lab web consoles — borrowing their interactions, never their weight.",
+    "keyCharacteristics": [
+      "Hue-biased neutrals (slate tuned toward the accent), never pure grey or black.",
+      "Mono carries the data; the UI face carries the chrome — never one face for all.",
+      "Status is an LED with a soft glow (shape + color + label), never a bare word.",
+      "One bold move per surface (the accent, or the glass material); everything else quiet.",
+      "Tactile & responsive: elements come alive under the cursor, but every motion is functional."
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "The primary accent appears on ≤10% of any screen. It is spent on selection, focus, the single primary action, and live links — never as decoration. If two things on screen are both accent-colored and neither is selected/active/primary, one is wrong.", "section": "colors" },
+      { "name": "The LED Rule", "body": "State is never communicated by text color alone. It is an LED dot with a colored box-shadow halo (plus a pulse for the transitional Starting state), backed by a label. The four state colors are reserved.", "section": "colors" },
+      { "name": "The Mono-For-Data Rule", "body": "If the value would appear in a CLI — a hostname, an interface, a telnet port, a byte count — it is set in the mono face. If it is chrome, it is set in the UI face. This split is the identity.", "section": "typography" },
+      { "name": "The Flat-At-Rest Rule", "body": "A resting panel is defined by its tonal step and its hairline border, not by a shadow. Shadows and glows are earned by state: hover, selection, focus, elevation, or live activity.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do bias every neutral toward the accent hue — keep neutrals hue-tuned, never pure grey/black.",
+      "Do set anything the CLI would print in the Cascadia mono face; set chrome in the Segoe UI Variable face.",
+      "Do show state as an LED dot with a colored glow and a label — shape + color + word.",
+      "Do ration the accent to ≤10% of a screen: selection, focus, the one primary action, live links.",
+      "Do keep surfaces flat at rest; let shadow/glow be earned by hover, selection, focus, or live activity.",
+      "Do give every animation a prefers-reduced-motion alternative — this is a hard requirement.",
+      "Do verify AA contrast on both themes; the raised/darkened ink steps exist so muted text still clears 4.5:1.",
+      "Do consolidate stacking onto a semantic z-index scale (canvas → topbar → panels → dropdown → dialog → modal → tooltip)."
+    ],
+    "donts": [
+      "Don't reproduce the AI-coded default: near-black #0d1117, a safe blue accent, rounded generic cards, one neutral sans for everything.",
+      "Don't build metrics-dashboard chrome — no hero-number tiles, no identical icon-heading-text card grids.",
+      "Don't let the tool inherit the heavy, dated feel of PNetLab / EVE-NG / CML web consoles.",
+      "Don't convey status by a bare colored word with no LED shape behind it.",
+      "Don't spend the primary accent on decoration; if two unselected/inactive things are accent-colored, one is wrong.",
+      "Don't put a drop-shadow on a static, unselected surface. Flat at rest.",
+      "Don't use glassmorphism decoratively — the Glass blur is load-bearing theme identity on floating panels only.",
+      "Don't reach for arbitrary z-index values (1000, 1100, 2000, 3000, 999 !important); use the semantic scale.",
+      "Don't ship display type — the scale tops out at 20px on purpose. This is an instrument, not a landing page."
+    ]
+  }
+}

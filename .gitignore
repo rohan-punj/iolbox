@@ -54,3 +54,9 @@ Thumbs.db
 
 # Local dev-machine launch/proxy configs (private VM IPs, developer-specific)
 .claude/
+
+# impeccable local runtime state (design-hook cache + live-session journals).
+# The committed .impeccable/ files are the design system: design.json (sidecar)
+# and live/config.json (live-mode config).
+.impeccable/hook.cache.json
+.impeccable/live/sessions/
