@@ -260,7 +260,7 @@
   .error-pill {
     border: 1px solid color-mix(in oklab, var(--state-crashed) 55%, transparent);
     background: color-mix(in oklab, var(--state-crashed) 14%, transparent);
-    color: var(--state-crashed);
+    color: var(--danger);
     font-size: var(--fs-xs);
     font-family: var(--font-ui);
     padding: 4px 10px;
@@ -322,8 +322,8 @@
     height: 13px;
   }
   .btn.saved {
-    color: var(--state-running);
-    border-color: color-mix(in oklab, var(--state-running) 55%, transparent);
+    color: var(--success);
+    border-color: color-mix(in oklab, var(--success) 55%, transparent);
   }
   .btn.on {
     color: var(--accent);

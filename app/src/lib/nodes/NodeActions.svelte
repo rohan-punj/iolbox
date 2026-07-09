@@ -144,7 +144,7 @@
     color: var(--ink);
   }
   .na-danger:hover {
-    color: var(--state-crashed);
+    color: var(--danger);
   }
   .na-btn :global(svg) {
     width: 12px;

@@ -317,7 +317,7 @@
     padding: var(--sp-2) var(--sp-3);
     border: 1px solid color-mix(in oklab, var(--state-crashed, #e5484d) 55%, transparent);
     background: color-mix(in oklab, var(--state-crashed, #e5484d) 14%, transparent);
-    color: var(--state-crashed, #e5484d);
+    color: var(--danger);
     border-radius: var(--radius-md);
     font-size: var(--fs-xs);
   }
