@@ -62,6 +62,7 @@ chmod 0755 "$RUN_PARENT" "$STATE_PARENT"
 declare -a CAGES=() NETNS=() DEVS=() RUNDIRS=() PIDS=()
 CGROUP_D=""
 SUPERVISOR_LEAF=""
+CGROUP_D_SUBTREE_ENABLED=0
 BRIDGE_CREATED=0
 
 safe_remove_dir() {
@@ -92,6 +93,13 @@ cleanup() {
 	for cg in "${CAGES[@]-}"; do
 		[[ -n "$cg" ]] && kill_cgroup "$cg"
 	done
+	# Undo the T0.3 bootstrap in reverse: a cgroup with controllers enabled in
+	# cgroup.subtree_control may not hold processes, so <D> has to be emptied of
+	# enabled controllers before this PID can migrate back up into it.
+	if [[ "$CGROUP_D_SUBTREE_ENABLED" == 1 ]]; then
+		echo '-memory -pids -cpu' > "$CGROUP_BASE/cgroup.subtree_control" 2>/dev/null || true
+		CGROUP_D_SUBTREE_ENABLED=0
+	fi
 	if [[ -n "$SUPERVISOR_LEAF" ]]; then
 		echo "$$" > "$CGROUP_BASE/cgroup.procs" 2>/dev/null || true
 		rmdir "$SUPERVISOR_LEAF" 2>/dev/null || true
@@ -194,10 +202,26 @@ start_tool() {
 }
 
 echo "==> T0.3 fixture: delegated cgroup 3-level hierarchy"
-CGROUP_D="$CGROUP_BASE/p0-delegated-$ID"
+# Level 1 (<D>) is this process's OWN delegated cgroup -- NOT a probe-created
+# child of it. Plan T1.12 is explicit: "a probe that enabled controllers on a
+# different, empty parent would not prove the real <D> accepts subtree_control".
+# It also matters mechanically: a freshly-created child of <D> inherits an EMPTY
+# cgroup.controllers until <D> lists the controllers in its own
+# cgroup.subtree_control, so writing "+memory +pids +cpu" to that child fails
+# ENOENT (controller not available at this level) instead of the EBUSY the
+# ordering guard is asserting. <D> itself already lists memory/pids/cpu in
+# cgroup.controllers (checked above -- systemd's Delegate=yes + *Accounting=yes
+# propagate them down) and already holds this script's PID as a direct member,
+# which is exactly the production supervisor's situation at startup.
+#
+# The migrate-then-enable bootstrap below is therefore not spike invention: it
+# mirrors, for this standalone probe, what T1.4/T1.11 (P1 -- iolbox-supervisor
+# startup, NOT yet built) will do on the real <D>. Do not "simplify" it away.
+CGROUP_D="$CGROUP_BASE"
 SUPERVISOR_LEAF="$CGROUP_D/supervisor"
-mkdir "$CGROUP_D"
-echo "$$" > "$CGROUP_D/cgroup.procs"
+grep -Eqx "$$" "$CGROUP_D/cgroup.procs" || \
+	fail "T0.3 probe PID $$ is not a direct member of the delegated root <D>=$CGROUP_D"
+[[ ! -e "$SUPERVISOR_LEAF" ]] || fail "T0.3 refuses to reuse an existing $SUPERVISOR_LEAF"
 if python3 - "$CGROUP_D/cgroup.subtree_control" <<'PY'
 import errno
 import sys
@@ -215,10 +239,14 @@ then
 else
 	fail "T0.3 ordering guard did not return EBUSY while D held the probe PID"
 fi
-mkdir "$SUPERVISOR_LEAF"
+# T1.11 startup order, steps (1)-(3): create the level-2 supervisor leaf,
+# migrate our own PID into it so <D> is process-empty, and only THEN enable the
+# controllers for <D>'s children. Step (3) before (2) is the EBUSY just proven.
+mkdir "$SUPERVISOR_LEAF" || fail "T0.3 could not create the level-2 supervisor leaf $SUPERVISOR_LEAF"
 echo "$$" > "$SUPERVISOR_LEAF/cgroup.procs"
 [[ ! -s "$CGROUP_D/cgroup.procs" ]] || fail "T0.3 supervisor PID was not migrated out of D"
 echo '+memory +pids +cpu' > "$CGROUP_D/cgroup.subtree_control"
+CGROUP_D_SUBTREE_ENABLED=1
 pass "T0.3 3-level hierarchy: D -> supervisor -> tool leaves"
 
 echo "==> T0.4 fixture: veth create-temp-move-rename"
@@ -531,10 +559,16 @@ PEER_FRAMES="$(tcpdump -nn -r "$PEER_PCAP" arp 2>/dev/null | wc -l)"
 pass "T0.9 peer RX count=$PEER_FRAMES and iolbr0 capture frame count=$BRIDGE_FRAMES"
 kill_cgroup "$T09_CG"
 
-# Leave the probe-created cgroup root only after every level-3 test is gone.
-echo "$$" > "$CGROUP_BASE/cgroup.procs"
+# Restore <D> to its pre-probe shape, only after every level-3 leaf is gone.
+# <D> is this process's own delegated cgroup (systemd owns the directory), so it
+# is never rmdir'd -- we only undo the controllers this probe enabled and move
+# back out of the level-2 leaf. Order matters for the same reason it did during
+# bring-up: while +memory/+pids/+cpu are still in <D>/cgroup.subtree_control,
+# <D> may not hold processes, so the disable must precede the migrate.
+echo '-memory -pids -cpu' > "$CGROUP_D/cgroup.subtree_control" 2>/dev/null || true
+CGROUP_D_SUBTREE_ENABLED=0
+echo "$$" > "$CGROUP_D/cgroup.procs"
 rmdir "$SUPERVISOR_LEAF" 2>/dev/null || true
-rmdir "$CGROUP_D" 2>/dev/null || true
 SUPERVISOR_LEAF=""
 CGROUP_D=""
 
