@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -73,6 +74,20 @@ func runReaper(target, resultPath, setprivPath, launcherPath string) error {
 	case <-time.After(5 * time.Second):
 		close(stopReaper)
 		return errors.New("exec.Cmd.Wait did not deliver the GUI exit")
+	}
+
+	// The registered GUI is now confirmed dead (cmd.Wait delivered its exit), so
+	// the kernel has already reparented its children -- exit_notify() reparents
+	// onto the nearest PR_SET_CHILD_SUBREAPER ancestor BEFORE the dying parent is
+	// made reapable, so by the time Wait4 hands us the GUI's status the orphan's
+	// PPid is already this process. Nothing else in the fixture ever signals the
+	// grandchild, and its --grandchild mode blocks forever, so without an
+	// explicit SIGKILL here it never terminates and never becomes reapable. That
+	// kill IS the scenario T0.6 models: a tool's script child that has to be
+	// cleaned up after its GUI parent died.
+	if err := killReparentedOrphan(grandchildPID, 2*time.Second); err != nil {
+		close(stopReaper)
+		return err
 	}
 
 	if err := waitForOrphanReap(grandchildPID, reapedOrphans, 5*time.Second); err != nil {
@@ -183,6 +198,49 @@ func waitForGrandchildPID(timeout time.Duration) (int, error) {
 	return 0, fmt.Errorf("grandchild pid did not appear at %s", filepath.Clean(path))
 }
 
+// killReparentedOrphan confirms pid has been reparented onto this process --
+// which is both the T0.6 assertion (the subreaper, not init, inherited it) and
+// a cheap identity check that the pid read out of the pid file has not been
+// recycled onto some unrelated process -- and then SIGKILLs it so it becomes
+// reapable. The reparenting is not raced: it has already happened by the time
+// the registered child's exit status is delivered, so the first probe should
+// match; the poll only covers /proc bookkeeping lag.
+func killReparentedOrphan(pid int, timeout time.Duration) error {
+	self := os.Getpid()
+	deadline := time.Now().Add(timeout)
+	for {
+		ppid, err := parentPID(pid)
+		if err != nil {
+			return fmt.Errorf("inspect orphan %d: %w", pid, err)
+		}
+		if ppid == self {
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+				return fmt.Errorf("SIGKILL orphan %d: %w", pid, err)
+			}
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("orphan %d was not reparented onto the subreaper (PPid %d, want %d)", pid, ppid, self)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func parentPID(pid int) (int, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		rest, ok := strings.CutPrefix(line, "PPid:")
+		if !ok {
+			continue
+		}
+		return strconv.Atoi(strings.TrimSpace(rest))
+	}
+	return 0, fmt.Errorf("no PPid line in /proc/%d/status", pid)
+}
+
 func waitForOrphanReap(pid int, reaped <-chan int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -196,6 +254,19 @@ func waitForOrphanReap(pid int, reaped <-chan int, timeout time.Duration) error 
 			}
 		default:
 			if _, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); os.IsNotExist(err) {
+				// The /proc entry vanishing is not by itself proof that something
+				// other than reapLoop collected it: reapLoop removes the entry with
+				// its wait4 and only then publishes the pid, so a probe landing in
+				// that window would otherwise fail a run that actually passed. Give
+				// the notification a bounded chance to arrive before concluding the
+				// orphan was reaped behind our back.
+				select {
+				case got := <-reaped:
+					if got == pid {
+						return nil
+					}
+				case <-time.After(500 * time.Millisecond):
+				}
 				return errors.New("orphan disappeared without reaper observation")
 			}
 			time.Sleep(20 * time.Millisecond)
