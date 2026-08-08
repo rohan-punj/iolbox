@@ -118,8 +118,52 @@ here after a real Linux run. Do not convert a failed assertion or an unmet
 prerequisite into a passing record.
 
 ```text
-Date/target:
-Command:
-Result:
-Notes:
+Date/target: 2026-08-08, appliance VM 192.168.226.233 (Debian 12 bookworm)
+Command: cd /opt/iolbox-p1 && bash p1-gate.sh
+Result: P1 PASS: tool lifecycle, hot fabric attach/detach, crash sweep, and
+        clean stop completed on this Linux target.
+Notes: PASS on the 8th run of this gate against real hardware, after fixing
+       4 real bugs found only by live execution (none caught by go
+       build/vet/test, matching P0's pattern exactly):
+
+       1. LauncherAvailable() selected setpriv purely by its version number
+          (>=2.33). This appliance's setpriv 2.38.1 clears that floor but
+          still fails the pinned transition at runtime with
+          `setpriv: unknown capability "cap_net_raw"` -- confirmed directly
+          on the VM, the same appliance limitation P0 already worked around
+          empirically. Fixed by making LauncherAvailable() actually run the
+          pinned transition once and check the resulting capability state
+          before trusting setpriv, falling back to the native
+          iolbox-toollaunch helper (confirmed correct: delivers
+          0000000000002000 -- ambient CAP_NET_RAW only -- across all five
+          capability sets).
+       2. Detect()'s own probe misclassified two SUCCESSFUL checks as
+          failures: (a) its post-delete veth verification wrapped the stat
+          error before checking os.IsNotExist, which does not traverse %w
+          chains, so a genuinely-deleted veth was reported as "still
+          present"; (b) its AF_UNIX self-test closed the listener before
+          collecting the Accept() goroutine's result, a scheduling race that
+          reports "use of closed network connection" even when the dial
+          genuinely succeeded. Root-caused with a standalone debug binary
+          calling tool.Detect() directly and printing its Reasons map
+          (temporary, removed, never committed).
+       3 & 4. Two rounds of a TOCTOU race between direct-child spawn and the
+          process-wide subreaper loop: a fast `ip` command can exit before a
+          separate Registry.Add(pid) call runs, so the subreaper's
+          independent 10ms poll reaps it as an unregistered orphan first,
+          and the spawner's own cmd.Wait() then fails with
+          "waitid: no child processes". First fixed across the 11 call
+          sites the P1 dispatch plan's B10 batch had registered (which
+          assumed the race window was negligible -- disproven on real
+          hardware during a routine link.add); a second, worse instance
+          then surfaced one layer earlier in tool.go's own shared
+          runCmds/runCmdsBestEffort helpers (used by every netns/veth
+          operation), which predated the whole registration effort and
+          never registered at all. Fixed with PIDRegistry.StartAndAdd/
+          ReapUnregistered, making spawn+register and peek+reap mutually
+          exclusive under the registry's existing mutex.
+
+       All four fixes are commits on feat/learning-tool-nodes after the P1
+       dispatch plan's 17 batches landed. P1 is closed; see
+       [[iolab-learning-tools-p0]] memory for the full history.
 ```
