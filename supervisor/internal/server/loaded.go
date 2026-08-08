@@ -11,6 +11,7 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/slowtee"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
@@ -73,6 +74,10 @@ type nodeRuntime struct {
 	// goroutines the server drives via Start/Close, but the node state machine
 	// still reports running/stopped like any other node.
 	extnet *extnet.Endpoint
+	// tool is the running netns+cgroup process tree for a tool-kind node (nil
+	// for other kinds and until started). Unlike extnet it supervises a process
+	// tree; unlike proc it is not a pty-spawned node.Process.
+	tool *tool.Endpoint
 	// natSubnet is the allocated 172.31.<n>.0/24 index for a nat node (0 until
 	// started / for non-nat nodes), released back to the server on stop.
 	natSubnet int
@@ -156,6 +161,13 @@ func (ll *loadedLab) stopAll() {
 		if nr.extnet != nil {
 			_ = nr.extnet.Close()
 			nr.extnet = nil
+			nr.machine.To(node.StateStopped)
+		}
+		// The authoritative per-node teardown is stopNode's tool branch; this
+		// whole-lab pass is the safety net used during supervisor shutdown.
+		if nr.tool != nil {
+			_ = nr.tool.Stop()
+			nr.tool = nil
 			nr.machine.To(node.StateStopped)
 		}
 	}

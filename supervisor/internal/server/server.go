@@ -18,6 +18,7 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/image"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // Config configures a Server.
@@ -46,6 +47,12 @@ type Config struct {
 	// loopback); set 0.0.0.0 so a native Wireshark on the GUI host can attach
 	// with `wireshark -k -i TCP@<vm-ip>:<capturePort>`. Set via -capture-bind.
 	CaptureBind string
+	// ToolPacksDir is where the supervisor discovers installed tool-pack
+	// manifests. Empty defaults to /opt/iolbox/tools/packs.
+	ToolPacksDir string
+	// StateDir is where durable tool identity and object state are stored.
+	// Empty defaults to /var/lib/iolbox.
+	StateDir string
 	// Runtime/Arch are advertised in the hello handshake.
 	Runtime string
 	Arch    string
@@ -70,6 +77,17 @@ type Server struct {
 	// caps reports which external-net node kinds (nat/mgmt) the runtime supports,
 	// detected once at startup. Advertised in hello; enforced at lab.start.
 	caps extnet.Capabilities
+	// toolCaps reports whether the runtime can safely host tool process trees.
+	// It is populated by InitRuntime and remains zero when startup cannot
+	// establish the required delegation.
+	toolCaps tool.Capabilities
+	// toolRoot is the delegated cgroup root used by tool cages.
+	toolRoot tool.CgroupRoot
+	// toolPacks is the validated installed-pack registry used by tool handlers.
+	toolPacks []tool.Pack
+	// toolStop stops the supervisor-scope orphan reaper, when runtime startup
+	// reached the point at which the reaper was started.
+	toolStop func()
 
 	// egress is the resolved internet-egress capability ("slirp" or "routed"),
 	// from the -egress flag / auto-detection at startup. Advertised in hello so
@@ -106,6 +124,12 @@ func New(cfg Config) *Server {
 	if cfg.Egress == "" {
 		cfg.Egress = "auto"
 	}
+	if cfg.ToolPacksDir == "" {
+		cfg.ToolPacksDir = "/opt/iolbox/tools/packs"
+	}
+	if cfg.StateDir == "" {
+		cfg.StateDir = "/var/lib/iolbox"
+	}
 	s := &Server{
 		cfg:          cfg,
 		disp:         protocol.NewDispatcher(),
@@ -114,6 +138,7 @@ func New(cfg Config) *Server {
 		udpPorts:     node.NewPortAllocator(10000, 20000),
 		natSubnets:   extnet.NewSubnetAllocator(),
 		images:       make(map[string]image.Info),
+		toolPacks:    []tool.Pack{},
 		bc:           newBroadcaster(),
 	}
 	// Detect nat support once: nat needs /dev/net/tun + passwordless sudo. Off
@@ -127,9 +152,55 @@ func New(cfg Config) *Server {
 	return s
 }
 
+// InitRuntime performs the kernel-affecting tool startup sequence only for
+// the real supervisor process. Keeping it out of New lets control-plane tests
+// construct servers without migrating their own PID or creating probe cages.
+func (s *Server) InitRuntime() error {
+	if err := tool.SetSubreaper(); err != nil {
+		return fmt.Errorf("tool: set subreaper: %w", err)
+	}
+
+	root, err := tool.InitCgroupRoot()
+	if err != nil {
+		return fmt.Errorf("tool: initialize cgroup root: %w", err)
+	}
+	s.toolRoot = root
+
+	instanceID, err := tool.InstanceID(s.cfg.StateDir)
+	if err != nil {
+		return fmt.Errorf("tool: establish instance identity: %w", err)
+	}
+	if err := tool.ReapStale(tool.ReapConfig{
+		Root:       s.toolRoot,
+		StateDir:   s.cfg.StateDir,
+		RunDir:     s.cfg.RunDir,
+		InstanceID: instanceID,
+	}); err != nil {
+		return fmt.Errorf("tool: reap stale objects: %w", err)
+	}
+
+	s.toolStop = tool.StartReaper(tool.Registry)
+	s.toolCaps = tool.Detect(s.toolRoot)
+	s.toolpacksLoad(s.cfg.ToolPacksDir)
+	return nil
+}
+
+// StopRuntime closes the supervisor-scope reaper after listeners have
+// stopped accepting work. Clearing the function first makes repeated cleanup
+// calls harmless, including when InitRuntime failed before the reaper started.
+func (s *Server) StopRuntime() {
+	if s.toolStop == nil {
+		return
+	}
+	stop := s.toolStop
+	s.toolStop = nil
+	stop()
+}
+
 // register wires every verb to its handler.
 func (s *Server) register() {
 	s.disp.Handle("hello", s.handleHello)
+	s.disp.Handle("tool.listPacks", s.handleToolListPacks)
 	s.disp.Handle("image.list", s.handleImageList)
 	s.disp.Handle("image.register", s.handleImageRegister)
 	s.disp.Handle("lab.load", s.handleLabLoad)

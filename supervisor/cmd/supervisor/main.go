@@ -70,6 +70,9 @@ func main() {
 		Version:     version,
 		Egress:      *egressMode,
 	})
+	if err := srv.InitRuntime(); err != nil {
+		log.Printf("supervisor: tool runtime unavailable: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -101,6 +104,8 @@ func main() {
 	}
 
 	wg.Wait()
+	// Stop immediately: a defer would be skipped if the error drain below calls log.Fatalf.
+	srv.StopRuntime()
 	close(errCh)
 	for err := range errCh {
 		if err != nil {
