@@ -77,6 +77,14 @@ route + the session-auth gate, T2.5); `runtime/build-rootfs.sh` +
 
 ## P0 — Spike: prove the risky primitives on the builder (no pack, no frontend)
 
+**STATUS (2026-08-08): T0.1–T0.8 PASS on real hardware (appliance VM
+192.168.226.233). T0.9 not yet run (blocked by a live lab already using the
+production `iolbr0` bridge on that box — the test correctly refused to touch it).
+7 real implementation bugs were found and fixed getting here; see
+`docs/tests/p0-spike.md`'s run log and `git log --oneline main..feat/learning-tool-nodes`
+on branch `feat/learning-tool-nodes` for the full list. P0 is not fully closed until
+T0.9 runs clean on a lab-free target.**
+
 **Goal:** on a real target runtime, prove every kernel-primitive claim the design
 rests on with explicit pass/fail acceptance tests plus a **hostile probe program**,
 so P1 builds on proven ground rather than assumptions.
