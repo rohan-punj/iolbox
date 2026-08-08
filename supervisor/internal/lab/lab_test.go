@@ -1,6 +1,9 @@
 package lab
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func goodLab() *Lab {
 	eth := 1
@@ -98,6 +101,62 @@ func TestValidateNatNodes(t *testing.T) {
 				},
 			}
 			c.mutate(l)
+			if err := l.Validate(); err == nil {
+				t.Fatalf("expected error for %q", c.name)
+			}
+		})
+	}
+}
+
+// TestValidateToolNodes confirms a tool node's structural pack and endpoint
+// constraints remain independent of the installed-pack registry.
+func TestValidateToolNodes(t *testing.T) {
+	good := &Lab{
+		Version: 1, ID: "lab-tool", Name: "tool",
+		Nodes: []Node{
+			{ID: 0, Kind: KindIOL, Name: "R1", Image: &ImageRef{ID: "abc"}},
+			{ID: 1, Kind: KindTool, Name: "Secbench", Config: map[string]json.RawMessage{
+				"pack": json.RawMessage(`"stub"`),
+			}},
+		},
+		Links: []Link{{
+			ID: 0, Type: LinkP2P,
+			Endpoints: []Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth1"}},
+		}},
+	}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid tool lab rejected: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Lab)
+	}{
+		{"missing pack", func(l *Lab) { l.Nodes[1].Config = nil }},
+		{"empty pack", func(l *Lab) {
+			l.Nodes[1].Config = map[string]json.RawMessage{"pack": json.RawMessage(`""`)}
+		}},
+		{"pack is not a string", func(l *Lab) {
+			l.Nodes[1].Config = map[string]json.RawMessage{"pack": json.RawMessage(`123`)}
+		}},
+		{"non-eth1 interface", func(l *Lab) {
+			l.Links[0].Endpoints[1].Interface = "eth0"
+		}},
+		{"two link endpoints", func(l *Lab) {
+			l.Links = append(l.Links, Link{ID: 1, Type: LinkP2P, Endpoints: []Endpoint{
+				{Node: 0, Interface: "e0/1"}, {Node: 1, Interface: "eth1"},
+			}})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := *good
+			l.Nodes = append([]Node(nil), good.Nodes...)
+			l.Links = append([]Link(nil), good.Links...)
+			for i := range l.Links {
+				l.Links[i].Endpoints = append([]Endpoint(nil), good.Links[i].Endpoints...)
+			}
+			c.mutate(&l)
 			if err := l.Validate(); err == nil {
 				t.Fatalf("expected error for %q", c.name)
 			}

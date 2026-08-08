@@ -464,6 +464,31 @@ type StatusResult struct {
 	Links []StatusLink `json:"links"`
 }
 
+// ToolListPacksArgs is the tool.listPacks request payload.
+type ToolListPacksArgs struct{}
+
+// ToolListPacksResult is the tool.listPacks response payload.
+type ToolListPacksResult struct {
+	Packs []ToolPackInfo `json:"packs"`
+}
+
+// ToolPackInfo is the wire-safe palette metadata for one installed tool pack.
+type ToolPackInfo struct {
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	Icon      string           `json:"icon"`
+	Transport string           `json:"transport"`
+	Groups    []string         `json:"groups"`
+	Modules   []ToolModuleInfo `json:"modules"`
+}
+
+// ToolModuleInfo is the wire-safe palette metadata for one tool-pack module.
+type ToolModuleInfo struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Group string `json:"group"`
+}
+
 // --- event payloads ---
 
 // NodeStateData is the node.state event payload.

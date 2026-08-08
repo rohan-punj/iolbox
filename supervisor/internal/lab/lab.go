@@ -46,6 +46,11 @@ const (
 	// that connects the lab to the outside world (see internal/extnet). Its one
 	// connectable interface is "eth0".
 	KindNAT Kind = "nat"
+	// KindTool is a bundled learning-tool node (e.g. secbench) run as a
+	// supervised process tree in a netns + cgroup cage. It has exactly one
+	// connectable interface, "eth1"; tool-specific data rides the existing
+	// Config map[string]json.RawMessage rather than new top-level Node fields.
+	KindTool Kind = "tool"
 )
 
 // Node is a single lab device.
@@ -66,7 +71,8 @@ type Node struct {
 	Serial *int `json:"serial,omitempty"`
 	// StartupConfig is embedded day-0 IOS CLI, injected into NVRAM at boot.
 	StartupConfig string `json:"startupConfig,omitempty"`
-	// Config is reserved for kind-specific extras (e.g. vpcs canned commands).
+	// Config is reserved for kind-specific extras (e.g. vpcs canned commands or
+	// a tool pack identity).
 	Config map[string]json.RawMessage `json:"config,omitempty"`
 }
 
@@ -129,7 +135,8 @@ type Capture struct {
 type Endpoint struct {
 	// Node is a node.id.
 	Node int `json:"node"`
-	// Interface is 'e0/0'/'s1/1' for IOL, 'eth0' for VPCS.
+	// Interface is 'e0/0'/'s1/1' for IOL, 'eth0' for VPCS/NAT, or 'eth1' for a
+	// tool node.
 	Interface string `json:"interface"`
 }
 
