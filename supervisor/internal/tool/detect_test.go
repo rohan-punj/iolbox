@@ -1,6 +1,43 @@
 package tool
 
-import "testing"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// The cleanup verification in the Linux probe treats "absent" as the success
+// case after teardown, and the absence is observed through a stat error that
+// has been annotated with context. os.IsNotExist does not traverse %w chains,
+// so it classified a correct teardown as an unverifiable failure on the
+// appliance. detectIsNotExist must see through arbitrary wrapping.
+func TestDetectIsNotExistTraversesWrappedErrors(t *testing.T) {
+	_, rawErr := os.Stat(filepath.Join(t.TempDir(), "absent"))
+	if rawErr == nil {
+		t.Fatal("stat of an absent path returned no error")
+	}
+	if !detectIsNotExist(rawErr) {
+		t.Fatalf("detectIsNotExist(raw stat error) = false, error = %v", rawErr)
+	}
+
+	wrapped := fmt.Errorf("tool: host veth vtool9000000 is absent: %w", rawErr)
+	if !detectIsNotExist(wrapped) {
+		t.Fatalf("detectIsNotExist(wrapped stat error) = false, error = %v", wrapped)
+	}
+	doubleWrapped := fmt.Errorf("cleanup verify veth: %w", wrapped)
+	if !detectIsNotExist(doubleWrapped) {
+		t.Fatalf("detectIsNotExist(double-wrapped stat error) = false, error = %v", doubleWrapped)
+	}
+
+	if detectIsNotExist(nil) {
+		t.Fatal("detectIsNotExist(nil) = true")
+	}
+	if detectIsNotExist(errors.New("permission denied")) {
+		t.Fatal("detectIsNotExist(unrelated error) = true")
+	}
+}
 
 func TestDetectCapabilitiesAggregation(t *testing.T) {
 	results := make(map[string]detectStepResult, len(detectProbeSteps))

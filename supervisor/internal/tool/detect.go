@@ -1,5 +1,24 @@
 package tool
 
+import (
+	"errors"
+	"io/fs"
+)
+
+// detectIsNotExist reports whether err, or any error it wraps, means "the
+// object does not exist".
+//
+// os.IsNotExist must not be used for this: it only unwraps the three concrete
+// types it knows about (*fs.PathError, *os.LinkError, *os.SyscallError) and has
+// no knowledge of fmt.Errorf %w chains, so an ENOENT that has been annotated
+// with context is reported as an unknown failure. The probe classifies "the
+// object is absent" as the success case after cleanup, so that misclassification
+// turns a correct teardown into a capability failure. errors.Is walks the whole
+// chain and is the supported check.
+func detectIsNotExist(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
+}
+
 // detectProbeStep is the portable description of one operational capability
 // check. Keeping the ordering and fallback explanations here lets callers make
 // one stable feature-gate decision even when an individual Linux probe fails.

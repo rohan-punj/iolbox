@@ -33,6 +33,15 @@ exit 0
 
 const detectProbeWaitTimeout = 5 * time.Second
 
+// detectProbeSocketTimeout bounds both the listener deadline and the dial of
+// the AF_UNIX handshake. detectProbeAcceptTimeout is the backstop for waiting
+// on the accept goroutine; it must exceed the listener deadline so a legitimate
+// deadline expiry is reported as an accept failure rather than a probe hang.
+const (
+	detectProbeSocketTimeout = time.Second
+	detectProbeAcceptTimeout = 3 * detectProbeSocketTimeout
+)
+
 type detectProbeUser struct {
 	uid int
 	gid int
@@ -84,13 +93,13 @@ func detectRunProbe(root CgroupRoot) map[string]detectStepResult {
 		switch {
 		case hostVethErr == nil:
 			vethErr = fmt.Errorf("tool: probe host veth %s already exists", HostVethName(probeID))
-		case !os.IsNotExist(hostVethErr):
+		case !detectIsNotExist(hostVethErr):
 			vethErr = fmt.Errorf("tool: inspect probe host veth: %w", hostVethErr)
 		default:
 			vethErr = CreateVethPair(probeID)
 		}
 		vethCreated = vethErr == nil
-		if vethErr != nil && hostVethErr != nil && os.IsNotExist(hostVethErr) {
+		if vethErr != nil && hostVethErr != nil && detectIsNotExist(hostVethErr) {
 			// CreateVethPair has several kernel operations. If a later one
 			// fails after `ip link add`, the root-side device still needs
 			// teardown even though the constructor returned an error.
@@ -121,13 +130,13 @@ func detectRunProbe(root CgroupRoot) map[string]detectStepResult {
 		candidatePath := filepath.Join(root.Delegated, CageName(probeID))
 		if _, err := os.Lstat(candidatePath); err == nil {
 			cageErr = fmt.Errorf("tool: probe cage %s already exists", candidatePath)
-		} else if !os.IsNotExist(err) {
+		} else if !detectIsNotExist(err) {
 			cageErr = fmt.Errorf("tool: inspect probe cage %s: %w", candidatePath, err)
 		} else {
 			cagePath = candidatePath
 			_, cageFD, cageErr = CreateCage(root, probeID, DefaultLimits())
 			if cageErr != nil {
-				if _, statErr := os.Lstat(cagePath); os.IsNotExist(statErr) {
+				if _, statErr := os.Lstat(cagePath); detectIsNotExist(statErr) {
 					cagePath = ""
 				}
 			}
@@ -217,7 +226,7 @@ func detectProbeHostVethPresence(nodeID int) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if os.IsNotExist(err) {
+	if detectIsNotExist(err) {
 		return false, nil
 	}
 	return false, fmt.Errorf("tool: inspect host veth %s: %w", HostVethName(nodeID), err)
@@ -296,7 +305,7 @@ func detectProbeUnixSocket(nodeID int, owner detectProbeUser, lookupErr error) (
 	}
 	if _, err := os.Lstat(directory); err == nil {
 		return fmt.Errorf("tool: probe socket directory %s already exists", directory)
-	} else if !os.IsNotExist(err) {
+	} else if !detectIsNotExist(err) {
 		return fmt.Errorf("tool: inspect socket directory %s: %w", directory, err)
 	}
 
@@ -309,7 +318,7 @@ func detectProbeUnixSocket(nodeID int, owner detectProbeUser, lookupErr error) (
 		}
 		if _, err := os.Lstat(directory); err == nil {
 			return fmt.Errorf("tool: probe socket directory %s remains", directory)
-		} else if !os.IsNotExist(err) {
+		} else if !detectIsNotExist(err) {
 			return fmt.Errorf("tool: verify probe socket directory removal: %w", err)
 		}
 		return nil
@@ -338,15 +347,25 @@ func detectProbeUnixSocket(nodeID int, owner detectProbeUser, lookupErr error) (
 		return fmt.Errorf("tool: socket directory ownership is not ioltool")
 	}
 
-	socketPath := filepath.Join(directory, "probe.sock")
+	return detectProbeSocketHandshake(filepath.Join(directory, "probe.sock"))
+}
+
+// detectProbeSocketHandshake binds an AF_UNIX listener, dials it, and requires
+// both sides of the handshake to succeed.
+//
+// The accept result must be collected before the listener is closed. Closing a
+// listener makes an in-flight Accept return "use of closed network connection",
+// so closing first races the accept goroutine and reports a handshake that
+// genuinely completed on the wire as a probe failure.
+func detectProbeSocketHandshake(socketPath string) error {
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return fmt.Errorf("tool: bind probe AF_UNIX socket: %w", err)
 	}
-	unixListener, ok := listener.(*net.UnixListener)
-	if ok {
-		_ = unixListener.SetDeadline(time.Now().Add(time.Second))
+	if unixListener, ok := listener.(*net.UnixListener); ok {
+		_ = unixListener.SetDeadline(time.Now().Add(detectProbeSocketTimeout))
 	}
+
 	acceptResult := make(chan error, 1)
 	go func() {
 		connection, acceptErr := listener.Accept()
@@ -355,15 +374,35 @@ func detectProbeUnixSocket(nodeID int, owner detectProbeUser, lookupErr error) (
 		}
 		acceptResult <- acceptErr
 	}()
-	connection, err := net.DialTimeout("unix", socketPath, time.Second)
+
+	connection, dialErr := net.DialTimeout("unix", socketPath, detectProbeSocketTimeout)
 	if connection != nil {
 		_ = connection.Close()
 	}
-	closeErr := listener.Close()
-	if err != nil {
-		return fmt.Errorf("tool: dial probe AF_UNIX socket: %w", err)
+
+	// The listener deadline bounds Accept even when the dial failed, so this
+	// wait always completes. The timer is only a backstop for a platform that
+	// refuses the deadline: closing the listener then releases Accept, which is
+	// exactly the shutdown the success path must avoid doing early.
+	listenerClosed := false
+	var acceptErr error
+	select {
+	case acceptErr = <-acceptResult:
+	case <-time.After(detectProbeAcceptTimeout):
+		_ = listener.Close()
+		listenerClosed = true
+		acceptErr = <-acceptResult
 	}
-	if acceptErr := <-acceptResult; acceptErr != nil {
+
+	var closeErr error
+	if !listenerClosed {
+		closeErr = listener.Close()
+	}
+
+	if dialErr != nil {
+		return fmt.Errorf("tool: dial probe AF_UNIX socket: %w", dialErr)
+	}
+	if acceptErr != nil {
 		return fmt.Errorf("tool: accept probe AF_UNIX socket: %w", acceptErr)
 	}
 	if closeErr != nil {
@@ -393,7 +432,7 @@ func detectProbeCleanup(nodeID int, netnsCreated, vethCreated bool, cagePath str
 		}
 		if _, err := os.Lstat(cagePath); err == nil {
 			failures["cgroupDelegated"] = detectProbeReason("cgroupDelegated", fmt.Errorf("cleanup cgroup %s remains", cagePath))
-		} else if !os.IsNotExist(err) {
+		} else if !detectIsNotExist(err) {
 			failures["cgroupDelegated"] = detectProbeReason("cgroupDelegated", fmt.Errorf("cleanup verify cgroup: %w", err))
 		}
 	}
@@ -409,15 +448,17 @@ func detectProbeCleanup(nodeID int, netnsCreated, vethCreated bool, cagePath str
 	}
 	if vethCreated {
 		_ = DeleteVeth(nodeID)
-		if err := detectProbeHostVeth(nodeID); err == nil {
-			failure := detectProbeReason("vethCreate", fmt.Errorf("cleanup veth %s remains", HostVethName(nodeID)))
-			failures["vethCreate"] = failure
-			failures["vethMoveRename"] = detectProbeReason("vethMoveRename", fmt.Errorf("cleanup veth %s remains", HostVethName(nodeID)))
-		} else if !os.IsNotExist(err) {
-			// A missing sysfs entry is the expected success case; any other
-			// error means absence could not be verified.
+		// A missing sysfs entry is the expected success case; only a stat
+		// error that is not "does not exist" means absence could not be
+		// verified. detectProbeHostVethPresence performs that classification
+		// on the raw stat error, mirroring the netns block above.
+		present, err := detectProbeHostVethPresence(nodeID)
+		if err != nil {
 			failures["vethCreate"] = detectProbeReason("vethCreate", fmt.Errorf("cleanup verify veth: %w", err))
 			failures["vethMoveRename"] = detectProbeReason("vethMoveRename", fmt.Errorf("cleanup verify veth: %w", err))
+		} else if present {
+			failures["vethCreate"] = detectProbeReason("vethCreate", fmt.Errorf("cleanup veth %s remains", HostVethName(nodeID)))
+			failures["vethMoveRename"] = detectProbeReason("vethMoveRename", fmt.Errorf("cleanup veth %s remains", HostVethName(nodeID)))
 		}
 	}
 	return failures

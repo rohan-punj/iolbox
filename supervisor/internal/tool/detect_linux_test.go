@@ -8,6 +8,31 @@ import (
 	"testing"
 )
 
+// The handshake closed its listener as soon as the dial returned, which raced
+// the accept goroutine: Accept then reported "use of closed network
+// connection" for a connection that had genuinely been established. The race
+// is timing dependent, so the assertion is repetition against real sockets and
+// needs no privileges.
+func TestDetectProbeSocketHandshakeSucceedsRepeatedly(t *testing.T) {
+	directory := t.TempDir()
+	for attempt := 0; attempt < 200; attempt++ {
+		socketPath := filepath.Join(directory, "probe.sock")
+		if err := detectProbeSocketHandshake(socketPath); err != nil {
+			t.Fatalf("attempt %d: detectProbeSocketHandshake() error = %v", attempt, err)
+		}
+		if err := os.Remove(socketPath); err != nil {
+			t.Fatalf("attempt %d: remove probe socket: %v", attempt, err)
+		}
+	}
+}
+
+func TestDetectProbeSocketHandshakeReportsBindFailure(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "missing", "probe.sock")
+	if err := detectProbeSocketHandshake(socketPath); err == nil {
+		t.Fatal("detectProbeSocketHandshake() on an unbindable path returned no error")
+	}
+}
+
 func TestDetectLinuxProbeCleansEveryObject(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("the operational tool probe requires root")
