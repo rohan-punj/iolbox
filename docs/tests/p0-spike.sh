@@ -217,6 +217,16 @@ fi
 
 start_tool() {
 	local ns="$1" cg="$2" target="$3" log="$4"
+	shift 4
+	# Anything after the fixed four is an argument FOR THE TARGET (e.g. capsh's
+	# `--print`). It cannot ride in the environment -- `env -i` only carries
+	# scalars and an argv is a list -- so it is appended as trailing positional
+	# parameters of the inner `bash -c`, where `"$@"` splices it back onto the
+	# exec line. With no extra args `"$@"` expands to nothing at all (not an
+	# empty string), so every existing zero-arg caller is byte-for-byte
+	# unchanged. The `${a[@]+"${a[@]}"}` guard keeps an empty array legal under
+	# `set -u` on pre-4.4 bash.
+	local extra_args=("$@")
 	(
 		# Join the cage HERE, in the root mount namespace, before handing off to
 		# `ip netns exec`. iproute2's netns_switch() unshares a mount namespace,
@@ -243,7 +253,8 @@ start_tool() {
 			IOLBOX_HOSTILE_ORPHAN_PID_FILE="${IOLBOX_HOSTILE_ORPHAN_PID_FILE-}" \
 			IOLBOX_HOSTILE_LINGER="${IOLBOX_HOSTILE_LINGER-}" IOLBOX_HOST_IFACE="${IOLBOX_HOST_IFACE-}" \
 			IOLBOX_HOST_FILE="${IOLBOX_HOST_FILE-}" \
-			bash -c 'if [[ "$IOLBOX_LAUNCH_MODE" == setpriv ]]; then exec "$IOLBOX_SETPRIV" --reuid ioltool --regid ioltool --clear-groups --no-new-privs --bounding-set -all,+cap_net_raw --inh-caps -all,+cap_net_raw --ambient-caps -all,+cap_net_raw -- "$IOLBOX_TARGET"; else exec "$IOLBOX_NATIVE" --user ioltool -- "$IOLBOX_TARGET"; fi'
+			bash -c 'if [[ "$IOLBOX_LAUNCH_MODE" == setpriv ]]; then exec "$IOLBOX_SETPRIV" --reuid ioltool --regid ioltool --clear-groups --no-new-privs --bounding-set -all,+cap_net_raw --inh-caps -all,+cap_net_raw --ambient-caps -all,+cap_net_raw -- "$IOLBOX_TARGET" "$@"; else exec "$IOLBOX_NATIVE" --user ioltool -- "$IOLBOX_TARGET" "$@"; fi' \
+			iolbox-start-tool ${extra_args[@]+"${extra_args[@]}"}
 	) >"$log" 2>&1 &
 	LAST_PID=$!
 	PIDS+=("$LAST_PID")
@@ -365,7 +376,10 @@ pass "T0.2 final /proc/self/status has raw-only caps and no-new-privs (mode=$LAU
 
 CAPSH="$(command -v capsh)"
 CAPSH_LOG="$LOG_ROOT/capsh.log"
-start_tool "$TOOL_NS" "$CAP_CG" "$CAPSH" "$CAPSH_LOG"
+# `--print` is mandatory: capsh with no action arguments prints NOTHING, it just
+# execs SHELL (/bin/bash), which -- with stdin not a TTY here -- exits 0 with an
+# empty log and makes every assertion below silently unmatchable.
+start_tool "$TOOL_NS" "$CAP_CG" "$CAPSH" "$CAPSH_LOG" --print
 CAPSH_PID="$LAST_PID"
 set +e
 wait "$CAPSH_PID"
@@ -391,7 +405,7 @@ else
 		wait_for_file "$IOLBOX_TOOL_STATUS_FILE"
 		grep -Eq '^Cap(Eff|Prm|Inh|Amb|Bnd):[[:space:]]+0*2000$' "$IOLBOX_TOOL_STATUS_FILE" || fail "native fallback final caps are not raw-only"
 		CAPSH_NATIVE_LOG="$LOG_ROOT/capsh-native.log"
-		start_tool "$TOOL_NS" "$CAP_CG" "$CAPSH" "$CAPSH_NATIVE_LOG"
+		start_tool "$TOOL_NS" "$CAP_CG" "$CAPSH" "$CAPSH_NATIVE_LOG" --print
 		CAPSH_NATIVE_PID="$LAST_PID"
 		set +e
 		wait "$CAPSH_NATIVE_PID"
