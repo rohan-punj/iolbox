@@ -1,7 +1,9 @@
 package tool
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +89,69 @@ func TestScrubEnvAllowlistOnly(t *testing.T) {
 	}
 	if got := ScrubEnv(extra); !reflect.DeepEqual(got, want) {
 		t.Fatalf("scrubbed env = %#v, want %#v", got, want)
+	}
+}
+
+func TestLaunchSelectModeRequiresVerifiedSetpriv(t *testing.T) {
+	probeFailure := errors.New(`setpriv: unknown capability "cap_net_raw"`)
+	nativeFailure := errors.New("no such file")
+
+	if mode, err := launchSelectMode(nil, nativeFailure); mode != "setpriv" || err != nil {
+		t.Fatalf("verified setpriv = (%q, %v), want (\"setpriv\", nil)", mode, err)
+	}
+	if mode, err := launchSelectMode(probeFailure, nil); mode != "native" || err != nil {
+		t.Fatalf("unverified setpriv with native = (%q, %v), want (\"native\", nil)", mode, err)
+	}
+	mode, err := launchSelectMode(probeFailure, nativeFailure)
+	if mode != "" || err == nil {
+		t.Fatalf("no usable launcher = (%q, %v), want (\"\", error)", mode, err)
+	}
+	// The failure must name both attempts so a deployment can tell an old or
+	// broken setpriv apart from a missing helper binary.
+	if !strings.Contains(err.Error(), probeFailure.Error()) || !strings.Contains(err.Error(), nativeFailure.Error()) {
+		t.Fatalf("error %q does not report both launcher failures", err)
+	}
+}
+
+func TestLaunchSelectorProbesOnlyOnce(t *testing.T) {
+	calls := 0
+	selector := &launchSelector{probe: func() (string, error) {
+		calls++
+		return "setpriv", nil
+	}}
+	for attempt := 0; attempt < 3; attempt++ {
+		mode, err := selector.selectMode()
+		if mode != "setpriv" || err != nil {
+			t.Fatalf("attempt %d = (%q, %v), want (\"setpriv\", nil)", attempt, mode, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("probe ran %d times, want 1", calls)
+	}
+}
+
+func TestLaunchSelectorCachesFailureWithoutReprobing(t *testing.T) {
+	calls := 0
+	want := errors.New("no usable cap-transition launcher")
+	selector := &launchSelector{probe: func() (string, error) {
+		calls++
+		return "", want
+	}}
+	for attempt := 0; attempt < 3; attempt++ {
+		mode, err := selector.selectMode()
+		if mode != "" || !errors.Is(err, want) {
+			t.Fatalf("attempt %d = (%q, %v), want (\"\", %v)", attempt, mode, err, want)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("probe ran %d times, want 1", calls)
+	}
+}
+
+func TestLaunchSelectorWithoutProbeFailsClosed(t *testing.T) {
+	selector := &launchSelector{}
+	if mode, err := selector.selectMode(); mode != "" || err == nil {
+		t.Fatalf("unconfigured selector = (%q, %v), want (\"\", error)", mode, err)
 	}
 }
 

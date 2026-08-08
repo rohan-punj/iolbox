@@ -1,8 +1,53 @@
 package tool
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"sync"
+)
 
 const launchNativePath = "/opt/iolbox/iolbox-toollaunch"
+
+// launchSelector memoizes one launcher decision per supervisor process. The
+// empirical setpriv verification behind probe costs a real subprocess, and
+// LauncherAvailable is consulted on every tool-node launch, so the verified
+// answer (success or failure) is computed once and reused. Keeping the type
+// portable lets tests exercise the caching contract with an injected probe on
+// any platform.
+type launchSelector struct {
+	once  sync.Once
+	probe func() (string, error)
+	mode  string
+	err   error
+}
+
+// selectMode returns the memoized launcher decision, running probe at most
+// once. Failures are cached too: a launcher that could not be verified must
+// not be re-probed per launch and must not become usable by retrying.
+func (s *launchSelector) selectMode() (string, error) {
+	s.once.Do(func() {
+		if s.probe == nil {
+			s.mode, s.err = "", fmt.Errorf("tool: launcher probe is not configured")
+			return
+		}
+		s.mode, s.err = s.probe()
+	})
+	return s.mode, s.err
+}
+
+// launchSelectMode applies the fail-closed launcher rule: setpriv is chosen
+// only when it has been verified to actually perform the pinned transition,
+// the shipped native helper is the fallback, and an unverifiable pair is an
+// error rather than an optimistic "try setpriv anyway" path.
+func launchSelectMode(setprivErr, nativeErr error) (string, error) {
+	if setprivErr == nil {
+		return "setpriv", nil
+	}
+	if nativeErr == nil {
+		return "native", nil
+	}
+	return "", fmt.Errorf("tool: no usable cap-transition launcher: setpriv: %v; native: %v", setprivErr, nativeErr)
+}
 
 // ScrubEnv keeps a pack's process environment deliberately small so a pack
 // cannot use inherited supervisor settings to steer imports or discover
