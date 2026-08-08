@@ -13,11 +13,52 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 const (
 	prSetChildSubreaper = 36
-	wnowait             = 0x01000000
+
+	// waitid(2) idtype and option values. These are kernel ABI constants
+	// spelled out by hand: package syscall exposes no Waitid wrapper on
+	// linux/amd64 and this module is stdlib-only (see go.mod -- no
+	// golang.org/x/sys), the same way p0-launcher spells out its prctl and
+	// capset constants.
+	pAll    = 0          // idtype_t P_ALL: any child, id ignored
+	wNoHang = 0x00000001 // WNOHANG
+	wExited = 0x00000004 // WEXITED
+	wNoWait = 0x01000000 // WNOWAIT: report, but leave the child reapable
+)
+
+// siginfo mirrors the kernel's siginfo_t as waitid(2) fills it in for a
+// SIGCHLD-shaped notification. Only the leading fields are named; the trailing
+// padding exists so the struct is exactly the 128 bytes the kernel writes.
+//
+// Layout note (x86-64): siginfo_t opens with si_signo, si_errno, si_code --
+// three int32s -- and then the union of signal-specific fields. The union
+// contains 8-byte members (si_addr, and the clock_t si_utime/si_stime of the
+// SIGCHLD arm), so it is 8-byte aligned and starts at offset 16, not 12; the
+// kernel spells this out as __ARCH_SI_PREAMBLE_SIZE == 4 * sizeof(int) in
+// arch/x86/include/uapi/asm/siginfo.h. si_pid is the first member of the
+// SIGCHLD arm, so it is an int32 at offset 16.
+type siginfo struct {
+	signo  int32
+	errno  int32
+	code   int32
+	_      int32  // union alignment padding (__ARCH_SI_PREAMBLE_SIZE)
+	pid    int32  // _sigchld._pid
+	uid    uint32 // _sigchld._uid
+	status int32  // _sigchld._status
+	_      int32
+	_      [12]uint64 // si_utime, si_stime, and the rest of the 128-byte tail
+}
+
+// Compile-time assertion that siginfo is exactly siginfo_t sized. Both
+// constants are untyped uintptr expressions, so either a short or a long
+// struct makes one of them negative and fails the build.
+const (
+	_ = unsafe.Sizeof(siginfo{}) - 128
+	_ = 128 - unsafe.Sizeof(siginfo{})
 )
 
 type pidRegistry struct {
@@ -159,6 +200,38 @@ func (r *pidRegistry) contains(pid int) bool {
 	return ok
 }
 
+// peekReapable reports the pid of a child that has exited and is waiting to be
+// collected WITHOUT collecting it -- the zombie is deliberately left in place
+// so the ownership split can decide who is allowed to reap it. It returns 0
+// when nothing is currently reapable, which includes the legitimate "this
+// process has no children at all" case: that is the state at loop startup, and
+// again in the window between the registered child being collected by
+// cmd.Wait() and the orphan being reparented onto this subreaper.
+//
+// The peek has to be waitid(2). WNOWAIT is a waitid-only option: kernel_wait4()
+// screens its options argument against
+// ~(WNOHANG|WUNTRACED|WCONTINUED|__WNOTHREAD|__WCLONE|__WALL) and returns
+// EINVAL for any other bit, and WNOWAIT (0x01000000) is not in that set. A
+// "peek" built on wait4 therefore never peeks -- every call fails with EINVAL
+// before it can report anything.
+func peekReapable() (int, error) {
+	var info siginfo
+	_, _, errno := syscall.Syscall6(syscall.SYS_WAITID,
+		pAll, 0, uintptr(unsafe.Pointer(&info)), wExited|wNoHang|wNoWait, 0, 0)
+	switch errno {
+	case 0:
+		// A WNOHANG waitid with nothing ready still succeeds; the kernel
+		// reports the empty result by writing si_signo == 0 and si_pid == 0.
+		return int(info.pid), nil
+	case syscall.ECHILD, syscall.EINTR:
+		// No children to wait on, or the poll was interrupted. Neither is an
+		// error here -- the caller just polls again.
+		return 0, nil
+	default:
+		return 0, errno
+	}
+}
+
 func reapLoop(registry *pidRegistry, reaped chan<- int, stop <-chan struct{}) {
 	for {
 		select {
@@ -167,11 +240,15 @@ func reapLoop(registry *pidRegistry, reaped chan<- int, stop <-chan struct{}) {
 		default:
 		}
 
-		var status syscall.WaitStatus
-		pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG|wnowait, nil)
+		// The peek is non-destructive, so a pid that belongs to the registered
+		// child stays reapable for cmd.Wait() to collect -- that is the whole
+		// ownership split. Only an unregistered pid is ours to reap, and that
+		// second wait4 (no WNOWAIT) is the destructive one.
+		pid, err := peekReapable()
 		if err == nil && pid > 0 && !registry.contains(pid) {
 			var orphanStatus syscall.WaitStatus
-			if orphanPID, reapErr := syscall.Wait4(pid, &orphanStatus, syscall.WNOHANG, nil); reapErr == nil && orphanPID == pid {
+			orphanPID, reapErr := syscall.Wait4(pid, &orphanStatus, syscall.WNOHANG, nil)
+			if reapErr == nil && orphanPID == pid {
 				reaped <- pid
 			}
 		}
