@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // Process is a spawned node process with its lifecycle state.
@@ -118,6 +119,11 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 		_ = ln.Close()
 		return nil, fmt.Errorf("node %d: pty start: %w", spec.NodeID, err)
 	}
+	// pty.Start has already started the direct child. Add its PID immediately;
+	// the tiny Start/Add race is intentional and bounded by making this the very
+	// next statement, so the supervisor reaper cannot mistake an IOL child for
+	// an orphan before cmd.Wait owns its exit status.
+	tool.Registry.Add(cmd.Process.Pid)
 
 	p := &Process{
 		Spec:    spec,
@@ -172,6 +178,7 @@ func spawnVPCS(spec Spec, m *Machine) (*Process, error) {
 		m.To(StateCrashed)
 		return nil, fmt.Errorf("node %d: vpcs start: %w", spec.NodeID, err)
 	}
+	tool.Registry.Add(cmd.Process.Pid)
 	pgid := cmd.Process.Pid // Setpgid makes the child its own group leader (pgid == pid)
 
 	p := &Process{
@@ -185,7 +192,14 @@ func spawnVPCS(spec Spec, m *Machine) (*Process, error) {
 	// Reap the launcher: vpcs daemonizes, so this returns almost immediately with
 	// success. Do NOT mark the node stopped/crashed on that reap — the real vpcs
 	// lives on in the process group. Readiness is decided by the console port.
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		// VPCS daemonizes, so Wait returns almost immediately and the real
+		// process lives on in the group; this registry entry is only for the
+		// short-lived launcher, while the daemonized grandchild is an orphan
+		// for the subreaper loop to collect.
+		tool.Registry.Remove(cmd.Process.Pid)
+	}()
 
 	// Wait for vpcs to open its telnet console port, then report running. If it
 	// never comes up, the process group is killed and the node is marked crashed.
@@ -394,6 +408,7 @@ func (p *Process) serveConsole() {
 // wait reaps the process and updates state on exit, then tears down the console.
 func (p *Process) wait() {
 	err := p.cmd.Wait()
+	tool.Registry.Remove(p.cmd.Process.Pid)
 	// If we deliberately stopped it, state is already/soon Stopped; only mark
 	// crashed when still running/starting.
 	switch p.Machine.State() {

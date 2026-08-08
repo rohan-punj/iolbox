@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 1,
+  "id": "stub",
+  "name": "Stub Tool",
+  "interpreter": "none",
+  "gui": {
+    "bin": "tool-stubgui",
+    "transport": "unix",
+    "console": "http",
+    "health": "/healthz"
+  },
+  "caps": [
+    "NET_RAW"
+  ],
+  "options": [],
+  "groups": [],
+  "modules": []
+}

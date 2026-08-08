@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // Endpoint is one running external-net endpoint: a nat node's tap fd plus a
@@ -70,7 +72,12 @@ func runCmds(cmds []cmd) error {
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Stderr = out
 		cmd.Stdout = out
-		err := cmd.Run()
+		err := cmd.Start()
+		if err == nil {
+			tool.Registry.Add(cmd.Process.Pid)
+			err = cmd.Wait()
+			tool.Registry.Remove(cmd.Process.Pid)
+		}
 		cancel()
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("extnet: `%s` timed out after %s "+
@@ -94,7 +101,13 @@ func runCmdsBestEffort(cmds []cmd) error {
 		out := &bytes.Buffer{}
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Stderr = out
-		if err := cmd.Run(); err != nil {
+		err := cmd.Start()
+		if err == nil {
+			tool.Registry.Add(cmd.Process.Pid)
+			err = cmd.Wait()
+			tool.Registry.Remove(cmd.Process.Pid)
+		}
+		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("`%s`: %v: %s", c.String(), err, strings.TrimSpace(out.String())))
 		}
 		cancel()

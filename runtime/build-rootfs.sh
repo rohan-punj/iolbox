@@ -41,6 +41,10 @@ SUITE="bookworm"                              # Debian 12, pinned deliberately (
 MIRROR="${DEBIAN_MIRROR:-https://deb.debian.org/debian}"
 SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"   # matches PLAN.md repo layout + .gitignore's /supervisor/bin/
 VPCS_BIN="$BUILD_DIR/vpcs/vpcs"               # fetch-vpcs.sh's output path
+TOOLLAUNCH_SOURCE="$SCRIPT_DIR/../tools/iolbox-toollaunch"
+TOOL_STUBGUI_SOURCE="$SCRIPT_DIR/../tools/tool-stubgui"
+TOOLLAUNCH_BIN="$BUILD_DIR/iolbox-toollaunch"
+TOOL_STUBGUI_BIN="$BUILD_DIR/tool-stubgui"
 INCLUDE_I386=1                                # docs/providers.md requires libc6:i386; opt out with --no-i386
 
 usage() {
@@ -132,7 +136,25 @@ EOF
     exit 1
 fi
 
+if ! command -v go >/dev/null 2>&1; then
+    echo "build-rootfs: Go is required to build the tool launch helpers" >&2
+    exit 1
+fi
+
 mkdir -p "$BUILD_DIR"
+
+# The helper binaries are standalone, dependency-free Linux tools. Build them
+# here so the shipped rootfs gets the same architecture and immutable payload
+# treatment as the supervisor; P2 owns population of the Python venv below.
+echo "== build-rootfs: building tool launch helpers (linux/amd64) =="
+(
+    cd "$TOOLLAUNCH_SOURCE"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOLLAUNCH_BIN" .
+)
+(
+    cd "$TOOL_STUBGUI_SOURCE"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOL_STUBGUI_BIN" .
+)
 if [ -d "$ROOTFS_DIR" ]; then
     echo "build-rootfs: removing previous rootfs at $ROOTFS_DIR"
     rm -rf "$ROOTFS_DIR"
@@ -175,6 +197,9 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 #             GUI capture tab; without it captures come up EMPTY (the always-on
 #             watcher uses in-process AF_PACKET so it still works — which is why
 #             only the capture tab, not the watcher, was affected).
+#   util-linux  setpriv (the cap/uid transition requires >= 2.33)
+#   libcap2-bin capsh (capability-state diagnostics and the P0 gate)
+#   python3 + python3-scapy (the tool-pack attack helpers)
 #   coreutils' hostid is used by -gen-iourc (in minbase already)
 # ca-certificates is omitted on purpose: the runtime itself makes no
 # outbound TLS connections (the NAT node MASQUERADEs lab traffic at L3;
@@ -183,7 +208,7 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 # button — without it a hypervisor-initiated shutdown (qemu QMP
 # system_powerdown, vmrun soft stop, OVA guest shutdown) is never acted
 # on in-guest and hosts fall back to hard-kill after their grace period.
-BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump"
+BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump,util-linux,libcap2-bin,python3,python3-scapy,python3-venv,libpcap0.8,passwd"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
@@ -229,6 +254,11 @@ else
     echo "== build-rootfs: --no-i386 given, skipping libc6:i386 (32-bit IOL images will NOT run) =="
 fi
 
+# T0.5 proved the tool boundary with this dedicated account. Keep it without a
+# home directory or login shell: pack GUIs run as ioltool, while their socket
+# and options files are created per node by the supervisor.
+chroot "$ROOTFS_DIR" useradd -r -M -s /usr/sbin/nologin ioltool
+
 # ---------------------------------------------------------------------------
 # Stage 3: strip docs/locales/caches to hit the size target
 # ---------------------------------------------------------------------------
@@ -264,12 +294,33 @@ install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/images"   # image library (uploads la
 install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/run"      # supervisor's per-lab runtime state (sockets, NETMAPs, nvram scratch) — swept by prestart-clean.sh
 install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/labs"     # durable lab-document store (-labs-dir); seed labs materialize here on first connect when empty
 
+# The tools tree is root-owned and immutable in the shipped image. P2
+# populates the shared venv; this batch reserves the spec-defined location.
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/stub"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/venv"
+# /run/iolbox/tool is traversable by ioltool but not writable; Endpoint.Start
+# creates each per-node 0700 socket directory below it.
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/run/iolbox/tool"
+
 # The supervisor binary itself (a FILE at /opt/iolbox/supervisor).
 install -m 0755 -o root -g root "$SUPERVISOR_BIN" "$ROOTFS_DIR/opt/iolbox/supervisor"
+
+# Tool launch transition helper; cgroup placement happens while this helper is
+# still privileged, before it drops to ioltool and execs the pack GUI.
+install -m 0755 -o root -g root "$TOOLLAUNCH_BIN" "$ROOTFS_DIR/opt/iolbox/iolbox-toollaunch"
 
 # VPCS binary. Lives in /opt/iolbox, which the supervisor unit puts on PATH
 # (the supervisor spawns `vpcs` by bare name).
 install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolbox/vpcs"
+
+# P1's gate fixture. The manifest is metadata only; options.json is deliberately
+# not shipped and is created per run by the supervisor in the socket directory.
+install -m 0644 -o root -g root "$SCRIPT_DIR/files/tools/packs/stub/pack.json" \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/stub/pack.json"
+install -m 0755 -o root -g root "$TOOL_STUBGUI_BIN" \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/stub/tool-stubgui"
 
 # firstboot-iourc.sh (called by both the systemd unit and the non-systemd
 # fallback init script) + the ExecStartPre stale-state sweep.

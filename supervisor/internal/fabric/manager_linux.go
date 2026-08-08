@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // cmdTimeout bounds each privileged command so a wedged `sudo` surfaces as a
@@ -109,7 +111,12 @@ func runOne(ctx context.Context, argv []string) (string, error) {
 	cmd := exec.CommandContext(cctx, name, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		tool.Registry.Add(cmd.Process.Pid)
+		err = cmd.Wait()
+		tool.Registry.Remove(cmd.Process.Pid)
+	}
 	if cctx.Err() == context.DeadlineExceeded {
 		return out.String(), fmt.Errorf("timed out after %s", cmdTimeout)
 	}

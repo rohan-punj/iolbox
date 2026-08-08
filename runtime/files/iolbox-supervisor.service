@@ -53,6 +53,17 @@ User=root
 WorkingDirectory=/opt/iolbox
 KillMode=control-group
 
+# systemd delegates a writable subtree to the supervisor. The supervisor
+# creates <D>/supervisor/ and migrates itself there before enabling controllers
+# on <D>; this is required by cgroup v2's no-internal-processes rule, so <D>
+# remains available for the sibling tool cages.
+Delegate=yes
+Delegate=memory pids cpu
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+
 # Supervisor + child IOL/VPCS output lands in the journal; invaluable when
 # debugging a runtime interactively (journalctl -u iolbox-supervisor).
 StandardOutput=journal

@@ -21,6 +21,12 @@
 # Needs procps (pkill), iproute2 (ip), coreutils — all in the runtime rootfs.
 set -u
 
+# The precise, durable cleanup path is the in-process tool.ReapStale(), scoped
+# by the install identity and its state file. This blunt iol* sweep remains for
+# the catastrophic case; its existing link loop also covers iolt*/vtool*
+# incidentally. Do not add a cgroup sweep here: ReapStale owns that job and a
+# wildcard shell sweep could cross install boundaries.
+
 # Stray processes from a previous unclean run.
 pkill -9 -f '/opt/iolbox/images/' 2>/dev/null || true   # IOL image binaries
 pkill -9 -x tcpdump 2>/dev/null || true                  # bridge-capture tees
@@ -38,5 +44,8 @@ done
 # Stale fabric netio sockets + per-lab run scratch.
 rm -rf /tmp/netio* 2>/dev/null || true
 rm -rf /opt/iolbox/run/* 2>/dev/null || true
+# Per-tool AF_UNIX socket directories. This also removes each node's
+# options.json, which is a per-run file and must never survive a restart.
+rm -rf /run/iolbox/tool/* 2>/dev/null || true
 
 exit 0

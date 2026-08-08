@@ -68,3 +68,6 @@ Thumbs.db
 /tools/tool-hostile/tool-hostile
 /tools/tool-stubgui/tool-stubgui
 /tools/iolbox-toollaunch/iolbox-toollaunch
+
+# Per-agent GOCACHE dirs used to avoid concurrent `go build` cache races
+.gocache*/
