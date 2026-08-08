@@ -111,9 +111,11 @@ func runOne(ctx context.Context, argv []string) (string, error) {
 	cmd := exec.CommandContext(cctx, name, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
-	err := cmd.Start()
+	// Start and register atomically: a bridge attach runs several fast `ip`
+	// commands, any of which can exit before a separate Add executes, letting
+	// the subreaper reap it and fail this Wait with "no child processes".
+	err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
 	if err == nil {
-		tool.Registry.Add(cmd.Process.Pid)
 		err = cmd.Wait()
 		tool.Registry.Remove(cmd.Process.Pid)
 	}

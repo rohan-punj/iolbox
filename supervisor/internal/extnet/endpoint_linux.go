@@ -72,9 +72,10 @@ func runCmds(cmds []cmd) error {
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Stderr = out
 		cmd.Stdout = out
-		err := cmd.Start()
+		// Start and register atomically: an `ip` command can exit before a
+		// separate Add executes, and the subreaper would then steal its status.
+		err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
 		if err == nil {
-			tool.Registry.Add(cmd.Process.Pid)
 			err = cmd.Wait()
 			tool.Registry.Remove(cmd.Process.Pid)
 		}
@@ -101,9 +102,10 @@ func runCmdsBestEffort(cmds []cmd) error {
 		out := &bytes.Buffer{}
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Stderr = out
-		err := cmd.Start()
+		// Start and register atomically: an `ip` command can exit before a
+		// separate Add executes, and the subreaper would then steal its status.
+		err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
 		if err == nil {
-			tool.Registry.Add(cmd.Process.Pid)
 			err = cmd.Wait()
 			tool.Registry.Remove(cmd.Process.Pid)
 		}

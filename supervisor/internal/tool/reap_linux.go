@@ -132,6 +132,14 @@ func reapPeekable() (int, error) {
 // reapLoop polls at supervisor scope because orphaned grandchildren reparent
 // there. It leaves registered direct children to their own cmd.Wait and uses a
 // separate PID-specific collection only for an unregistered orphan.
+//
+// The registered check and the destructive collection run together inside
+// ReapUnregistered, under the same registry lock that StartAndAdd holds across
+// a spawn site's fork+exec. Without that, a child that exited between its
+// spawner's Start and Add was visible here as an unregistered orphan and was
+// reaped out from under the spawner's cmd.Wait ("waitid: no child processes").
+// The lock is held only for the check plus the WNOHANG wait4, so the poll
+// cadence below is unaffected.
 func reapLoop(reg *PIDRegistry, stop <-chan struct{}) {
 	for {
 		select {
@@ -141,9 +149,11 @@ func reapLoop(reg *PIDRegistry, stop <-chan struct{}) {
 		}
 
 		pid, err := reapPeekable()
-		if err == nil && pid > 0 && !reg.Contains(pid) {
-			var status syscall.WaitStatus
-			_, _ = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+		if err == nil && pid > 0 {
+			reg.ReapUnregistered(pid, func(orphan int) {
+				var status syscall.WaitStatus
+				_, _ = syscall.Wait4(orphan, &status, syscall.WNOHANG, nil)
+			})
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

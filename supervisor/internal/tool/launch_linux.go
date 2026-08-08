@@ -154,10 +154,11 @@ func Launch(spec LaunchSpec) (*exec.Cmd, error) {
 
 	inner := launchTransitionArgv(mode, spec, !useCgroupFD)
 	cmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, inner), useCgroupFD)
-	if err := cmd.Start(); err == nil {
-		// Registry.Add must remain immediately after Start: this direct child is
-		// owned by its caller's cmd.Wait, not by the supervisor subreaper loop.
-		Registry.Add(cmd.Process.Pid)
+	// StartAndAdd holds the registry lock across the fork+exec and the PID
+	// registration: this direct child is owned by its caller's cmd.Wait, not by
+	// the supervisor subreaper loop, and the loop must not be able to observe it
+	// as an unregistered orphan in between.
+	if err := Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err == nil {
 		return cmd, nil
 	} else if !useCgroupFD {
 		return nil, fmt.Errorf("tool: start %s launcher: %w", mode, err)
@@ -176,12 +177,11 @@ func Launch(spec LaunchSpec) (*exec.Cmd, error) {
 		mode = "native"
 		fallback := launchTransitionArgv(mode, spec, true)
 		fallbackCmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, fallback), false)
-		if fallbackErr := fallbackCmd.Start(); fallbackErr != nil {
+		// The fallback registers under the same lock for the same reason;
+		// cmd.Wait owns this direct child's status from this point onward.
+		if fallbackErr := Registry.StartAndAdd(fallbackCmd.Start, func() int { return fallbackCmd.Process.Pid }); fallbackErr != nil {
 			return nil, fmt.Errorf("tool: cgroup-fd launch failed: %w; native cgroup fallback failed: %v", firstErr, fallbackErr)
 		}
-		// Registry.Add must remain immediately after Start for the fallback too;
-		// cmd.Wait owns this direct child's status from this point onward.
-		Registry.Add(fallbackCmd.Process.Pid)
 		return fallbackCmd, nil
 	}
 }

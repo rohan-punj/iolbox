@@ -323,10 +323,59 @@ func NewPIDRegistry() *PIDRegistry {
 func (r *PIDRegistry) Add(pid int) {
 	r.Lock()
 	defer r.Unlock()
+	r.addLocked(pid)
+}
+
+// addLocked records a direct child while the caller already holds r's mutex.
+// sync.Mutex is not re-entrant, so every path that already owns the lock—Add
+// itself and StartAndAdd—must record through this unexported form rather than
+// calling Add.
+func (r *PIDRegistry) addLocked(pid int) {
 	if r.pids == nil {
 		r.pids = make(map[int]struct{})
 	}
 	r.pids[pid] = struct{}{}
+}
+
+// StartAndAdd makes spawning a direct child and registering its PID atomic
+// with respect to ReapUnregistered, closing the fork/register race that the
+// original "Add is the very next statement after Start" mitigation could not
+// close. A command that exits within microseconds—an ordinary `ip link ...`
+// invocation does—can be observed as exited by the subreaper's independent
+// 10ms poll before the spawning goroutine executes its next statement, at
+// which point the loop reaps it as an orphan and the spawner's cmd.Wait fails
+// with "waitid: no child processes". This was observed on real hardware during
+// a routine link.add, so the window is not negligible.
+//
+// start is the caller's fork+exec (cmd.Start, or a closure around pty.Start);
+// pid reports the PID of the process start created and is called only after
+// start reports success, so cmd.Process is guaranteed non-nil there. The lock
+// is held across start+register only—never across cmd.Wait—so the registry
+// mutex is never held for a command's runtime.
+func (r *PIDRegistry) StartAndAdd(start func() error, pid func() int) error {
+	r.Lock()
+	defer r.Unlock()
+	if err := start(); err != nil {
+		return err
+	}
+	if p := pid(); p > 0 {
+		r.addLocked(p)
+	}
+	return nil
+}
+
+// ReapUnregistered runs reap for pid only while the registry lock is held and
+// pid is absent from it, so a spawner cannot register that PID between the
+// check and the destructive collection. reap must be fast and non-blocking
+// (the subreaper passes a WNOHANG wait4) because it runs under the lock every
+// spawn site contends for.
+func (r *PIDRegistry) ReapUnregistered(pid int, reap func(int)) {
+	r.Lock()
+	defer r.Unlock()
+	if _, owned := r.pids[pid]; owned {
+		return
+	}
+	reap(pid)
 }
 
 // Remove releases a direct child after its cmd.Wait call returns.

@@ -50,11 +50,12 @@ func Start(bridgeName, bind string, port int) (*Capture, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Start(); err != nil {
+	// Start and register atomically: the subreaper must never see this direct
+	// child as an unregistered orphan between fork+exec and registration.
+	if err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err != nil {
 		server.Close()
 		return nil, fmt.Errorf("bcap: start tcpdump on %s: %w", bridgeName, err)
 	}
-	tool.Registry.Add(cmd.Process.Pid)
 
 	c := &Capture{
 		bridge: bridgeName,

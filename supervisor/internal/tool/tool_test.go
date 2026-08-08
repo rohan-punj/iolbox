@@ -2,11 +2,13 @@ package tool
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNaming(t *testing.T) {
@@ -244,6 +246,85 @@ func TestPIDRegistry(t *testing.T) {
 	if r.Contains(42) || r.Len() != 0 {
 		t.Fatal("registry did not remove direct child")
 	}
+}
+
+func TestPIDRegistryStartAndAdd(t *testing.T) {
+	r := NewPIDRegistry()
+
+	started := false
+	if err := r.StartAndAdd(func() error { started = true; return nil }, func() int { return 77 }); err != nil {
+		t.Fatalf("StartAndAdd: %v", err)
+	}
+	if !started {
+		t.Fatal("StartAndAdd did not call start")
+	}
+	if !r.Contains(77) || r.Len() != 1 {
+		t.Fatal("StartAndAdd did not register the started child")
+	}
+
+	// A failed start must register nothing and must surface its own error.
+	wantErr := errors.New("start failed")
+	pidCalled := false
+	if err := r.StartAndAdd(func() error { return wantErr }, func() int { pidCalled = true; return 88 }); !errors.Is(err, wantErr) {
+		t.Fatalf("StartAndAdd error = %v, want %v", err, wantErr)
+	}
+	if pidCalled {
+		t.Fatal("StartAndAdd asked for a PID after start failed")
+	}
+	if r.Contains(88) || r.Len() != 1 {
+		t.Fatal("StartAndAdd registered a child whose start failed")
+	}
+}
+
+// TestPIDRegistryStartAndAddExcludesReap is the regression guard for the
+// spawn/reap race: the reap side's check-and-reap and the spawn side's
+// start-and-register must be mutually exclusive, so a child that exits
+// instantly can never be seen as an unregistered orphan while its spawner has
+// already forked it.
+func TestPIDRegistryStartAndAddExcludesReap(t *testing.T) {
+	r := NewPIDRegistry()
+
+	inReap := make(chan struct{})
+	releaseReap := make(chan struct{})
+	reapDone := make(chan struct{})
+	reaped := false
+
+	go func() {
+		defer close(reapDone)
+		r.ReapUnregistered(99, func(int) {
+			reaped = true
+			close(inReap)
+			<-releaseReap
+		})
+	}()
+	<-inReap
+
+	registered := make(chan struct{})
+	go func() {
+		defer close(registered)
+		_ = r.StartAndAdd(func() error { return nil }, func() int { return 99 })
+	}()
+
+	// The spawner must be blocked for as long as the reap side holds the lock.
+	select {
+	case <-registered:
+		t.Fatal("StartAndAdd registered while ReapUnregistered held the lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseReap)
+	<-reapDone
+	<-registered
+
+	if !reaped {
+		t.Fatal("ReapUnregistered skipped an unregistered pid")
+	}
+	if !r.Contains(99) {
+		t.Fatal("StartAndAdd did not register after the lock was released")
+	}
+
+	// The mirror case: an already-registered pid is never handed to reap.
+	r.ReapUnregistered(99, func(int) { t.Fatal("reaped a registered direct child") })
 }
 
 func TestAllowedCaps(t *testing.T) {

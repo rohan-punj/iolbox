@@ -113,17 +113,22 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 	// pty.Start allocates a pty, wires cmd's stdin/stdout/stderr to the slave,
 	// and sets SysProcAttr{Setsid:true, Setctty:true} so the slave is the
 	// process's controlling terminal — the IOL console.
-	ptmx, err := pty.Start(cmd)
+	//
+	// pty.Start is the fork+exec here, so it is what runs inside StartAndAdd:
+	// the registry lock is held across the start and the PID registration
+	// together, so the supervisor's subreaper can never observe this IOL child
+	// as an unregistered orphan and reap it before cmd.Wait owns its status.
+	var ptmx *os.File
+	err = tool.Registry.StartAndAdd(func() error {
+		var startErr error
+		ptmx, startErr = pty.Start(cmd)
+		return startErr
+	}, func() int { return cmd.Process.Pid })
 	if err != nil {
 		m.To(StateCrashed)
 		_ = ln.Close()
 		return nil, fmt.Errorf("node %d: pty start: %w", spec.NodeID, err)
 	}
-	// pty.Start has already started the direct child. Add its PID immediately;
-	// the tiny Start/Add race is intentional and bounded by making this the very
-	// next statement, so the supervisor reaper cannot mistake an IOL child for
-	// an orphan before cmd.Wait owns its exit status.
-	tool.Registry.Add(cmd.Process.Pid)
 
 	p := &Process{
 		Spec:    spec,
@@ -174,11 +179,13 @@ func spawnVPCS(spec Spec, m *Machine) (*Process, error) {
 	if !m.To(StateStarting) {
 		return nil, fmt.Errorf("node %d: not in a startable state", spec.NodeID)
 	}
-	if err := cmd.Start(); err != nil {
+	// Start and register atomically: vpcs daemonizes, so the launcher exits
+	// almost immediately and the subreaper would otherwise be free to reap it
+	// between Start and registration.
+	if err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err != nil {
 		m.To(StateCrashed)
 		return nil, fmt.Errorf("node %d: vpcs start: %w", spec.NodeID, err)
 	}
-	tool.Registry.Add(cmd.Process.Pid)
 	pgid := cmd.Process.Pid // Setpgid makes the child its own group leader (pgid == pid)
 
 	p := &Process{

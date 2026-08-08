@@ -13,10 +13,11 @@ import (
 // extnet.SudoOK's exact approach.
 func HasSudo() bool {
 	cmd := exec.Command("sudo", "-n", "true")
-	if err := cmd.Start(); err != nil {
+	// Start and register atomically so the subreaper cannot reap this direct
+	// child—`sudo -n true` returns almost instantly—before Wait owns it.
+	if err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err != nil {
 		return false
 	}
-	tool.Registry.Add(cmd.Process.Pid)
 	err := cmd.Wait()
 	tool.Registry.Remove(cmd.Process.Pid)
 	return err == nil
