@@ -465,7 +465,17 @@ REAPER_RESULT="$REAPER_DIR/result.txt"
 (
 	echo "$BASHPID" > "$REAPER_CG/cgroup.procs"
 	export IOLBOX_TOOL_SOCK IOLBOX_TOOL_OPTIONS IOLBOX_STUB_GRANDCHILD_PID_FILE
-	exec "$REAPER" --target "$STUB" --result "$REAPER_RESULT" --setpriv "$SETPRIV"
+	# Use the SAME transition mechanism T0.1/T0.2 settled on for this box. A
+	# hardcoded --setpriv here re-runs the mechanism those tests already proved
+	# broken on targets that fall back to native: the half-transitioned stub GUI
+	# never publishes grandchild.pid and the reaper times out for the wrong
+	# reason. p0-reaper requires exactly one of the two flags -- there is no
+	# bare-root mode to fall through to.
+	if [[ "$LAUNCH_MODE" == setpriv ]]; then
+		exec "$REAPER" --target "$STUB" --result "$REAPER_RESULT" --setpriv "$SETPRIV"
+	else
+		exec "$REAPER" --target "$STUB" --result "$REAPER_RESULT" --launcher "$NATIVE_LAUNCHER"
+	fi
 ) >"$LOG_ROOT/reaper.log" 2>&1 &
 REAPER_PID=$!
 PIDS+=("$REAPER_PID")

@@ -4,4 +4,6 @@ package main
 
 import "errors"
 
-func runReaper(string, string, string) error { return errors.New("reaper probe requires linux") }
+func runReaper(string, string, string, string) error {
+	return errors.New("reaper probe requires linux")
+}

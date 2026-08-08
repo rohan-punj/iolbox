@@ -60,3 +60,10 @@ Thumbs.db
 # and live/config.json (live-mode config).
 .impeccable/hook.cache.json
 .impeccable/live/sessions/
+
+# P0 spike probe binaries (extensionless Go build outputs)
+/tools/p0-launcher/p0-launcher
+/tools/p0-reaper/p0-reaper
+/tools/p0-stale/p0-stale
+/tools/tool-hostile/tool-hostile
+/tools/tool-stubgui/tool-stubgui

@@ -24,7 +24,7 @@ type pidRegistry struct {
 	pids map[int]struct{}
 }
 
-func runReaper(target, resultPath, setprivPath string) error {
+func runReaper(target, resultPath, setprivPath, launcherPath string) error {
 	if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0, 0, 0, 0); errno != 0 {
 		return fmt.Errorf("PR_SET_CHILD_SUBREAPER: %w", errno)
 	}
@@ -34,7 +34,11 @@ func runReaper(target, resultPath, setprivPath string) error {
 	stopReaper := make(chan struct{})
 	go reapLoop(registry, reapedOrphans, stopReaper)
 
-	cmd := commandFor(target, setprivPath)
+	cmd, err := commandFor(target, setprivPath, launcherPath)
+	if err != nil {
+		close(stopReaper)
+		return err
+	}
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
 		close(stopReaper)
@@ -90,17 +94,35 @@ func runReaper(target, resultPath, setprivPath string) error {
 	return nil
 }
 
-func commandFor(target, setprivPath string) *exec.Cmd {
-	if setprivPath == "" {
-		return exec.Command(target)
+// commandFor builds the registered child's argv for exactly ONE privilege
+// transition mechanism -- the same one the rest of the P0 fixture already
+// selected for this box (see LAUNCH_MODE in docs/tests/p0-spike.sh). T0.6 must
+// not invent a third path: on a target whose setpriv cannot express the pinned
+// transition, the setpriv-wrapped GUI lands in a half-transitioned state where
+// tool-stubgui never gets far enough to publish its grandchild PID, and the
+// reaper probe then fails for a reason that has nothing to do with SIGCHLD
+// ownership.
+//
+// There is deliberately no bare-root mode. Running the GUI as unrestricted root
+// would exercise a transition production never uses, and every reaper assertion
+// would still pass -- an untested branch that can only ever hide a defect.
+func commandFor(target, setprivPath, launcherPath string) (*exec.Cmd, error) {
+	switch {
+	case setprivPath != "" && launcherPath != "":
+		return nil, errors.New("--setpriv and --launcher are mutually exclusive")
+	case setprivPath != "":
+		return exec.Command(setprivPath,
+			"--reuid", "ioltool", "--regid", "ioltool", "--clear-groups", "--no-new-privs",
+			"--bounding-set", "-all,+cap_net_raw",
+			"--inh-caps", "-all,+cap_net_raw",
+			"--ambient-caps", "-all,+cap_net_raw",
+			"--", target,
+		), nil
+	case launcherPath != "":
+		return exec.Command(launcherPath, "--user", "ioltool", "--", target), nil
+	default:
+		return nil, errors.New("one of --setpriv or --launcher is required: the reaper probe must run its GUI through a real privilege transition")
 	}
-	return exec.Command(setprivPath,
-		"--reuid", "ioltool", "--regid", "ioltool", "--clear-groups", "--no-new-privs",
-		"--bounding-set", "-all,+cap_net_raw",
-		"--inh-caps", "-all,+cap_net_raw",
-		"--ambient-caps", "-all,+cap_net_raw",
-		"--", target,
-	)
 }
 
 func (r *pidRegistry) add(pid int) {
