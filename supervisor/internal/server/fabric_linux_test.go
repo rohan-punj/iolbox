@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // TestLinkTouchesAny pins the ids-scoping predicate startFabric's link loop
@@ -61,5 +62,22 @@ func TestFabricLinkFullyAttachedRequiresBookkeeping(t *testing.T) {
 
 	if s.fabricLinkFullyAttached(ll, l) {
 		t.Fatal("a link never recorded as attached must not read as fully attached")
+	}
+}
+
+// TestFabricLinkTapDevsTool uses the root-side veth because that is the device
+// attached to the bridge and therefore the one whose stats/master symlink prove
+// the tool endpoint is wired into the fabric.
+func TestFabricLinkTapDevsTool(t *testing.T) {
+	doc := &lab.Lab{
+		Nodes: []lab.Node{{ID: 17, Kind: lab.KindTool}},
+		Links: []lab.Link{{ID: 18, Endpoints: []lab.Endpoint{{Node: 17, Interface: "eth1"}}}},
+	}
+	ll := newLoadedLab(doc, t.TempDir())
+	ll.nodes[17] = &nodeRuntime{tool: &tool.Endpoint{}}
+
+	devs := (&Server{}).fabricLinkTapDevs(ll, &ll.doc.Links[0])
+	if len(devs) != 1 || devs[0] != tool.HostVethName(17) {
+		t.Fatalf("tool fabric tap = %#v, want [%q]", devs, tool.HostVethName(17))
 	}
 }

@@ -20,8 +20,8 @@ import (
 // always takes the fabric regardless of any capture flag.
 //
 // fabricOK maps node id -> whether the node's kind can live on the fabric (see
-// fabricNodes). With mgmt retired, every node kind (IOL/NAT/VPCS) is fabric, so
-// every well-formed link is a fabric link.
+// fabricNodes). With mgmt retired, every fabric-capable node kind
+// (IOL/NAT/VPCS/tool) is fabric, so every well-formed link is a fabric link.
 func isFabricLink(l *lab.Link, fabricOK map[int]bool) bool {
 	if len(l.Endpoints) < 2 {
 		return false
@@ -35,12 +35,13 @@ func isFabricLink(l *lab.Link, fabricOK map[int]bool) bool {
 }
 
 // fabricNodes returns the set of node ids whose kind is realised by the static-
-// tap fabric: IOL, NAT and VPCS — i.e. every node kind (mgmt is retired).
+// tap fabric: IOL, NAT, VPCS, and tool — i.e. every fabric-capable node kind
+// (mgmt is retired).
 func fabricNodes(doc *lab.Lab) map[int]bool {
 	out := make(map[int]bool, len(doc.Nodes))
 	for i := range doc.Nodes {
 		switch doc.Nodes[i].Kind {
-		case lab.KindIOL, lab.KindNAT, lab.KindVPCS:
+		case lab.KindIOL, lab.KindNAT, lab.KindVPCS, lab.KindTool:
 			out[doc.Nodes[i].ID] = true
 		}
 	}
