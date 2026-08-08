@@ -121,7 +121,16 @@ trap cleanup EXIT
 make_cage() {
 	local name="$1" memory="$2" pids="$3"
 	local cg="$CGROUP_D/$name"
-	mkdir "$cg"
+	if ! mkdir "$cg"; then
+		echo "DIAG: mkdir failed for cage $cg; parent listing follows:" >&2
+		ls -la "$(dirname "$cg")" >&2 || true
+		fail "make_cage could not create $cg"
+	fi
+	if [[ ! -w "$cg/cgroup.procs" ]]; then
+		echo "DIAG: $cg exists but has no writable cgroup.procs; listing follows:" >&2
+		ls -la "$cg" >&2 || true
+		fail "make_cage created $cg without a usable cgroup.procs"
+	fi
 	echo "$memory" > "$cg/memory.max"
 	echo 0 > "$cg/memory.swap.max"
 	echo "$pids" > "$cg/pids.max"
@@ -145,6 +154,29 @@ wait_for_file_optional() {
 		sleep 0.05
 	done
 	return 1
+}
+
+# A freshly created link is still being mutated by udev when `ip link add`
+# returns: systemd-udevd's stock /usr/lib/systemd/network/99-default.link sets
+# MACAddressPolicy=persistent, so the kernel-random MAC of a brand-new device is
+# rewritten roughly 0.3s later. Anything that snapshots the device before that
+# settles is racing udev, not observing the code under test.
+settle_link() {
+	local dev="$1" previous="" current=""
+	if command -v udevadm >/dev/null 2>&1; then
+		udevadm settle --timeout=5 >/dev/null 2>&1 || true
+	fi
+	# Also poll the device itself: udevadm may be absent, and `settle` only
+	# drains the queue it can see. Two consecutive identical reads 300ms apart
+	# is the actual property we need.
+	for _ in $(seq 1 20); do
+		current="$(ip -o link show dev "$dev" 2>/dev/null || true)"
+		[[ -n "$current" && "$current" == "$previous" ]] && return 0
+		previous="$current"
+		sleep 0.3
+	done
+	echo "WARN: $dev did not stop changing; baseline may still race udev" >&2
+	return 0
 }
 
 wait_for_line() {
@@ -186,7 +218,23 @@ fi
 start_tool() {
 	local ns="$1" cg="$2" target="$3" log="$4"
 	(
-		ip netns exec "$ns" env -i PATH=/usr/bin:/bin \
+		# Join the cage HERE, in the root mount namespace, before handing off to
+		# `ip netns exec`. iproute2's netns_switch() unshares a mount namespace,
+		# makes / a slave, then umount2("/sys", MNT_DETACH) and mounts a fresh
+		# per-netns sysfs -- which detaches the cgroup2 mount along with it. Inside
+		# `ip netns exec` /sys/fs/cgroup is therefore an EMPTY kernel mount-point
+		# stub, so writing "$cg/cgroup.procs" from the inner shell fails ENOENT
+		# ("No such file or directory") even though make_cage's mkdir succeeded a
+		# moment earlier in this namespace. cgroup membership is inherited across
+		# setns(2) and execve(2), so joining before the switch is equivalent and,
+		# unlike the inner write, actually observable. start_cgroup_command() has
+		# always done it this way, which is why the non-netns T0.3 cages worked.
+		if ! echo "$BASHPID" > "$cg/cgroup.procs"; then
+			echo "DIAG: could not join cage $cg from the root mount namespace" >&2
+			ls -la "$cg" >&2 || true
+			exit 1
+		fi
+		exec ip netns exec "$ns" env -i PATH=/usr/bin:/bin \
 			IOLBOX_CGROUP_PATH="$cg" IOLBOX_TARGET="$target" IOLBOX_LAUNCH_MODE="$LAUNCH_MODE" \
 			IOLBOX_SETPRIV="$SETPRIV" IOLBOX_NATIVE="$NATIVE_LAUNCHER" \
 			IOLBOX_TOOL_SOCK="${IOLBOX_TOOL_SOCK-}" IOLBOX_TOOL_OPTIONS="${IOLBOX_TOOL_OPTIONS-}" \
@@ -195,7 +243,7 @@ start_tool() {
 			IOLBOX_HOSTILE_ORPHAN_PID_FILE="${IOLBOX_HOSTILE_ORPHAN_PID_FILE-}" \
 			IOLBOX_HOSTILE_LINGER="${IOLBOX_HOSTILE_LINGER-}" IOLBOX_HOST_IFACE="${IOLBOX_HOST_IFACE-}" \
 			IOLBOX_HOST_FILE="${IOLBOX_HOST_FILE-}" \
-			bash -c 'echo "$$" > "$IOLBOX_CGROUP_PATH/cgroup.procs"; if [[ "$IOLBOX_LAUNCH_MODE" == setpriv ]]; then exec "$IOLBOX_SETPRIV" --reuid ioltool --regid ioltool --clear-groups --no-new-privs --bounding-set -all,+cap_net_raw --inh-caps -all,+cap_net_raw --ambient-caps -all,+cap_net_raw -- "$IOLBOX_TARGET"; else exec "$IOLBOX_NATIVE" --user ioltool -- "$IOLBOX_TARGET"; fi'
+			bash -c 'if [[ "$IOLBOX_LAUNCH_MODE" == setpriv ]]; then exec "$IOLBOX_SETPRIV" --reuid ioltool --regid ioltool --clear-groups --no-new-privs --bounding-set -all,+cap_net_raw --inh-caps -all,+cap_net_raw --ambient-caps -all,+cap_net_raw -- "$IOLBOX_TARGET"; else exec "$IOLBOX_NATIVE" --user ioltool -- "$IOLBOX_TARGET"; fi'
 	) >"$log" 2>&1 &
 	LAST_PID=$!
 	PIDS+=("$LAST_PID")
@@ -251,14 +299,20 @@ pass "T0.3 3-level hierarchy: D -> supervisor -> tool leaves"
 
 echo "==> T0.4 fixture: veth create-temp-move-rename"
 if ip link show dev eth1 >/dev/null 2>&1; then
-	ROOT_ETH1_BEFORE="$(ip -o link show dev eth1)"
 	ROOT_ETH1_CREATED=0
 else
 	ip link add eth1 type dummy
-	ROOT_ETH1_BEFORE="$(ip -o link show dev eth1)"
 	ROOT_ETH1_CREATED=1
 	DEVS+=(eth1)
+	# The baseline must be taken only once udev has finished applying its
+	# MACAddressPolicy to this brand-new dummy. Capturing it immediately after
+	# `ip link add` put the ~0.3s MAC rewrite inside the window covered by the
+	# netns/veth work below, so the final "root eth1 untouched" comparison
+	# reported a difference this script never caused. The real-eth1 branch above
+	# needs no settle: a NIC that already existed is not re-addressed at runtime.
+	settle_link eth1
 fi
+ROOT_ETH1_BEFORE="$(ip -o link show dev eth1)"
 ip netns add "$TOOL_NS"
 NETNS+=("$TOOL_NS")
 ip link add "$TOOL_VETH" type veth peer name "$TOOL_TMP"
