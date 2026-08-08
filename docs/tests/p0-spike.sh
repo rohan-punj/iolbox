@@ -593,6 +593,12 @@ for tuple in "$CAPTURE_VETH $CAPTURE_TMP $CAPTURE_NS" "$PEER_VETH $PEER_TMP $PEE
 	ip netns exec "$ns" ip link set "$tmp" name eth1
 	ip netns exec "$ns" ip link set lo up
 	ip netns exec "$ns" ip link set eth1 up
+	# The sending side needs a real address on eth1: without one scapy's L2 send
+	# silently no-ops (still reporting "Sent 1 packets") and nothing reaches the
+	# bridge. The peer side only receives, so it needs no address.
+	if [[ "$ns" == "$CAPTURE_NS" ]]; then
+		ip netns exec "$ns" ip addr add 198.18.0.2/24 dev eth1
+	fi
 	ip link set "$veth" up
 	ip link set "$veth" master iolbr0
 done

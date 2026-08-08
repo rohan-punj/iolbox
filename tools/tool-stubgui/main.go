@@ -99,7 +99,9 @@ func main() {
 		const source = "from scapy.all import ARP, Ether, sendp\n" +
 			"import os\n" +
 			"iface = os.environ.get('IOLBOX_TOOL_IFACE', 'eth1')\n" +
-			"sendp(Ether(dst='ff:ff:ff:ff:ff:ff')/ARP(op=1, pdst='198.18.0.1'), iface=iface, count=1, verbose=False)"
+			// psrc must be explicit: the netns has no address or route, so scapy's
+			// default psrc lookup fails and the frame never reaches the wire.
+			"sendp(Ether(dst='ff:ff:ff:ff:ff:ff')/ARP(op=1, psrc='198.18.0.2', pdst='198.18.0.1'), iface=iface, count=1, verbose=False)"
 		if err := exec.Command("python3", "-c", source).Run(); err != nil {
 			http.Error(w, fmt.Sprintf("send arp: %v", err), http.StatusInternalServerError)
 			return

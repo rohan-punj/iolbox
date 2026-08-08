@@ -73,8 +73,39 @@ before the next run:
   attempts if re-running after a hard failure (`ip link del eth1`, `ip netns del
   <name>`, etc.) rather than assuming a clean box.
 
-**T0.9 NOT YET RUN** — this appliance had a real lab already running (`iolbr0` up,
-live `vpcs` processes) when P0 was exercised, and T0.9 correctly refused to touch
-the pre-existing production bridge rather than disrupt it (working as designed, see
-above). Run T0.9 on a lab-free box (stop the running lab first, or use a clean
-VM/builder) before treating P0 as fully closed.
+**T0.9 now genuinely PASSES (2026-08-08, same appliance, after stopping the user's
+live lab via `systemctl restart iolbox-supervisor.service` — its `prestart-clean.sh`
+ExecStartPre safely sweeps every stale `iol*`-named device and `/opt/iolbox/run/*`
+scratch, leaving the lab document itself untouched).** Getting there took two more
+real bug rounds, both found via live evidence, not static review:
+
+1. `tools/tool-stubgui/main.go`'s `/send-arp` handler built its Scapy ARP object
+   with no `psrc`. Scapy fills a missing `psrc` from its own route-table lookup;
+   in a netns with no address and no route this fails (`WARNING: No route found`)
+   and the frame never reaches the wire — but Scapy still prints `Sent 1 packets.`
+   and the HTTP handler returns 200 `sent`, so the failure is completely silent
+   from the caller's side. Fix: pass `psrc` explicitly.
+2. Even with `psrc` set, the send **still** silently no-ops unless the sending
+   interface itself has a real IP address configured — proven by testing all four
+   combinations (root vs. capability-dropped `ioltool`; address assigned vs. not)
+   live on the target. Fix: `docs/tests/p0-spike.sh`'s T0.9 setup now runs
+   `ip addr add 198.18.0.2/24 dev eth1` in `CAPTURE_NS` right after bringing the
+   interface up (the peer side only receives, so it needs no address). Both fixes
+   use addresses from the same `198.18.0.0/24` RFC 2544 block already used for
+   `pdst`.
+
+Both were confirmed root-caused (not a bridge/firewall/netns bug) with a kernel-native
+`ping` control on the same fabric working perfectly throughout — ruling out ebtables,
+iptables, nftables, tc, br_netfilter, vlan_filtering, and STP.
+
+One earlier run also hit a **one-off T0.6 flake**: `killReparentedOrphan`'s
+`syscall.Kill` returned ESRCH (`SIGKILL orphan: no such process`) — the grandchild
+was gone by the time the kill fired, despite its `for { select {} }` body never
+exiting on its own. Not reproduced on the following 3 runs (T0.6 passed every other
+time, including with added trace instrumentation that was later reverted). Root
+cause not found; treat as an unresolved rare race worth a future look if it
+recurs, not as blocking P0.
+
+**P0 is now closed**: T0.1 through T0.9 all PASS on real hardware
+(`P0 PASS: T0.1-T0.9 completed on this Linux target.`), reached via a completely
+clean run with nothing else on the box and zero manual interference.
