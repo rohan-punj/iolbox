@@ -16,7 +16,6 @@ import (
 
 const (
 	capNetAdmin       = 12
-	prCapBsetRaise    = 24
 	prCapAmbient      = 47
 	prCapAmbientRaise = 2
 	sioCGIFFLAGS      = 0x8913
@@ -41,13 +40,27 @@ func runHostileProbe() error {
 		return fmt.Errorf("read capability state: %w", err)
 	}
 
+	// Three outcomes, not two. The child's own verdict line is the ONLY thing
+	// that says anything about capabilities; a fork/exec that never produced a
+	// child (EAGAIN under a saturated pids.max, ENOMEM, ...) proves nothing and
+	// must not be scored as "a capability was regained". The old `err != nil ||
+	// !contains(DENIED)` collapsed "could not test" into "test failed" and
+	// printed P0_HOSTILE_FAIL off the CALLING process's capability state.
 	child := exec.Command("/proc/self/exe", "--cap-regain-child")
 	output, err := child.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "CAP_REGAIN_DENIED") {
-		fmt.Printf("CAP_REGAIN_SUCCEEDED output=%q err=%v\n", strings.TrimSpace(string(output)), err)
+	verdict := strings.TrimSpace(string(output))
+	switch {
+	case strings.Contains(verdict, "CAP_REGAIN_SUCCEEDED"):
+		fmt.Printf("CAP_REGAIN_SUCCEEDED output=%q\n", verdict)
 		return errors.New("a dropped capability was reacquired after exec")
+	case strings.Contains(verdict, "CAP_REGAIN_DENIED"):
+		fmt.Println("CAP_REGAIN_DENIED")
+	default:
+		// No verdict at all: the child never ran, or died before printing.
+		// Report it as inconclusive and keep going -- T0.8 still fails, but on
+		// the missing CAP_REGAIN_DENIED marker, which is the honest reason.
+		fmt.Printf("CAP_REGAIN_INCONCLUSIVE output=%q err=%v\n", verdict, err)
 	}
-	fmt.Println("CAP_REGAIN_DENIED")
 
 	if err := checkHostNetworkView(); err != nil {
 		return err
@@ -163,19 +176,33 @@ func checkAcceptedHostRead() error {
 	return nil
 }
 
+// attemptCapRegain tries every way a post-exec process can put CAP_NET_ADMIN
+// back into its own permitted/effective/ambient sets. It returns NIL when the
+// kernel rejected all of them -- the expected, secure outcome -- and a non-nil
+// error NAMING the vector that worked when one of them succeeded. The sense
+// used to be inverted: the syscalls returned "regain worked" as a nil error
+// while the caller read nil as CAP_REGAIN_DENIED, so a genuine regain would
+// have been reported as a pass and T0.8's cap-regain assertion was vacuous.
+//
+// The bounding set has no raise operation at all (PR_CAPBSET_DROP is one-way by
+// design), so the former prctl(24, CAP_NET_ADMIN) attempt could never regain
+// anything -- it asked the kernel to DROP the capability, and would have been
+// scored as a regain success. It is gone; capset(2) and PR_CAP_AMBIENT_RAISE
+// are the real vectors.
 func attemptCapRegain() error {
-	if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prCapBsetRaise, capNetAdmin, 0, 0, 0, 0); errno == 0 {
-		return nil
-	}
-	data := capData{Effective: 1 << capNetAdmin, Permitted: 1 << capNetAdmin, Inheritable: 1 << capNetAdmin}
+	// capset(2) with _LINUX_CAPABILITY_VERSION_3 reads TWO data structs. The
+	// old single-struct pointer made the kernel read 12 bytes of unrelated
+	// stack as the high capability word.
+	var data [2]capData
+	data[0] = capData{Effective: 1 << capNetAdmin, Permitted: 1 << capNetAdmin, Inheritable: 1 << capNetAdmin}
 	header := capHeader{Version: capsetVersion3}
-	if _, _, errno := syscall.Syscall(syscall.SYS_CAPSET, uintptr(unsafe.Pointer(&header)), uintptr(unsafe.Pointer(&data)), 0); errno == 0 {
-		return nil
+	if _, _, errno := syscall.Syscall(syscall.SYS_CAPSET, uintptr(unsafe.Pointer(&header)), uintptr(unsafe.Pointer(&data[0])), 0); errno == 0 {
+		return errors.New("capset(2) restored CAP_NET_ADMIN")
 	}
 	if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prCapAmbient, prCapAmbientRaise, capNetAdmin, 0, 0, 0); errno == 0 {
-		return nil
+		return errors.New("PR_CAP_AMBIENT_RAISE restored CAP_NET_ADMIN")
 	}
-	return errors.New("all regain attempts rejected")
+	return nil
 }
 
 func memoryHog() {
