@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -233,9 +234,21 @@ func detectProbeHostVethPresence(nodeID int) (bool, error) {
 }
 
 func detectProbeGuestVeth(nodeID int) error {
-	output, err := exec.Command("ip", "netns", "exec", NetnsName(nodeID), "ip", "link", "show", "dev", GuestIface).CombinedOutput()
+	var out bytes.Buffer
+	cmd := exec.Command("ip", "netns", "exec", NetnsName(nodeID), "ip", "link", "show", "dev", GuestIface)
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	// Started via Registry.StartAndAdd, not CombinedOutput: a fast `ip` command
+	// can exit before a separate registration step would run, letting the
+	// subreaper reap it out from under this function's own Wait (the same race
+	// found in runCmds/runCmdsBestEffort on real hardware).
+	err := Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
+	if err == nil {
+		err = cmd.Wait()
+		Registry.Remove(cmd.Process.Pid)
+	}
 	if err != nil {
-		message := strings.TrimSpace(string(output))
+		message := strings.TrimSpace(out.String())
 		if message == "" {
 			return fmt.Errorf("tool: inspect guest veth %s: %w", GuestIface, err)
 		}
@@ -465,16 +478,24 @@ func detectProbeCleanup(nodeID int, netnsCreated, vethCreated bool, cagePath str
 }
 
 func detectProbeNetnsPresent(nodeID int) (bool, error) {
-	output, err := exec.Command("ip", "netns", "list").CombinedOutput()
+	var out bytes.Buffer
+	cmd := exec.Command("ip", "netns", "list")
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
+	if err == nil {
+		err = cmd.Wait()
+		Registry.Remove(cmd.Process.Pid)
+	}
 	if err != nil {
-		message := strings.TrimSpace(string(output))
+		message := strings.TrimSpace(out.String())
 		if message == "" {
 			return false, fmt.Errorf("tool: list network namespaces: %w", err)
 		}
 		return false, fmt.Errorf("tool: list network namespaces: %w: %s", err, message)
 	}
 	name := NetnsName(nodeID)
-	for _, line := range strings.Split(string(output), "\n") {
+	for _, line := range strings.Split(out.String(), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == name || strings.HasPrefix(trimmed, name+" ") {
 			return true, nil

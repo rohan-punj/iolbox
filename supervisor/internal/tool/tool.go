@@ -7,6 +7,7 @@
 package tool
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -412,11 +413,28 @@ type cmdSpec struct {
 // runCmds executes commands in order and wraps the first failure with the
 // command output so privileged data-plane callers can identify the failed
 // kernel operation.
+//
+// Each command is started and registered atomically via Registry.StartAndAdd
+// rather than exec.Command(...).CombinedOutput() (which folds Start+Wait into
+// one call with no window to register in between). A short-lived command like
+// `ip link ...` can exit before a separate registration step would run, and
+// the subreaper loop's independent poll would then reap it out from under
+// this function's own Wait -- the exact race found on real hardware when this
+// package's own netns/veth commands (its only present callers) ran during a
+// routine lab.start.
 func runCmds(cmds []cmdSpec) error {
 	for _, spec := range cmds {
-		out, err := exec.Command(spec.name, spec.args...).CombinedOutput()
+		var out bytes.Buffer
+		cmd := exec.Command(spec.name, spec.args...)
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
+		if err == nil {
+			err = cmd.Wait()
+			Registry.Remove(cmd.Process.Pid)
+		}
 		if err != nil {
-			message := strings.TrimSpace(string(out))
+			message := strings.TrimSpace(out.String())
 			if message == "" {
 				return fmt.Errorf("tool: command %q failed: %w", spec.name, err)
 			}
@@ -427,10 +445,18 @@ func runCmds(cmds []cmdSpec) error {
 }
 
 // runCmdsBestEffort runs every command and deliberately ignores failures so
-// teardown can continue past objects that have already disappeared.
+// teardown can continue past objects that have already disappeared. See
+// runCmds for why registration must be atomic with Start.
 func runCmdsBestEffort(cmds []cmdSpec) {
 	for _, spec := range cmds {
-		_, _ = exec.Command(spec.name, spec.args...).CombinedOutput()
+		cmd := exec.Command(spec.name, spec.args...)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err == nil {
+			_ = cmd.Wait()
+			Registry.Remove(cmd.Process.Pid)
+		}
 	}
 }
 
