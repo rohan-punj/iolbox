@@ -1167,24 +1167,35 @@ class LabStore {
     }
   }
 
-  /** Push a node's in-memory `config` (pack, net, ...) to the supervisor's
-   *  loaded lab. The Inspector's updatePack/updateNet handlers only mutate
-   *  the LOCAL doc — the supervisor keeps its own copy from the last
-   *  lab.load/node.add and never re-reads the frontend's state on its own,
-   *  so without this a pack change in the dropdown was pure UI with no
-   *  effect on what actually starts. Re-sends the whole doc via lab.load:
-   *  since editing `config` doesn't change node/link topology (sameTopology
-   *  ignores it), the supervisor's ADOPT path always takes over server-side
-   *  — it swaps in the new doc's config in place without touching any
-   *  already-running node elsewhere in the lab (see tryAdoptLoad). */
+  /** Push a node's in-memory edits (config.pack, config.net, ram, ethernet,
+   *  serial, ...) to the supervisor's loaded lab. The Inspector's
+   *  update*() handlers (updatePack/updateNet/updateRam/updateEthernet/
+   *  updateSerial/...) only mutate the LOCAL doc — the supervisor keeps its
+   *  own copy from the last lab.load/node.add and never re-reads the
+   *  frontend's state on its own, so without this any of those edits was
+   *  pure UI with no effect on what actually starts. Re-sends the whole doc
+   *  via lab.load.
+   *
+   *  Most fields (pack, net, ram, name, icon, startupConfig, ...) aren't
+   *  part of the supervisor's sameNodeShape check, so the ADOPT path always
+   *  takes over server-side for them — it swaps in the new doc's fields in
+   *  place without touching any already-running node elsewhere in the lab
+   *  (see tryAdoptLoad). Ethernet/serial adapter COUNTS are part of
+   *  sameNodeShape, though: changing them is a real topology change, so
+   *  adoption is refused and the supervisor instead runs its normal
+   *  teardown-and-reload — which stops every node in the WHOLE lab, not
+   *  just this one. The two cases get distinctly different log messages
+   *  below so that isn't a silent surprise. */
   async applyNodeConfig(nodeId: number) {
+    let adopted = true;
     await this.guarded(`apply config for node ${nodeId}`, async () => {
       const res = await this.client.labLoad($state.snapshot(this.lab) as LabDocument);
-      if (!res.adopted) {
-        // Shouldn't happen for a config-only edit — topology is unchanged —
-        // but if the supervisor ever disagrees it already ran the full
-        // teardown-and-reload server-side; resync local state rather than
-        // let it drift from what's actually running.
+      adopted = !!res.adopted;
+      if (!adopted) {
+        // Adapter-count change (or some other real topology change): the
+        // supervisor already ran the full teardown-and-reload server-side,
+        // stopping every node in the lab. Resync local state to match
+        // rather than let it drift from what's actually running now.
         const status = await this.client.status();
         const states: Record<number, NodeState> = {};
         for (const n of status.nodes ?? []) states[n.id] = n.state;
@@ -1195,11 +1206,19 @@ class LabStore {
     this.scheduleAutosave();
     const running = this.nodeStates[nodeId] === "running" || this.nodeStates[nodeId] === "starting";
     const name = this.lab.nodes.find((n) => n.id === nodeId)?.name ?? `#${nodeId}`;
+    if (!adopted) {
+      this.pushLog(
+        "warn",
+        `${name}: adapter count changed — this reloaded the WHOLE lab, every other node was stopped too`,
+        nodeId
+      );
+      return;
+    }
     this.pushLog(
       running ? "warn" : "info",
       running
-        ? `${name}: config saved — stop and restart the node to apply it`
-        : `${name}: config applied`,
+        ? `${name}: changes saved — stop and restart the node to apply them`
+        : `${name}: changes applied`,
       nodeId
     );
   }

@@ -271,18 +271,20 @@
         />
       </label>
       <div class="vpcs-hint">Applied to eth1 when the node starts. Leave IP blank to leave it unaddressed (most modules don't need one).</div>
+    {:else}
+      <div class="vpcs-hint">VPCS nodes take their config from canned commands (set later).</div>
+    {/if}
 
+    {#if isIol || isTool}
       <button
-        class="btn btn-ghost savecfg-btn"
-        title="Push the pack/network changes above to the supervisor — the dropdown alone doesn't apply them"
+        class="btn btn-success savecfg-btn"
+        title="Push the changes above to the supervisor — editing the fields alone doesn't apply them"
         disabled={applyingConfig}
         onclick={applyConfig}
       >{applyingConfig ? "Saving…" : "Save"}</button>
       {#if running}
-        <div class="vpcs-hint">Node is running — the pack change applies on next stop/start.</div>
+        <div class="vpcs-hint">Node is running — changes apply on next stop/start.</div>
       {/if}
-    {:else}
-      <div class="vpcs-hint">VPCS nodes take their config from canned commands (set later).</div>
     {/if}
   {/if}
 </div>

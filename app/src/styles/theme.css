@@ -363,6 +363,16 @@ a {
   color: var(--danger-hover);
 }
 
+.btn-success {
+  background: transparent;
+  border-color: var(--success);
+  color: var(--success);
+  font-weight: 600;
+}
+.btn-success:hover {
+  background: var(--state-running-bg);
+}
+
 .btn-ghost {
   background: transparent;
   border-color: transparent;
