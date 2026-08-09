@@ -14,14 +14,16 @@ type Client struct {
 }
 
 type User struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Service  string `json:"service"`
-	PrivLvl  int    `json:"privLvl"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	Service       string `json:"service"`
+	TacacsService string `json:"tacacsService"`
+	PrivLvl       int    `json:"privLvl"`
 }
 
 type Config struct {
 	SharedSecret string   `json:"sharedSecret"`
+	TacacsKey    string   `json:"tacacsKey"`
 	Clients      []Client `json:"clients"`
 	Users        []User   `json:"users"`
 	Protocol     string   `json:"protocol"`
@@ -34,7 +36,7 @@ type Store struct {
 }
 
 func defaultConfig() Config {
-	return Config{SharedSecret: "labsecret", Protocol: "radius", Users: []User{}}
+	return Config{SharedSecret: "labsecret", Protocol: "both", Users: []User{}}
 }
 
 func NewStore(path string) *Store {
@@ -56,8 +58,21 @@ func (s *Store) Load() error {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return err
 	}
-	if cfg.Protocol == "" {
-		cfg.Protocol = "radius"
+	// The supervisor writes a bare "{}" for a node with no saved pack options
+	// yet (endpointOptionsPayload) — that decodes to an all-zero-value Config,
+	// which must not silently wipe out the shared-secret default the way a
+	// genuine empty-string save from the settings form should not either.
+	// Mirrors webserver/gui/config.go's own zero-value guards.
+	if cfg.SharedSecret == "" {
+		cfg.SharedSecret = defaultConfig().SharedSecret
+	}
+	if cfg.Protocol != "radius" && cfg.Protocol != "tacacs" && cfg.Protocol != "both" {
+		cfg.Protocol = "both"
+	}
+	for i := range cfg.Users {
+		if cfg.Users[i].TacacsService == "" {
+			cfg.Users[i].TacacsService = "shell"
+		}
 	}
 	s.mu.Lock()
 	s.cfg = cfg

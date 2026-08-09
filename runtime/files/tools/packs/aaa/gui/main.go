@@ -21,13 +21,10 @@ func main() {
 		fail("load options: %v", err)
 	}
 	app := NewApp(store)
-	go func() {
-		if err := app.radius.Serve("0.0.0.0:1812"); err != nil {
-			log.Printf("aaa: RADIUS listener stopped: %v", err)
-		}
-	}()
+	go app.serveRadius("0.0.0.0:1812")
+	go app.serveTacacs("0.0.0.0:49")
 	if !hasLabIface() {
-		log.Printf("aaa: eth1 is not wired yet; RADIUS will be reachable after the node gets a lab address")
+		log.Printf("aaa: eth1 is not wired yet; RADIUS and TACACS+ will be reachable after the node gets a lab address")
 	}
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		fail("create socket parent: %v", err)
@@ -44,6 +41,7 @@ func main() {
 		fail("chmod socket: %v", err)
 	}
 	defer app.radius.Close()
+	defer app.tacacs.Close()
 	if err := (&http.Server{Handler: app.routes()}).Serve(listener); err != nil && !strings.Contains(err.Error(), "closed network connection") {
 		fail("serve GUI: %v", err)
 	}

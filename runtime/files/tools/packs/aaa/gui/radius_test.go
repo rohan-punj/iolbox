@@ -106,3 +106,29 @@ func TestStoreAtomicSave(t *testing.T) {
 		t.Fatalf("temporary options file remains: %v", err)
 	}
 }
+
+// TestStoreLoadBareEmptyObjectKeepsSharedSecretDefault is the regression test
+// for a real bug found live: the supervisor writes a bare "{}" options.json
+// for any node with no saved pack options yet (endpointOptionsPayload), which
+// decodes to an all-zero-value Config and must not wipe SharedSecret's
+// default the way an explicit empty-string save legitimately would leave it
+// unset — TacacsServer.Serve refuses to start with no key at all, and the
+// only reason this appeared in the shipped default was Load() blindly
+// accepting the zero value.
+func TestStoreLoadBareEmptyObjectKeepsSharedSecretDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "options.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(path)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := store.Snapshot()
+	if cfg.SharedSecret == "" {
+		t.Fatal("SharedSecret is empty after loading a bare {} options file")
+	}
+	if _, ok := tacacsKey(cfg); !ok {
+		t.Fatal("tacacsKey resolved no key from a freshly-created node's default options file")
+	}
+}

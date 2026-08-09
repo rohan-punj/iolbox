@@ -4,9 +4,12 @@ import (
 	"embed"
 	"html/template"
 	"io/fs"
+	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // The assets are embedded so the installed pack is one self-contained binary.
@@ -17,10 +20,15 @@ var assets embed.FS
 type App struct {
 	store  *Store
 	radius *RadiusServer
+	tacacs *TacacsServer
+
+	errMu     sync.RWMutex
+	radiusErr string
+	tacacsErr string
 }
 
 func NewApp(store *Store) *App {
-	return &App{store: store, radius: NewRadiusServer(store)}
+	return &App{store: store, radius: NewRadiusServer(store), tacacs: NewTacacsServer(store)}
 }
 
 func (a *App) routes() http.Handler {
@@ -42,10 +50,15 @@ func (a *App) routes() http.Handler {
 
 func (a *App) dashboard(w http.ResponseWriter, r *http.Request) {
 	data := struct {
-		Config   Config
-		Attempts []AuthAttempt
-		Iface    bool
-	}{a.store.Snapshot(), a.radius.Attempts(), hasLabIface()}
+		Config    Config
+		Attempts  []LogRow
+		Iface     bool
+		RadiusErr string
+		TacacsErr string
+	}{
+		Config: a.store.Snapshot(), Attempts: a.attempts(), Iface: hasLabIface(),
+		RadiusErr: a.listenerError("radius"), TacacsErr: a.listenerError("tacacs"),
+	}
 	render(w, "dashboard.html", data)
 }
 
@@ -60,8 +73,9 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := a.store.Snapshot()
 	cfg.SharedSecret = r.FormValue("shared_secret")
+	cfg.TacacsKey = r.FormValue("tacacs_key")
 	protocol := strings.ToLower(strings.TrimSpace(r.FormValue("protocol")))
-	if protocol == "radius" || protocol == "tacacs" {
+	if protocol == "radius" || protocol == "tacacs" || protocol == "both" {
 		cfg.Protocol = protocol
 	}
 	if err := a.store.Save(cfg); err != nil {
@@ -78,7 +92,11 @@ func (a *App) addUser(w http.ResponseWriter, r *http.Request) {
 	}
 	priv, _ := strconv.Atoi(r.FormValue("priv_lvl"))
 	cfg := a.store.Snapshot()
-	cfg.Users = append(cfg.Users, User{Username: r.FormValue("username"), Password: r.FormValue("password"), Service: r.FormValue("service"), PrivLvl: priv})
+	tacacsService := strings.TrimSpace(r.FormValue("tacacs_service"))
+	if tacacsService == "" {
+		tacacsService = "shell"
+	}
+	cfg.Users = append(cfg.Users, User{Username: r.FormValue("username"), Password: r.FormValue("password"), Service: r.FormValue("service"), TacacsService: tacacsService, PrivLvl: priv})
 	if err := a.store.Save(cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -106,7 +124,60 @@ func (a *App) deleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) logFragment(w http.ResponseWriter, r *http.Request) {
-	render(w, "log.html", a.radius.Attempts())
+	render(w, "log.html", a.attempts())
+}
+
+type LogRow struct {
+	AuthAttempt
+	Proto string
+}
+
+func (a *App) attempts() []LogRow {
+	radiusAttempts := a.radius.Attempts()
+	tacacsAttempts := a.tacacs.Attempts()
+	rows := make([]LogRow, 0, len(radiusAttempts)+len(tacacsAttempts))
+	for _, attempt := range radiusAttempts {
+		rows = append(rows, LogRow{AuthAttempt: attempt, Proto: "radius"})
+	}
+	for _, attempt := range tacacsAttempts {
+		rows = append(rows, LogRow{AuthAttempt: attempt, Proto: "tacacs+"})
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].At.Before(rows[j].At) })
+	return rows
+}
+
+func (a *App) serveRadius(addr string) {
+	if err := a.radius.Serve(addr); err != nil {
+		a.setListenerError("radius", err)
+		log.Printf("aaa: RADIUS listener stopped: %v", err)
+	}
+}
+
+func (a *App) serveTacacs(addr string) {
+	if err := a.tacacs.Serve(addr); err != nil {
+		a.setListenerError("tacacs", err)
+		log.Printf("aaa: TACACS+ listener stopped: %v", err)
+	}
+}
+
+func (a *App) setListenerError(protocol string, err error) {
+	a.errMu.Lock()
+	defer a.errMu.Unlock()
+	message := err.Error()
+	if protocol == "radius" {
+		a.radiusErr = message
+	} else {
+		a.tacacsErr = message
+	}
+}
+
+func (a *App) listenerError(protocol string) string {
+	a.errMu.RLock()
+	defer a.errMu.RUnlock()
+	if protocol == "radius" {
+		return a.radiusErr
+	}
+	return a.tacacsErr
 }
 
 func render(w http.ResponseWriter, page string, data any) {
