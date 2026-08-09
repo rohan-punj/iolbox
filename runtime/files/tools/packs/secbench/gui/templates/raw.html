@@ -1,12 +1,12 @@
 {{define "page-raw"}}
 {{template "head" .}}
 {{template "nav" .}}
-  <h3>Raw <small class="muted">â€” extra helper args, power-user escape hatch</small></h3>
+  <h3>Raw <small class="muted">— extra helper args, power-user escape hatch</small></h3>
   <p class="muted"><small>Text saved here is split on whitespace and appended <em>verbatim</em> to the
   selected module's command line every time it is started (after its form fields and
   <code>--count</code>/<code>--interval</code>). Useful for a helper flag that has no dedicated form
   field yet. The <code>--iface</code> flag is always fixed to <code>eth1</code> and cannot be
-  overridden here â€” extra args are appended, not prepended, and every helper re-checks its own
+  overridden here — extra args are appended, not prepended, and every helper re-checks its own
   iface argument regardless (see <code>attacks/common.py</code>).</small></p>
 
   <form method="get" action="/raw" class="grid" style="grid-template-columns:1fr 3fr;">
@@ -19,7 +19,7 @@
   <form method="post" action="/raw/save">
     <input type="hidden" name="m" value="{{.RawSel}}">
     <textarea name="content" rows="8" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem;"
-      placeholder="(empty â€” no extra args)">{{.RawText}}</textarea>
+      placeholder="(empty — no extra args)">{{.RawText}}</textarea>
     <button type="submit">Save</button>
   </form>
 {{template "foot" .}}

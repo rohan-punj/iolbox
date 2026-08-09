@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Title}} Â· Security Bench</title>
+  <title>{{.Title}} · Security Bench</title>
   <link rel="stylesheet" href="/static/pico.min.css">
   <script src="/static/htmx.min.js"></script>
   <style>
@@ -84,7 +84,7 @@
 {{define "nav"}}
 <header class="topbar">
   <div class="container">
-    <span class="brand">ðŸ›¡ï¸ Security Bench</span>
+    <span class="brand">🛡️ Security Bench</span>
     <nav>
       <a href="/" class="{{if eq .Page "dashboard"}}active{{end}}">Dashboard</a>
       <a href="/group/recon" class="{{if eq .Page "recon"}}active{{end}}">Recon</a>
@@ -112,9 +112,9 @@
 {{define "lock-notice"}}{{if not .HasLabIface}}
 <article style="border-color:#6b2f2f;">
   <header><strong class="bad">eth1 (lab NIC) not present</strong></header>
-  <p><small>This node has no <code>eth1</code> interface yet â€” every attack/recon module is disabled.
-  Wire this node into a lab topology (right-click â†’ add a link to eth1) and give it an address
-  (right-click â†’ edit â†’ DHCP/static) before starting a module. Attacks are hard-locked to eth1 and
+  <p><small>This node has no <code>eth1</code> interface yet — every attack/recon module is disabled.
+  Wire this node into a lab topology (right-click → add a link to eth1) and give it an address
+  (right-click → edit → DHCP/static) before starting a module. Attacks are hard-locked to eth1 and
   will never bind to eth0 (docker0 management).</small></p>
 </article>
 {{end}}{{end}}

@@ -13,7 +13,7 @@ type logRow struct {
 }
 
 // ModuleView bundles a ModuleDef with its live runtime state + saved params
-// for the template â€” the one generic "module-card" partial renders any of
+// for the template — the one generic "module-card" partial renders any of
 // the 26 modules from this.
 type ModuleView struct {
 	Def         ModuleDef

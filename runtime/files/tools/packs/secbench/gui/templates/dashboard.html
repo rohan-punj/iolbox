@@ -3,7 +3,7 @@
 {{template "nav" .}}
   <hgroup>
     <h3>Dashboard</h3>
-    <p class="muted">Security Bench â€” L2/L3 attack modules each pair with the config that
+    <p class="muted">Security Bench — L2/L3 attack modules each pair with the config that
     defeats them, and NGFW test modules fire traffic at a next-gen firewall to trip its security
     profiles. Everything is hard-locked to <code>eth1</code> (the lab NIC) and disabled when it is
     absent. Auto-refreshes every 3s.</p>
@@ -42,7 +42,7 @@
     {{range .IFaces}}
       <tr>
         <td><code>{{.Name}}</code>{{if not .Up}} <span class="muted">(down)</span>{{end}}</td>
-        <td>{{if .IP}}<code>{{.IP}}</code>{{else}}<span class="muted">â€” no IP yet</span>{{end}}</td>
+        <td>{{if .IP}}<code>{{.IP}}</code>{{else}}<span class="muted">— no IP yet</span>{{end}}</td>
         <td>{{if eq .Name "eth1"}}<span class="pill up" style="margin-left:0;">lab (attacks here)</span>
             {{else if .Lab}}<span class="pill mid" style="margin-left:0;">extra lab NIC (unused by attacks)</span>
             {{else}}<span class="muted">mgmt (docker0)</span>{{end}}</td>

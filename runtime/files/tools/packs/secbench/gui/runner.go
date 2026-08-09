@@ -53,7 +53,7 @@ func (r *ringBuffer) tail(n int) []string {
 
 // Runner supervises a single attack/recon helper process: start (spawn, lab
 // NIC only), stop (kill), running state, and its output ring buffer. Unlike
-// the AAA-style daemon pattern, a Runner does NOT auto-respawn â€” attacks run
+// the AAA-style daemon pattern, a Runner does NOT auto-respawn — attacks run
 // until the operator stops them or they finish (--count reached).
 type Runner struct {
 	mu        sync.Mutex
@@ -85,7 +85,7 @@ func (r *Runner) Tail(n int) []string { return r.log.tail(n) }
 func (r *Runner) Note(msg string) { r.log.add("[supervisor] " + msg) }
 
 // start launches the helper. Callers MUST build args starting with a
-// hardcoded "--iface eth1" (see Supervisor.Start below) â€” start() itself
+// hardcoded "--iface eth1" (see Supervisor.Start below) — start() itself
 // does not touch the iface, it just execs whatever argv it is given.
 func (r *Runner) start(argv []string) error {
 	r.mu.Lock()
@@ -160,7 +160,7 @@ func (s *Supervisor) get(key string) *Runner {
 
 // hasLabIface reports whether eth1 currently exists on this container. When
 // it does not (node not yet wired into a lab, or wired with 0 links), every
-// attack/recon module is disabled â€” there is nothing safe to bind to.
+// attack/recon module is disabled — there is nothing safe to bind to.
 func hasLabIface() bool {
 	ifc, err := net.InterfaceByName(labIface)
 	return err == nil && ifc != nil
@@ -170,7 +170,7 @@ func hasLabIface() bool {
 // or "--iface value" / "-i value" two-token form) from a caller-supplied argv
 // slice. Used by Start below so the Raw-args field (server.go moduleStart,
 // cfg.RawArgs) can never smuggle an alternate interface past the hardcoded
-// lock â€” see the ENFORCEMENT POINT comment on Start.
+// lock — see the ENFORCEMENT POINT comment on Start.
 func stripIfaceFlag(args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -192,7 +192,7 @@ func stripIfaceFlag(args []string) []string {
 // ===== SAFETY / eth1-lock ENFORCEMENT POINT =====
 // This is the one and only place a helper process is exec'd. `--iface` is
 // hardcoded to the labIface constant ("eth1"). Any `--iface`/`-i` token in the
-// caller-supplied extra args (RawArgs on the Raw tab â€” the only path a user
+// caller-supplied extra args (RawArgs on the Raw tab — the only path a user
 // can inject arbitrary flags through) is stripped BEFORE appending, because
 // Python's argparse keeps the LAST occurrence of a flag: appending extra args
 // after "--iface eth1" would otherwise let a later "--iface eth2" silently
@@ -207,7 +207,7 @@ func (s *Supervisor) Start(key string, extra []string) error {
 		return fmt.Errorf("no such module %q", key)
 	}
 	if !hasLabIface() {
-		return fmt.Errorf("eth1 (lab NIC) is not present on this node â€” wire it into a lab topology first")
+		return fmt.Errorf("eth1 (lab NIC) is not present on this node — wire it into a lab topology first")
 	}
 	r := s.get(key)
 	if r == nil {

@@ -7,7 +7,7 @@ import (
 )
 
 // Simple in-memory session store. Every page except the login form and
-// static assets requires a valid session cookie â€” this GUI can trigger real
+// static assets requires a valid session cookie — this GUI can trigger real
 // L2/L3 attacks, so it is guarded like every other node in this repo.
 type sessions struct {
 	mu  sync.Mutex

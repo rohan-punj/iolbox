@@ -3,7 +3,7 @@
 {{template "nav" .}}
   <h3>Settings</h3>
   <article>
-    <header><strong>GUI administrator</strong> <small class="muted">â€” credentials for this web GUI</small></header>
+    <header><strong>GUI administrator</strong> <small class="muted">— credentials for this web GUI</small></header>
     <form method="post" action="/settings/password">
       <label>Username <input name="user" value="{{.Cfg.Admin.User}}"></label>
       <label>New password <input name="newpass" type="password" placeholder="at least 3 characters" required></label>
@@ -12,10 +12,10 @@
   </article>
 
   <article>
-    <header><strong>Config blob</strong> <small class="muted">â€” the node's /firstboot.cfg</small></header>
+    <header><strong>Config blob</strong> <small class="muted">— the node's /firstboot.cfg</small></header>
     <p><small class="muted">This JSON (admin creds, saved module params, raw args) survives node
     stop/start but <strong>not</strong> container recreation. For durable persistence, copy it into
-    the node's <strong>Startup-config</strong> (right-click node â†’ Startup-config) â€” the lab platform pushes it
+    the node's <strong>Startup-config</strong> (right-click node → Startup-config) — the lab platform pushes it
     back in at every boot via <code>config_aaa.py</code>.</small></p>
     <textarea rows="16" readonly style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;">{{.Blob}}</textarea>
   </article>

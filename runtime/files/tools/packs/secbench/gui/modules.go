@@ -3,7 +3,7 @@ package main
 // This file is the single source of truth for the 18 attack/recon modules.
 // Every tab, form, start/stop route and mitigation panel is generated from
 // this table (see server.go) so adding a module never means hand-rolling a
-// new page â€” just another ModuleDef entry + a small python helper.
+// new page — just another ModuleDef entry + a small python helper.
 
 // Field describes one extra CLI parameter a module's helper accepts, beyond
 // the always-present --count/--interval. Rendered as a labelled <input> and
@@ -20,7 +20,7 @@ type Field struct {
 // attack modules that is the exact switch/router config that DEFEATS the
 // attack. For the NGFW-test modules it is instead the firewall profile that
 // DETECTS/BLOCKS the fired traffic, plus where to watch it in the firewall
-// logs â€” same struct, repurposed. Empty Mitigation{} (Config == "") means
+// logs — same struct, repurposed. Empty Mitigation{} (Config == "") means
 // "recon, nothing to show".
 type Mitigation struct {
 	Title   string
@@ -101,7 +101,7 @@ interface Gi0/1                 ! uplink to the real DHCP server
 ip arp inspection vlan 10
 interface Gi0/2                 ! any other trusted/uplink port
  ip arp inspection trust`,
-			Observe: "show ip arp inspection statistics vlan 10 â€” Denied ARP count climbs and the forged replies never reach the target; hosts' ARP tables keep the real gateway MAC.",
+			Observe: "show ip arp inspection statistics vlan 10 — Denied ARP count climbs and the forged replies never reach the target; hosts' ARP tables keep the real gateway MAC.",
 		},
 	},
 	{
@@ -119,7 +119,7 @@ interface Gi0/2                 ! any other trusted/uplink port
  switchport port-security maximum 1
  switchport port-security mac-address sticky
  switchport port-security violation restrict`,
-			Observe: "show port-security interface Gi0/3 â€” SecurityViolation count increments and frames with the forged MAC are dropped instead of forwarded.",
+			Observe: "show port-security interface Gi0/3 — SecurityViolation count increments and frames with the forged MAC are dropped instead of forwarded.",
 		},
 	},
 	{
@@ -132,7 +132,7 @@ interface Gi0/2                 ! any other trusted/uplink port
  switchport port-security
  switchport port-security maximum 2
  switchport port-security violation shutdown`,
-			Observe: "show port-security â€” the flooding port hits its MAC maximum and goes err-disabled instead of the CAM table overflowing and the switch fail-open flooding every VLAN.",
+			Observe: "show port-security — the flooding port hits its MAC maximum and goes err-disabled instead of the CAM table overflowing and the switch fail-open flooding every VLAN.",
 		},
 	},
 
@@ -153,7 +153,7 @@ interface Gi0/2                 ! any other trusted/uplink port
 ip dhcp snooping vlan 10
 interface Gi0/1                 ! uplink to the real DHCP server
  ip dhcp snooping trust`,
-			Observe: "show ip dhcp snooping â€” the attacker's port stays untrusted; show ip dhcp snooping statistics shows OFFER/ACK from it dropped instead of reaching clients.",
+			Observe: "show ip dhcp snooping — the attacker's port stays untrusted; show ip dhcp snooping statistics shows OFFER/ACK from it dropped instead of reaching clients.",
 		},
 	},
 	{
@@ -166,7 +166,7 @@ interface Gi0/1                 ! uplink to the real DHCP server
  ip dhcp snooping limit rate 15
  switchport port-security
  switchport port-security maximum 3`,
-			Observe: "show ip dhcp snooping statistics â€” DISCOVERs from the attacking port are rate-limited/dropped well before the pool exhausts.",
+			Observe: "show ip dhcp snooping statistics — DISCOVERs from the attacking port are rate-limited/dropped well before the pool exhausts.",
 		},
 	},
 
@@ -185,7 +185,7 @@ interface Gi0/1                 ! uplink to the real DHCP server
 !
 interface Gi0/1                 ! port that must never become root-facing
  spanning-tree guard root`,
-			Observe: "show spanning-tree summary â€” the edge port goes err-disabled the instant a BPDU arrives (bpduguard), or the uplink goes into root-inconsistent state (root guard) instead of the topology re-converging around the attacker.",
+			Observe: "show spanning-tree summary — the edge port goes err-disabled the instant a BPDU arrives (bpduguard), or the uplink goes into root-inconsistent state (root guard) instead of the topology re-converging around the attacker.",
 		},
 	},
 	{
@@ -201,12 +201,12 @@ interface Gi0/1                 ! port that must never become root-facing
 ! or, scoped to just the exposed edge port:
 interface Gi0/5
  no cdp enable`,
-			Observe: "show cdp neighbors â€” stays empty (or unchanged) despite the flood.",
+			Observe: "show cdp neighbors — stays empty (or unchanged) despite the flood.",
 		},
 	},
 	{
 		Key: "lldp_flood", Label: "LLDP Flood / Spoof", Group: groupSTP, Script: "lldp_flood.py",
-		Blurb: "Floods forged LLDP TLVs (chassis-id/system-name) â€” the vendor-neutral twin of the CDP flood.",
+		Blurb: "Floods forged LLDP TLVs (chassis-id/system-name) — the vendor-neutral twin of the CDP flood.",
 		Fields: []Field{
 			{"chassis_id", "Forged chassis-id", "fake-chassis", "fake-chassis", "text"},
 			{"system_name", "Forged system name", "fake-switch", "fake-switch", "text"},
@@ -218,7 +218,7 @@ interface Gi0/5
 interface Gi0/5
  no lldp transmit
  no lldp receive`,
-			Observe: "show lldp neighbors â€” stays empty despite the flood.",
+			Observe: "show lldp neighbors — stays empty despite the flood.",
 		},
 	},
 
@@ -232,7 +232,7 @@ interface Gi0/5
 			Config: `interface Gi0/5
  switchport mode access
  switchport nonegotiate`,
-			Observe: "show interfaces Gi0/5 switchport â€” Administrative Mode: static access, Negotiation of Trunking: Off; the port never becomes a trunk no matter how many DTP frames arrive.",
+			Observe: "show interfaces Gi0/5 switchport — Administrative Mode: static access, Negotiation of Trunking: Off; the port never becomes a trunk no matter how many DTP frames arrive.",
 		},
 	},
 	{
@@ -247,7 +247,7 @@ interface Gi0/5
 			Config: `interface Gi0/1                 ! trunk uplink
  switchport trunk native vlan 999
  switchport trunk allowed vlan remove 999`,
-			Observe: "show interfaces trunk â€” native VLAN is now 999 (unused, carries no hosts) and VLAN 1 is pruned, so a double-tagged frame using the old native VLAN no longer hops.",
+			Observe: "show interfaces trunk — native VLAN is now 999 (unused, carries no hosts) and VLAN 1 is pruned, so a double-tagged frame using the old native VLAN no longer hops.",
 		},
 	},
 
@@ -266,7 +266,7 @@ interface Gi0/5
  standby 1 ip 10.0.10.1
  standby 1 priority 110
  standby 1 authentication md5 key-string CHANGEME`,
-			Observe: "show standby brief â€” forged hellos without the matching key are rejected outright; no unexpected Active/Speak state churn on the real routers.",
+			Observe: "show standby brief — forged hellos without the matching key are rejected outright; no unexpected Active/Speak state churn on the real routers.",
 		},
 	},
 	{
@@ -283,7 +283,7 @@ interface Gi0/5
  vrrp 1 ip 10.0.20.1
  vrrp 1 priority 110
  vrrp 1 authentication text CHANGEME`,
-			Observe: "show vrrp â€” Master stays stable; forged advertisements without the shared secret never trigger a role change.",
+			Observe: "show vrrp — Master stays stable; forged advertisements without the shared secret never trigger a role change.",
 		},
 	},
 	{
@@ -303,7 +303,7 @@ router ospf 1
  area 0 authentication message-digest
  passive-interface default
  no passive-interface Gi0/2      ! only real OSPF links stay active`,
-			Observe: "show ip ospf neighbor â€” the rogue speaker never appears; debug ip ospf adj shows hello/auth mismatch drops instead of a new adjacency forming.",
+			Observe: "show ip ospf neighbor — the rogue speaker never appears; debug ip ospf adj shows hello/auth mismatch drops instead of a new adjacency forming.",
 		},
 	},
 	{
@@ -322,7 +322,7 @@ router ospf 1
 interface Gi0/1
  ip authentication mode eigrp 100 md5
  ip authentication key-chain eigrp 100 EIGRP-KEYS`,
-			Observe: "show ip eigrp neighbors â€” the rogue router never appears; neighborship fails authentication instead of forming.",
+			Observe: "show ip eigrp neighbors — the rogue router never appears; neighborship fails authentication instead of forming.",
 		},
 	},
 	{
@@ -343,7 +343,7 @@ ipv6 dhcp guard policy DHCPV6-HOST
 interface Gi0/5
  ipv6 nd raguard attach-policy HOST-PORT
  ipv6 dhcp guard attach-policy DHCPV6-HOST`,
-			Observe: "show ipv6 nd raguard policy HOST-PORT â€” dropped-RA counters increment on the port; hosts keep the legitimate default gateway/DHCPv6 lease instead of the rogue one.",
+			Observe: "show ipv6 nd raguard policy HOST-PORT — dropped-RA counters increment on the port; hosts keep the legitimate default gateway/DHCPv6 lease instead of the rogue one.",
 		},
 	},
 }

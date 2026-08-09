@@ -59,7 +59,7 @@ func deriveReconSubnet() string {
 	}
 	for _, a := range addrs {
 		if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-			return ipnet.String() // e.g. "192.168.1.5/24" â€” good enough as a scan hint
+			return ipnet.String() // e.g. "192.168.1.5/24" — good enough as a scan hint
 		}
 	}
 	return ""
