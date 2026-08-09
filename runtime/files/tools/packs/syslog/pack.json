@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "id": "syslog",
+  "name": "Syslog Server",
+  "icon": "tool",
+  "interpreter": "none",
+  "gui": {
+    "bin": "syslog-gui",
+    "transport": "unix",
+    "console": "http",
+    "health": "/healthz",
+    "proxyRoutes": [{ "prefix": "/", "allowWS": true }]
+  },
+  "caps": [],
+  "options": [],
+  "groups": [],
+  "modules": [],
+  "limits": {
+    "memoryMax": 268435456,
+    "pidsMax": 64,
+    "cpuMax": "100000 100000",
+    "swapMax": 0
+  }
+}

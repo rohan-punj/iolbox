@@ -173,7 +173,8 @@ rm -rf "$SECBENCH_BIN_STAGE"; mkdir -p "$SECBENCH_BIN_STAGE"
 # static Go binary that is both the pack's AF_UNIX GUI and its lab-facing
 # service (RADIUS listener / HTTP server / outbound HTTP client) — no
 # separate attack-style binaries, unlike secbench.
-for pack in aaa webserver httpclient; do
+# The syslog receiver follows the same standalone pack layout.
+for pack in aaa webserver httpclient syslog; do
     echo "== build-rootfs: building $pack pack GUI (linux/amd64) =="
     (
         cd "$SCRIPT_DIR/files/tools/packs/$pack/gui"
@@ -326,7 +327,7 @@ install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/bin"
-for pack in aaa webserver httpclient; do
+for pack in aaa webserver httpclient syslog; do
     install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack"
 done
 # /run/iolbox/tool is traversable by ioltool but not writable; Endpoint.Start
@@ -357,7 +358,7 @@ for bin in "$SECBENCH_BIN_STAGE"/*; do
 done
 
 # P3 network-tool packs: manifest + single-binary GUI/service each.
-for pack in aaa webserver httpclient; do
+for pack in aaa webserver httpclient syslog; do
     install -m 0644 -o root -g root \
         "$SCRIPT_DIR/files/tools/packs/$pack/pack.json" \
         "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack/pack.json"

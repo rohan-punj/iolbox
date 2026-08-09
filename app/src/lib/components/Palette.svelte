@@ -232,7 +232,7 @@
       role="button"
       tabindex="0"
       ondragstart={(e) => onDragStart(e, "tool", undefined, defaultToolPack)}
-      title="Network tools — pick RADIUS/AAA, web server, or HTTP client after dropping"
+      title="Network tools — pick RADIUS/AAA, web server, HTTP client, or syslog collector after dropping"
     >
       <span class="swatch tool" aria-hidden="true">{@html iconSvg("tool", 28)}</span>
       <div class="item-text">
