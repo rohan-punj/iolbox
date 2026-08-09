@@ -273,6 +273,9 @@ type Config struct {
 	RunDir     string
 	User       string
 	InstanceID string
+	// Net is an optional static address for GuestIface (eth1); nil leaves the
+	// interface unaddressed (the long-standing default — see NetAddrConfig).
+	Net *NetAddrConfig
 	// Options is the raw JSON payload written to the per-node options file
 	// before launch. Nil or empty Options means the endpoint writes {}, never
 	// leaves the file absent, because the GUI hard-exits when it cannot read it.

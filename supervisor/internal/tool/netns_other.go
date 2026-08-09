@@ -9,6 +9,10 @@ func CreateNetns(nodeID int) error { return ErrUnsupportedPlatform }
 // CreateVethPair reports the platform boundary without invoking host tools.
 func CreateVethPair(nodeID int) error { return ErrUnsupportedPlatform }
 
+// AssignAddr reports the platform boundary without changing a network
+// namespace's addressing.
+func AssignAddr(nodeID int, cfg NetAddrConfig) error { return ErrUnsupportedPlatform }
+
 // AttachVethToBridge reports the platform boundary without changing a bridge.
 func AttachVethToBridge(nodeID int, br string) error { return ErrUnsupportedPlatform }
 

@@ -142,8 +142,8 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	}
 
 	ll := newLoadedLab(&doc, s.cfg.RunDir)
-	var nodes []protocol.NodeConsole
-	var warnings []string
+	nodes := []protocol.NodeConsole{}
+	warnings := []string{}
 
 	for i := range doc.Nodes {
 		n := &doc.Nodes[i]
@@ -723,6 +723,30 @@ func (s *Server) startToolNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (pro
 		options = append([]byte(nil), raw...)
 	}
 
+	// Optional static IP for GuestIface (eth1) — most packs don't need one
+	// (they operate at L2 or forge their own L3 headers), so an absent/empty
+	// "net.ip" leaves the interface unaddressed exactly as before this field
+	// existed.
+	var netCfg *tool.NetAddrConfig
+	if raw, exists := n.Config["net"]; exists {
+		var addr struct {
+			IP        string `json:"ip"`
+			PrefixLen int    `json:"prefixLen"`
+			Gateway   string `json:"gateway"`
+		}
+		if err := json.Unmarshal(raw, &addr); err != nil {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+				"tool: node %d has invalid net config: %v", n.ID, err)
+		}
+		if addr.IP != "" {
+			if addr.PrefixLen <= 0 || addr.PrefixLen > 32 {
+				addr.PrefixLen = 24
+			}
+			netCfg = &tool.NetAddrConfig{IP: addr.IP, PrefixLen: addr.PrefixLen, Gateway: addr.Gateway}
+		}
+	}
+
 	cfg := tool.Config{
 		NodeID:   n.ID,
 		Pack:     pack,
@@ -730,6 +754,7 @@ func (s *Server) startToolNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (pro
 		StateDir: s.cfg.StateDir,
 		RunDir:   s.cfg.RunDir,
 		Options:  options,
+		Net:      netCfg,
 	}
 	ep, err := tool.Start(cfg)
 	if err != nil {

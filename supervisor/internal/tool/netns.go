@@ -33,6 +33,35 @@ func netnsCreateVethCmds(nodeID int) []cmdSpec {
 	}
 }
 
+// NetAddrConfig is an optional static address for a tool node's GuestIface
+// (eth1). Set from the node's `config.net` doc field (see labTypes.ts) — a
+// zero value means "leave eth1 unaddressed", the long-standing default every
+// existing pack already tolerates (most secbench modules operate at L2 or
+// forge their own L3 headers; only a few, like arp_scan/dhcp_discover, need
+// a real return address).
+type NetAddrConfig struct {
+	IP        string
+	PrefixLen int
+	Gateway   string // optional; empty means no default route is added
+}
+
+// netnsAddrCmds assigns a static IPv4 address (and optionally a default
+// route) to GuestIface inside the node's namespace. Called once, after
+// netnsCreateVethCmds has brought eth1 up — assigning an address to a
+// down interface is itself harmless, but this ordering matches every other
+// netns setup step in this file (create, then configure).
+func netnsAddrCmds(nodeID int, cfg NetAddrConfig) []cmdSpec {
+	cmds := []cmdSpec{
+		{name: "ip", args: NetnsExecArgs(nodeID, []string{"ip", "addr", "add",
+			fmt.Sprintf("%s/%d", cfg.IP, cfg.PrefixLen), "dev", GuestIface})[1:]},
+	}
+	if cfg.Gateway != "" {
+		cmds = append(cmds, cmdSpec{name: "ip", args: NetnsExecArgs(nodeID, []string{"ip", "route", "add",
+			"default", "via", cfg.Gateway})[1:]})
+	}
+	return cmds
+}
+
 // netnsAttachVethCmds leaves the bridge-side end in the root namespace so
 // fabric capture and directional statistics can bind the same device as IOL,
 // VPCS, and NAT taps.

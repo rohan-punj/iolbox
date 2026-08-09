@@ -109,6 +109,11 @@ func Start(cfg Config) (*Endpoint, error) {
 	if err := CreateVethPair(cfg.NodeID); err != nil {
 		return nil, e.endpointStartFailure(err)
 	}
+	if cfg.Net != nil {
+		if err := AssignAddr(cfg.NodeID, *cfg.Net); err != nil {
+			return nil, e.endpointStartFailure(err)
+		}
+	}
 
 	if err := e.endpointRecordObject(); err != nil {
 		return nil, e.endpointStartFailure(err)

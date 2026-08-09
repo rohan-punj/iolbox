@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
@@ -11,16 +8,9 @@ import (
 )
 
 type Config struct {
-	Admin        Admin                        `json:"admin"`
 	ModuleParams map[string]map[string]string `json:"module_params"`
 	RawArgs      map[string]string            `json:"raw_args"`
 	ReconSubnet  string                       `json:"recon_subnet"`
-}
-
-type Admin struct {
-	User     string `json:"user"`
-	Salt     string `json:"salt"`
-	PassHash string `json:"passhash"`
 }
 
 type Store struct {
@@ -30,11 +20,7 @@ type Store struct {
 }
 
 func defaultConfig() Config {
-	c := Config{ModuleParams: map[string]map[string]string{}, RawArgs: map[string]string{}}
-	c.Admin.User = "admin"
-	c.Admin.Salt = randHex(8)
-	c.Admin.PassHash = hashPass(c.Admin.Salt, "pnet")
-	return c
+	return Config{ModuleParams: map[string]map[string]string{}, RawArgs: map[string]string{}}
 }
 
 func NewStore(path string) *Store {
@@ -52,13 +38,6 @@ func NewStore(path string) *Store {
 }
 
 func mergeDefaults(c Config) Config {
-	if c.Admin.User == "" {
-		c.Admin.User = "admin"
-	}
-	if c.Admin.Salt == "" || c.Admin.PassHash == "" {
-		c.Admin.Salt = randHex(8)
-		c.Admin.PassHash = hashPass(c.Admin.Salt, "pnet")
-	}
 	if c.ModuleParams == nil {
 		c.ModuleParams = map[string]map[string]string{}
 	}
@@ -87,15 +66,4 @@ func (s *Store) Update(fn func(c *Config)) error {
 		return err
 	}
 	return os.Rename(tmp, s.path)
-}
-
-func randHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func hashPass(salt, pass string) string {
-	h := sha256.Sum256([]byte(salt + pass))
-	return hex.EncodeToString(h[:])
 }

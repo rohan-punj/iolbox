@@ -28,8 +28,6 @@ type ModuleView struct {
 type pageData struct {
 	Page         string
 	Title        string
-	Flash        string
-	FlashErr     bool
 	Cfg          Config
 	IFaces       []ifaceInfo
 	HasLabIface  bool
@@ -51,29 +49,16 @@ func (a *App) routes(mux *http.ServeMux) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.Handle("GET /static/", http.FileServer(http.FS(staticFS)))
-	mux.HandleFunc("GET /login", a.loginForm)
-	mux.HandleFunc("POST /login", a.loginPost)
-	mux.HandleFunc("GET /logout", a.logout)
-	mux.HandleFunc("GET /{$}", a.guard(a.dashboard))
-	mux.HandleFunc("GET /group/{group}", a.guard(a.groupPage))
-	mux.HandleFunc("GET /raw", a.guard(a.rawPage))
-	mux.HandleFunc("GET /settings", a.guard(a.settingsPage))
-	mux.HandleFunc("GET /frag/dash", a.guard(a.fragDash))
-	mux.HandleFunc("GET /frag/module/{key}", a.guard(a.fragModule))
-	mux.HandleFunc("POST /module/{key}/start", a.guard(a.moduleStart))
-	mux.HandleFunc("POST /module/{key}/stop", a.guard(a.moduleStop))
-	mux.HandleFunc("POST /stopall", a.guard(a.stopAll))
-	mux.HandleFunc("POST /raw/save", a.guard(a.rawSave))
-	mux.HandleFunc("POST /settings/password", a.guard(a.passwordSave))
-}
-func (a *App) guard(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !a.sess.authed(r) {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		h(w, r)
-	}
+	mux.HandleFunc("GET /{$}", a.dashboard)
+	mux.HandleFunc("GET /group/{group}", a.groupPage)
+	mux.HandleFunc("GET /raw", a.rawPage)
+	mux.HandleFunc("GET /settings", a.settingsPage)
+	mux.HandleFunc("GET /frag/dash", a.fragDash)
+	mux.HandleFunc("GET /frag/module/{key}", a.fragModule)
+	mux.HandleFunc("POST /module/{key}/start", a.moduleStart)
+	mux.HandleFunc("POST /module/{key}/stop", a.moduleStop)
+	mux.HandleFunc("POST /stopall", a.stopAll)
+	mux.HandleFunc("POST /raw/save", a.rawSave)
 }
 
 func (a *App) render(w http.ResponseWriter, name string, d pageData) {
@@ -82,34 +67,6 @@ func (a *App) render(w http.ResponseWriter, name string, d pageData) {
 		logf("template %s: %v", name, err)
 		http.Error(w, "template error", 500)
 	}
-}
-
-// ---- auth ----
-
-func (a *App) loginForm(w http.ResponseWriter, r *http.Request) {
-	a.render(w, "page-login", pageData{Title: "Sign in", Flash: r.URL.Query().Get("e"), FlashErr: r.URL.Query().Get("e") != ""})
-}
-
-func (a *App) loginPost(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	u := r.FormValue("user")
-	p := r.FormValue("pass")
-	cfg := a.store.Get()
-	if u == cfg.Admin.User && hashPass(cfg.Admin.Salt, p) == cfg.Admin.PassHash {
-		tok := a.sess.create()
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/login?e=Invalid+credentials", http.StatusSeeOther)
-}
-
-func (a *App) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		a.sess.destroy(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 // ---- view building ----
@@ -241,22 +198,6 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request) {
 	a.render(w, "page-settings", pageData{Page: "settings", Title: "Settings", Cfg: cfg, Blob: string(blob)})
 }
 
-func (a *App) passwordSave(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	np := r.FormValue("newpass")
-	if len(np) < 3 {
-		http.Redirect(w, r, "/settings", http.StatusSeeOther)
-		return
-	}
-	_ = a.store.Update(func(c *Config) {
-		c.Admin.Salt = randHex(8)
-		c.Admin.PassHash = hashPass(c.Admin.Salt, np)
-		if u := strings.TrimSpace(r.FormValue("user")); u != "" {
-			c.Admin.User = u
-		}
-	})
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
-}
 func (a *App) moduleStart(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	m := moduleByKey(key)

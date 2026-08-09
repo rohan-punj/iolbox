@@ -14,6 +14,14 @@ func CreateVethPair(nodeID int) error {
 	return runCmds(netnsCreateVethCmds(nodeID))
 }
 
+// AssignAddr sets a static IPv4 address (and optional default route) on
+// GuestIface inside the node's namespace. Callers only invoke this when the
+// node doc actually carries a NetAddrConfig — leaving eth1 unaddressed
+// remains the default for every pack that doesn't need it.
+func AssignAddr(nodeID int, cfg NetAddrConfig) error {
+	return runCmds(netnsAddrCmds(nodeID, cfg))
+}
+
 // AttachVethToBridge joins the root-side lab veth to the requested fabric
 // bridge without moving either endpoint into another namespace.
 func AttachVethToBridge(nodeID int, br string) error {

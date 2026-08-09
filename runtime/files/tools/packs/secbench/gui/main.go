@@ -19,7 +19,6 @@ var staticFS embed.FS
 type App struct {
 	store *Store
 	sup   *Supervisor
-	sess  *sessions
 	tmpl  *template.Template
 }
 
@@ -42,7 +41,6 @@ func main() {
 	sup := newSupervisor()
 	app := &App{
 		store: store,
-		sess:  newSessions(),
 		sup:   sup,
 		tmpl:  template.Must(template.New("").Funcs(funcMap()).ParseFS(tmplFS, "templates/*.html")),
 	}
