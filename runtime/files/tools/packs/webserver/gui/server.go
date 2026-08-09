@@ -67,9 +67,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	a.web.SetConfig(cfg)
 	warning := ""
-	if port > 0 && port < 1024 {
-		warning = "Ports below 1024 require the privileged-port supervisor enablement; the listener was not restarted."
-	} else if err := a.web.Restart(port); err != nil {
+	if err := a.web.Restart(port); err != nil {
 		warning = err.Error()
 	}
 	render(w, "settings.html", struct {

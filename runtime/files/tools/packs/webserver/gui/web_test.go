@@ -95,9 +95,32 @@ func TestWebPortChangeRestart(t *testing.T) {
 	_ = web.Close()
 }
 
-func TestWebRejectsPrivilegedPort(t *testing.T) {
-	web := NewWeb(Config{ListenPort: 80, IndexHTML: "", ExtraPaths: map[string]string{}})
-	if err := web.Restart(80); err == nil {
-		t.Fatal("expected privileged port refusal")
+func TestWebPortValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		port      int
+		wantRange bool
+	}{
+		{name: "zero", port: 0},
+		{name: "privileged", port: 80},
+		{name: "unprivileged", port: 8080},
+		{name: "too high", port: 70000, wantRange: true},
+		{name: "negative", port: -1, wantRange: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			web := NewWeb(Config{ListenPort: 0, ExtraPaths: map[string]string{}})
+			err := web.Restart(test.port)
+			if test.wantRange {
+				if err == nil || !strings.Contains(err.Error(), "is out of range (must be 0-65535)") {
+					t.Fatalf("Restart(%d) error = %v, want range error", test.port, err)
+				}
+				return
+			}
+			if err != nil && strings.Contains(err.Error(), "requires privileged-port enablement") {
+				t.Fatalf("Restart(%d) used the stale application-level rejection: %v", test.port, err)
+			}
+			_ = web.Close()
+		})
 	}
 }

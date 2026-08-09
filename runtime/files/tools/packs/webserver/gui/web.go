@@ -71,8 +71,8 @@ func (w *WebService) Serve() error {
 }
 
 func (w *WebService) serve(port int, ready chan<- error) error {
-	if port < 0 || port > 65535 || (port > 0 && port < 1024) {
-		err := fmt.Errorf("port %d requires privileged-port enablement; MVP ports must be 1024 or higher", port)
+	if port < 0 || port > 65535 {
+		err := fmt.Errorf("port %d is out of range (must be 0-65535)", port)
 		if ready != nil {
 			ready <- err
 		}
@@ -107,8 +107,8 @@ func (w *WebService) serve(port int, ready chan<- error) error {
 }
 
 func (w *WebService) Restart(port int) error {
-	if port < 0 || port > 65535 || (port > 0 && port < 1024) {
-		return fmt.Errorf("port %d requires privileged-port enablement; MVP ports must be 1024 or higher", port)
+	if port < 0 || port > 65535 {
+		return fmt.Errorf("port %d is out of range (must be 0-65535)", port)
 	}
 	w.mu.RLock()
 	old := w.server

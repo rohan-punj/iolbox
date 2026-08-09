@@ -21,16 +21,11 @@ func main() {
 		fail("load options: %v", err)
 	}
 	app := NewApp(store)
-	cfg := store.Snapshot()
-	if cfg.ListenPort > 0 && cfg.ListenPort < 1024 {
-		log.Printf("webserver: port %d requires privileged-port enablement; listener not started", cfg.ListenPort)
-	} else {
-		go func() {
-			if err := app.web.Serve(); err != nil {
-				log.Printf("webserver: listener stopped: %v", err)
-			}
-		}()
-	}
+	go func() {
+		if err := app.web.Serve(); err != nil {
+			log.Printf("webserver: listener stopped: %v", err)
+		}
+	}()
 	if !hasLabIface() {
 		log.Printf("webserver: eth1 is not wired yet; the service will be reachable after the node gets a lab address")
 	}
