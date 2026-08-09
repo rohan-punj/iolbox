@@ -1,7 +1,8 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
   import { consoleUiStore } from "../consoleUiStore.svelte";
-  import { iconSvg } from "../icons.svelte";
+  import { paletteUiStore } from "../paletteUiStore.svelte";
+  import { iconSvg, uiSvg } from "../icons.svelte";
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
   import { watcherStore } from "../watcherStore.svelte";
   import { painterStore } from "../painterStore.svelte";
@@ -89,6 +90,14 @@
 </script>
 
 <div class="palette">
+  <button
+    class="collapse-btn"
+    title="Hide palette"
+    aria-label="Hide palette"
+    onclick={() => paletteUiStore.toggle()}
+  >
+    {@html uiSvg("chevronLeft", 13)}
+  </button>
   <div class="section-title">Session</div>
   <div class="session-actions">
     <button class="btn btn-primary session-primary" onclick={startAll} disabled={running}>
@@ -480,6 +489,20 @@
     color: var(--ink-3);
     text-align: right;
     padding: 0 2px;
+  }
+  .collapse-btn {
+    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .collapse-btn:hover {
+    color: var(--ink-1);
   }
   .section-title {
     font-size: var(--fs-xs);

@@ -49,7 +49,7 @@ const MOCK_TOOL_PACKS: ToolListPacksResult["packs"] = [
   {
     id: "secbench",
     name: "Security Bench",
-    icon: "tool",
+    icon: "firewall",
     transport: "unix",
     groups: ["recon", "spoof", "dhcp", "stp", "vlan", "fhrp"],
     modules: [

@@ -125,6 +125,14 @@ export const UI_GLYPHS: Record<string, string> = {
   // Floppy-disk "save config" glyph.
   savecfg:
     '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 21v-6h8v6"/>',
+  // Four detached corner brackets pointing outward — enter fullscreen.
+  fullscreen:
+    '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/>',
+  // Corner brackets pointing inward — exit fullscreen.
+  fullscreenExit:
+    '<path d="M9 3v3a2 2 0 0 1-2 2H4M15 3v3a2 2 0 0 0 2 2h3M9 21v-3a2 2 0 0 0-2-2H4M15 21v-3a2 2 0 0 1 2-2h3"/>',
+  chevronLeft: '<path d="M15 5 8 12l7 7"/>',
+  chevronRight: '<path d="M9 5l7 7-7 7"/>',
 };
 
 /** Runtime store of user-imported icons, keyed by registry key. */

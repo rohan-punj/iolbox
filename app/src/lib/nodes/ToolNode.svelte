@@ -2,7 +2,7 @@
   import { Handle, Position, type NodeProps } from "@xyflow/svelte";
   import { labStore } from "../labStore.svelte";
   import { stateLabel } from "../nodeVisuals";
-  import { iconSvg, uiSvg } from "../icons.svelte";
+  import { iconSvg, uiSvg, iconRegistryVersion } from "../icons.svelte";
   import { linking } from "../linking.svelte";
   import NodeActions from "./NodeActions.svelte";
 
@@ -14,6 +14,13 @@
   const isDropTarget = $derived(linking.dropTargetId === nodeId);
   const isLinkSource = $derived(linking.sourceId === nodeId);
   const label = $derived((data as any).label as string);
+  // Falls back to the node's learning-tool pack's own icon (e.g. Security
+  // Bench's firewall glyph) before the generic wrench, matching the
+  // node.icon ?? defaultIconFor(...) pattern IolNode/VpcsNode already use.
+  const packId = $derived((data as any).packId as string | undefined);
+  const pack = $derived(labStore.toolPacks.find((p) => p.id === packId));
+  const iconKey = $derived(((data as any).icon as string | undefined) ?? pack?.icon ?? "tool");
+  const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, 30)));
   let guiOpen = $state(false);
 
   function onConnectorDown(ev: PointerEvent) {
@@ -55,7 +62,7 @@
     {#if isLocked}
       <span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>
     {/if}
-    <span class="glyph" aria-hidden="true">{@html iconSvg("tool", 30)}</span>
+    <span class="glyph" aria-hidden="true">{@html glyph}</span>
     <button
       class="gui-button nodrag"
       title="Open learning-tool GUI"

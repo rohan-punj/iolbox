@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "secbench",
   "name": "Security Bench",
-  "icon": "Firewall-2D-Generic-S.svg",
+  "icon": "firewall",
   "interpreter": "venv",
   "gui": {
     "bin": "secbench-gui",

@@ -20,8 +20,13 @@ export interface LogLine {
 }
 
 class LabStore {
-  lab = $state<LabDocument>(emptyLab("Demo Topology"));
+  lab = $state<LabDocument>(emptyLab("Untitled lab"));
   selectedNodeId = $state<number | null>(null);
+  /** Which node's Inspector pane is open, independent of selectedNodeId — a
+   *  plain click only selects/highlights a node (drag, delete-key, multi-op
+   *  targeting), it does NOT pop the right-side editor open. Only an explicit
+   *  "Edit…" (right-click menu or double-click) sets this. */
+  inspectorNodeId = $state<number | null>(null);
   selectedLinkId = $state<number | null>(null);
   /** Selected canvas annotation (Excalidraw layer). Independent of node/link
    *  selection — annotations never open the node Inspector. */
@@ -132,6 +137,11 @@ class LabStore {
   private savedDocIds = new Set<string>();
   lastSavedAt = $state<number | null>(null);
   private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True while a lab.load round-trip is in flight. Guards against a second
+   *  New/Open landing mid-load, which would otherwise interleave two
+   *  loadLab() calls and let a slow first response's runtime state (console
+   *  ports, node states) overwrite the second lab's after the fact. */
+  labLoading = $state(false);
 
   client: SupervisorClient;
   /** Only set when the mock transport was actually selected; see mockTransport getter. */
@@ -152,66 +162,11 @@ class LabStore {
       this.activeProvider = null;
       void this.connect();
     }
-    this.seedDemoLab();
     // Drive glow decay: bump a coarse clock every second so FloatingEdge
     // re-evaluates staleness even when no new link.stats events arrive.
     setInterval(() => {
       this.nowTick = Date.now();
     }, 1000);
-  }
-
-  /** Small starter topology so the canvas isn't empty on first launch. */
-  private seedDemoLab() {
-    this.lab.nodes = [
-      {
-        id: 0,
-        kind: "iol",
-        name: "R1",
-        x: 120,
-        y: 140,
-        ram: 1024,
-        ethernet: 2,
-        serial: 1,
-        image: { id: "a1b2c3d4", filename: "i86bi_linux-adventerprisek9-ms.vm.bin", class: "l3" },
-      },
-      {
-        id: 1,
-        kind: "iol",
-        name: "SW1",
-        x: 420,
-        y: 140,
-        ram: 1024,
-        ethernet: 4,
-        serial: 0,
-        image: { id: "b2c3d4e5", filename: "i86bi_linux_l2-adventerprisek9-ms.bin", class: "l2" },
-      },
-      {
-        id: 2,
-        kind: "vpcs",
-        name: "PC1",
-        x: 420,
-        y: 340,
-      },
-    ];
-    this.lab.links = [
-      {
-        id: 0,
-        type: "p2p",
-        endpoints: [
-          { node: 0, interface: "e0/0" },
-          { node: 1, interface: "e0/0" },
-        ],
-      },
-      {
-        id: 1,
-        type: "p2p",
-        endpoints: [
-          { node: 1, interface: "e0/1" },
-          { node: 2, interface: "eth0" },
-        ],
-      },
-    ];
-    for (const n of this.lab.nodes) this.nodeStates[n.id] = "stopped";
   }
 
   /** Only meaningful when transportKind === "mock"; null under a real ws transport. */
@@ -322,7 +277,7 @@ class LabStore {
 
     const states: Record<number, NodeState> = {};
     const ports: Record<number, number> = {};
-    for (const n of status.nodes) {
+    for (const n of status.nodes ?? []) {
       states[n.id] = n.state;
       if (n.consolePort) ports[n.id] = n.consolePort;
     }
@@ -336,7 +291,7 @@ class LabStore {
     this.consolePorts = ports;
 
     const capPorts: Record<number, number> = {};
-    for (const l of status.links) {
+    for (const l of status.links ?? []) {
       if (l.capturePort) capPorts[l.id] = l.capturePort;
     }
     this.capturePorts = capPorts;
@@ -478,6 +433,23 @@ class LabStore {
   }
 
   async loadLab(lab: LabDocument) {
+    // A pending autosave belongs to the PREVIOUS lab — left running, it fires
+    // ~1.2s from now and saves whatever this.lab has become by then (i.e. the
+    // lab we're about to switch to), silently persisting a brand-new/unedited
+    // lab the user never asked to save. Cancel it before swapping docs.
+    if (this.autosaveTimer) {
+      clearTimeout(this.autosaveTimer);
+      this.autosaveTimer = null;
+    }
+    this.labLoading = true;
+    try {
+      return await this.loadLabInner(lab);
+    } finally {
+      this.labLoading = false;
+    }
+  }
+
+  private async loadLabInner(lab: LabDocument) {
     this.lab = lab;
     // Remap image ids against this supervisor's registry (same as connect()).
     this.reconcileNodeImages();
@@ -491,7 +463,7 @@ class LabStore {
     this.activeConsoleTab = null;
     const res = await this.client.labLoad(lab);
     const ports: Record<number, number> = {};
-    for (const n of res.nodes) {
+    for (const n of res.nodes ?? []) {
       ports[n.id] = n.consolePort;
     }
     this.consolePorts = ports;
@@ -505,11 +477,11 @@ class LabStore {
       try {
         const status = await this.client.status();
         const states: Record<number, NodeState> = {};
-        for (const n of status.nodes) states[n.id] = n.state;
+        for (const n of status.nodes ?? []) states[n.id] = n.state;
         for (const n of lab.nodes) if (!(n.id in states)) states[n.id] = "stopped";
         this.nodeStates = states;
         const capPorts: Record<number, number> = {};
-        for (const l of status.links) if (l.capturePort) capPorts[l.id] = l.capturePort;
+        for (const l of status.links ?? []) if (l.capturePort) capPorts[l.id] = l.capturePort;
         this.capturePorts = capPorts;
       } catch {
         // status() failing here is unusual (we just got a reply from the same
@@ -629,6 +601,11 @@ class LabStore {
    *  already-saved and eligible for autosave); false for New/Import of a doc the
    *  user hasn't persisted yet. */
   async openLab(lab: LabDocument, fromStore = false) {
+    // A load is already in flight (e.g. a double-click on New, or Open
+    // clicked again before the first one settled) — let it finish rather
+    // than interleaving two loadLab() calls, which can let a slow first
+    // response's runtime state overwrite the second lab's after the fact.
+    if (this.labLoading) return;
     await this.guarded("open lab", async () => {
       if (fromStore) this.savedDocIds.add(lab.id);
       else this.savedDocIds.delete(lab.id);
@@ -978,6 +955,7 @@ class LabStore {
       (l) => !l.endpoints.some((e) => e.node === nodeId)
     );
     if (this.selectedNodeId === nodeId) this.selectedNodeId = null;
+    if (this.inspectorNodeId === nodeId) this.inspectorNodeId = null;
     this.scheduleAutosave();
     // Mirror into the loaded lab (stops the node + drops its links there too).
     // Fire-and-forget: the local doc is authoritative for the GUI either way.
@@ -1149,6 +1127,11 @@ class LabStore {
     return this.lab.nodes.find((n) => n.id === this.selectedNodeId) ?? null;
   }
 
+  /** The node the Inspector pane is showing — see inspectorNodeId. */
+  get inspectorNode(): LabNode | null {
+    return this.lab.nodes.find((n) => n.id === this.inspectorNodeId) ?? null;
+  }
+
   // ---- per-node / lab config extraction into the doc (feature 4) ----
 
   /** Extract NVRAM startup-config for one node into node.startupConfig. Runs on
@@ -1178,7 +1161,7 @@ class LabStore {
   }
 
   private applyExtractedConfigs(configs: { node: number; startupConfig: string }[]) {
-    for (const c of configs) {
+    for (const c of configs ?? []) {
       const node = this.lab.nodes.find((n) => n.id === c.node);
       if (node) node.startupConfig = c.startupConfig;
     }

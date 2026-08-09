@@ -71,3 +71,7 @@ Thumbs.db
 
 # Per-agent GOCACHE dirs used to avoid concurrent `go build` cache races
 .gocache*/
+
+# Session scratch dirs (agent prompt batches, throwaway build caches)
+/.tmp-p2-prompts/
+/.tmp-secbench-gocache/

@@ -17,6 +17,23 @@
   let justSaved = $state(false);
   let importInput: HTMLInputElement | undefined = $state();
 
+  // Fullscreen toggle. Escape already exits fullscreen natively (the
+  // Fullscreen API's own browser behavior — no key handler needed here).
+  // Tracked via the fullscreenchange event, not just the click handler's own
+  // state flip, so the icon/label stay correct if the user exits with Escape,
+  // F11, or the browser's own UI instead of this button.
+  let isFullscreen = $state(false);
+  function syncFullscreen() {
+    isFullscreen = document.fullscreenElement !== null;
+  }
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void document.documentElement.requestFullscreen();
+    }
+  }
+
   function updateName(e: Event) {
     labStore.lab.name = (e.target as HTMLInputElement).value;
   }
@@ -98,6 +115,8 @@
   }
 </script>
 
+<svelte:window onfullscreenchange={syncFullscreen} />
+
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark">{@html uiSvg("net", 13)}</span>
@@ -146,11 +165,11 @@
     >
   </div>
 
-  <button class="btn" onclick={newLab} title="Start a new empty lab">
+  <button class="btn" onclick={newLab} disabled={labStore.labLoading} title="Start a new empty lab">
     {@html uiSvg("plus", 13)} New
   </button>
 
-  <button class="btn" onclick={() => (labStore.showLabBrowser = true)}>
+  <button class="btn" disabled={labStore.labLoading} onclick={() => (labStore.showLabBrowser = true)}>
     {@html uiSvg("folder", 13)} Labs
   </button>
 
@@ -189,6 +208,16 @@
 
   <button class="btn" onclick={() => (labStore.showImageManager = true)}>
     {@html uiSvg("images", 13)} Images
+  </button>
+
+  <button
+    class="btn"
+    aria-pressed={isFullscreen}
+    title={isFullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
+    aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+    onclick={toggleFullscreen}
+  >
+    {@html uiSvg(isFullscreen ? "fullscreenExit" : "fullscreen", 13)}
   </button>
 
   <button class="btn btn-primary" onclick={toggleLab}>

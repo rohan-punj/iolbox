@@ -201,7 +201,7 @@ export class SupervisorClient {
   async labListDocs(): Promise<LabListDocsResult> {
     const res = await this.call<{ labs: string[] }>("lab.listDocs", {});
     const labs: LabDocument[] = [];
-    for (const text of res.labs) {
+    for (const text of res.labs ?? []) {
       try {
         labs.push(labFromText(text));
       } catch {

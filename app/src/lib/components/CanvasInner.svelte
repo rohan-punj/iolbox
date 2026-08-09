@@ -28,7 +28,6 @@
   import ChangeImagePopover from "./ChangeImagePopover.svelte";
   import IconPicker from "./IconPicker.svelte";
   import InterfacePicker from "./InterfacePicker.svelte";
-  import NodeEditDialog from "./NodeEditDialog.svelte";
   import { uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
   import { nextFreeInterface } from "../interfaces";
@@ -76,6 +75,9 @@
       data: {
         label: n.name,
         icon: n.icon,
+        // Tool nodes fall back to their pack's icon (see ToolNode.svelte) when
+        // the node itself has no explicit icon override.
+        packId: n.kind === "tool" ? (n.config?.pack as string | undefined) : undefined,
         imageClass: img?.class ?? n.image?.class ?? "unknown",
         imageLabel: img?.filename ?? n.image?.filename,
       },
@@ -468,6 +470,7 @@
       return { id, kind, name: nameForKind(kind), x: pos.x, y: pos.y };
     }
     if (kind === "tool") {
+      const pack = labStore.toolPacks.find((p) => p.id === (packId ?? labStore.toolPacks[0]?.id));
       return {
         id,
         kind,
@@ -475,6 +478,7 @@
         x: pos.x,
         y: pos.y,
         config: { pack: packId ?? labStore.toolPacks[0]?.id ?? "" },
+        icon: pack?.icon,
       };
     }
     return { id, kind: "vpcs", name: `PC${id}`, x: pos.x, y: pos.y };
@@ -488,11 +492,10 @@
   let annoStyle = $state<{ x: number; y: number; annoId: string; focusText: boolean } | null>(null);
   let imagePopover = $state<{ x: number; y: number; nodeId: number } | null>(null);
   let iconPicker = $state<{ x: number; y: number; nodeId: number } | null>(null);
-  let editDialog = $state<{ nodeId: number } | null>(null);
 
   function openEdit(nid: number) {
     labStore.selectedNodeId = nid;
-    editDialog = { nodeId: nid };
+    labStore.inspectorNodeId = nid;
   }
 
   // Device-node ids currently selected in the flow (multi-select via shift/box),
@@ -574,6 +577,7 @@
     labStore.selectedNodeId = null;
     labStore.selectedLinkId = null;
     labStore.selectedAnnotationId = null;
+    labStore.inspectorNodeId = null;
   }
 
   // --- Line tool: click first endpoint, then second (Escape cancels). ---
@@ -696,6 +700,15 @@
         action: () => {
           const newId = labStore.duplicateNode(nid);
           if (newId !== null) labStore.selectedNodeId = newId;
+        },
+      },
+      {
+        label: "Wipe",
+        // Mirrors the bulk-selection Wipe gate: requires the node be stopped.
+        disabled: locked || nodeState !== "stopped",
+        action: () => {
+          if (!confirm("Wipe saved config/state for this node? This cannot be undone.")) return;
+          void labStore.wipeNode(nid);
         },
       },
       { separator: true, label: "sep1", action: () => {} },
@@ -998,10 +1011,6 @@
       targetId={ifPicker.targetId}
       onClose={() => (ifPicker = null)}
     />
-  {/if}
-
-  {#if editDialog}
-    <NodeEditDialog nodeId={editDialog.nodeId} onClose={() => (editDialog = null)} />
   {/if}
 </div>
 
