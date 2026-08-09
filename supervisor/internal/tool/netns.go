@@ -11,9 +11,16 @@ import "fmt"
 const netnsMgmtIface = "mgmt0"
 
 // netnsCreateNetnsCmds keeps namespace creation separate from veth creation so
-// callers can record each kernel object before issuing its command.
+// callers can record each kernel object before issuing its command. It also
+// opens the namespace's unprivileged port range so first-party lab listeners
+// can use their standard ports without changing the pack process's capability
+// set.
 func netnsCreateNetnsCmds(nodeID int) []cmdSpec {
-	return []cmdSpec{{name: "ip", args: []string{"netns", "add", NetnsName(nodeID)}}}
+	return []cmdSpec{
+		{name: "ip", args: []string{"netns", "add", NetnsName(nodeID)}},
+		{name: "ip", args: NetnsExecArgs(nodeID, []string{
+			"sysctl", "-w", "net.ipv4.ip_unprivileged_port_start=1"})[1:]},
+	}
 }
 
 // netnsCreateVethCmds creates the bridge-side veth first and moves a uniquely

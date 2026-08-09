@@ -9,6 +9,7 @@ func TestNetnsCreateSequence(t *testing.T) {
 	got := append(netnsCreateNetnsCmds(7), netnsCreateVethCmds(7)...)
 	want := []cmdSpec{
 		{name: "ip", args: []string{"netns", "add", "iolt7"}},
+		{name: "ip", args: []string{"netns", "exec", "iolt7", "sysctl", "-w", "net.ipv4.ip_unprivileged_port_start=1"}},
 		{name: "ip", args: []string{"link", "add", "vtool7", "type", "veth", "peer", "name", "vtoolp7"}},
 		{name: "ip", args: []string{"link", "set", "vtoolp7", "netns", "iolt7"}},
 		{name: "ip", args: []string{"netns", "exec", "iolt7", "ip", "link", "set", "vtoolp7", "name", "eth1"}},
@@ -29,6 +30,25 @@ func TestNetnsCreateSequence(t *testing.T) {
 				t.Fatalf("eth1 escaped the namespace prefix in %#v", spec.args)
 			}
 		}
+	}
+}
+
+func TestNetnsCreateSysctlIsNamespacePrefixed(t *testing.T) {
+	cmds := netnsCreateNetnsCmds(11)
+	if len(cmds) < 2 {
+		t.Fatalf("netns creation commands = %#v, want namespace creation and sysctl commands", cmds)
+	}
+
+	args := cmds[1].args
+	if cmds[1].name != "ip" || len(args) < 4 || args[0] != "netns" || args[1] != "exec" || args[2] != NetnsName(11) || args[3] != "sysctl" {
+		t.Fatalf("sysctl command is not namespace-prefixed: %#v", cmds[1])
+	}
+}
+
+func TestEndpointSetupStepsExcludeNetnsSysctl(t *testing.T) {
+	want := []string{"cgroup", "netns", "veth"}
+	if got := endpointSetupSteps(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("endpoint setup steps = %#v, want %#v", got, want)
 	}
 }
 
