@@ -4,6 +4,8 @@ package tool
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -66,9 +68,22 @@ func TestT23EndpointUIDDrop(t *testing.T) {
 		t.Skip("no distinct non-root account is available for the denial check")
 	}
 
-	runRoot := t.TempDir()
-	// t.TempDir is private to root by default. The production run root is
-	// traversable, while the per-node directory is the actual 0700 boundary.
+	// t.TempDir() nests its returned directory one level inside a hidden,
+	// per-test scratch directory (e.g. /tmp/TestFoo<rand>/001) that Go's
+	// testing package creates 0700 root-owned and never exposes for
+	// chmod'ing. A uid-dropped child can't even traverse into that hidden
+	// ancestor, so every access below it fails with a permission error
+	// that has nothing to do with the code under test. Use our own
+	// single-level temp dir directly under os.TempDir() (normally /tmp,
+	// world-traversable) instead, so the only non-default mode anywhere
+	// in the chain is the one this test sets explicitly.
+	runRoot, err := os.MkdirTemp("", "t23endpoint-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runRoot) })
+	// The production run root is traversable, while the per-node directory
+	// is the actual 0700 boundary.
 	if err := os.Chmod(runRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -152,16 +167,21 @@ func t23EndpointUIDDropChild(t *testing.T, mode, socketPath, optionsPath string)
 		}
 
 	case "deny":
+		// os.IsPermission does not unwrap *net.OpError (it only recognizes
+		// *fs.PathError/*fs.LinkError/*os.SyscallError), so it can never see
+		// the EACCES a failed net.Listen wraps three levels deep - the same
+		// %w-chain trap as os.IsNotExist. errors.Is(err, fs.ErrPermission)
+		// walks the full Unwrap() chain and is the correct check.
 		if _, err := net.Listen("unix", socketPath); err == nil {
 			t.Fatal("different non-root uid unexpectedly bound socket")
-		} else if !os.IsPermission(err) {
+		} else if !errors.Is(err, fs.ErrPermission) {
 			t.Fatalf("socket bind error = %v, want permission error", err)
 		}
 		file, err := os.OpenFile(optionsPath, os.O_RDWR, 0)
 		if err == nil {
 			_ = file.Close()
 			t.Fatal("different non-root uid unexpectedly opened options read-write")
-		} else if !os.IsPermission(err) {
+		} else if !errors.Is(err, fs.ErrPermission) {
 			t.Fatalf("options open error = %v, want permission error", err)
 		}
 
