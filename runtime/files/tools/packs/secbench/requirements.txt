@@ -1,0 +1,5 @@
+# Offline, hash-locked wheelhouse for the secbench pack.
+--require-hashes
+scapy==2.7.0 \
+    --hash=sha256:eb22786da92be6fd8e5c694ae5595e4f5b9ac1f4364c9c45986844f3e3063561
+

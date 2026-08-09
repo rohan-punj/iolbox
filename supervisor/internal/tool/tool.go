@@ -8,10 +8,13 @@ package tool
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -123,10 +126,49 @@ type Manifest struct {
 
 // GUI describes the pack's compiled web GUI and its health endpoint.
 type GUI struct {
-	Bin       string `json:"bin"`
-	Transport string `json:"transport"`
-	Console   string `json:"console"`
-	Health    string `json:"health"`
+	Bin         string       `json:"bin"`
+	Transport   string       `json:"transport"`
+	Console     string       `json:"console"`
+	Health      string       `json:"health"`
+	ProxyRoutes []ProxyRoute `json:"proxyRoutes"`
+}
+
+// ProxyRoute declares one path prefix exposed by a tool GUI through the
+// supervisor's /tool/{nodeId}/ reverse proxy. WebSocket upgrades are accepted
+// only when AllowWS is true for the matching route.
+type ProxyRoute struct {
+	Prefix  string `json:"prefix"`
+	AllowWS bool   `json:"allowWS"`
+}
+
+// UnmarshalJSON validates route prefixes while manifests are decoded. The
+// manifest validator lives in a separate legacy file outside this batch's
+// ownership; decoding-time validation keeps malformed route declarations from
+// entering the loaded-pack registry without changing that file.
+func (r *ProxyRoute) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		Prefix  string `json:"prefix"`
+		AllowWS bool   `json:"allowWS"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	prefix := strings.TrimSpace(decoded.Prefix)
+	if prefix == "" || !strings.HasPrefix(prefix, "/") {
+		return fmt.Errorf("tool: proxy route prefix %q must begin with /", decoded.Prefix)
+	}
+	decodedPrefix, err := url.PathUnescape(prefix)
+	if err != nil || path.Clean(prefix) != prefix || path.Clean(decodedPrefix) != decodedPrefix || strings.Contains(prefix, "?") || strings.Contains(prefix, "#") {
+		return fmt.Errorf("tool: proxy route prefix %q must be a clean path", decoded.Prefix)
+	}
+	for _, part := range strings.Split(decodedPrefix, "/") {
+		if part == ".." {
+			return fmt.Errorf("tool: proxy route prefix %q may not escape its root", decoded.Prefix)
+		}
+	}
+	decoded.Prefix = prefix
+	*r = ProxyRoute(decoded)
+	return nil
 }
 
 // Module describes one manifest-visible tool module.

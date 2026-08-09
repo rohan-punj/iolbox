@@ -1,0 +1,121 @@
+{{define "head"}}<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} Â· Security Bench</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    [data-theme="dark"] {
+      --pico-background-color:#12181f;
+      --pico-color:#e9eef4;
+      --pico-muted-color:#aeb9c5;
+      --pico-h1-color:#f4f7fa; --pico-h2-color:#eef3f8; --pico-h3-color:#eef3f8;
+      --pico-h4-color:#e9eef4; --pico-h5-color:#e9eef4; --pico-h6-color:#e9eef4;
+      --pico-card-background-color:#1a212c;
+      --pico-card-sectioning-background-color:#151b24;
+      --pico-card-border-color:#2b3744;
+      --pico-muted-border-color:#2b3744;
+      --pico-primary:#e2543f; --pico-primary-hover:#f06a52;
+      --pico-primary-background:#a83a29; --pico-primary-hover-background:#c2432f;
+      --pico-primary-inverse:#fff;
+      --pico-form-element-background-color:#10161e;
+      --pico-form-element-border-color:#36434f;
+      --pico-form-element-color:#e9eef4;
+      --pico-form-element-placeholder-color:#8a97a4;
+      --pico-form-element-active-border-color:#e2543f;
+      --pico-secondary:#8d9bab; --pico-secondary-hover:#a7b4c2;
+    }
+    :root { --pico-font-size:105%; --pico-line-height:1.5; --pico-font-weight:400; }
+    body { padding:0; }
+    h1,h2,h3 { letter-spacing:-.01em; }
+    main.container { padding:1.6rem clamp(1rem,3vw,2.5rem) 3rem; max-width:1700px; }
+    article { border:1px solid var(--pico-card-border-color); box-shadow:0 1px 2px rgba(0,0,0,.25); }
+    article > header { font-size:1.02rem; padding-block:.7rem; display:flex; align-items:center; gap:.6rem; }
+    article > header strong { color:#f1f5f9; }
+
+    .topbar { background:#161d27; border-bottom:1px solid var(--pico-muted-border-color); position:sticky; top:0; z-index:10; }
+    .topbar .container { display:flex; align-items:center; gap:.4rem; padding:.55rem clamp(1rem,3vw,2.5rem); max-width:1700px; flex-wrap:wrap; }
+    .topbar .brand { font-weight:700; font-size:1.08rem; letter-spacing:.01em; margin-right:auto; color:#f4f7fa; }
+    .topbar nav { display:flex; gap:.12rem; flex-wrap:wrap; }
+    .topbar nav a { padding:.35rem .68rem; border-radius:.45rem; text-decoration:none; color:#cdd8e3; font-weight:500; font-size:.92rem; }
+    .topbar nav a:hover { background:rgba(255,255,255,.07); color:#fff; }
+    .topbar nav a.active { background:var(--pico-primary); color:#fff; }
+
+    .pill { font-size:.7rem; font-weight:600; padding:.14rem .56rem; border-radius:1rem; vertical-align:middle; letter-spacing:.02em; margin-left:auto; }
+    .pill.up   { background:#173d22; color:#86e29a; border:1px solid #2f6b40; }
+    .pill.down { background:#3d1717; color:#f1a3a3; border:1px solid #6b2f2f; }
+    .pill.mid  { background:#3d3117; color:#e2c586; border:1px solid #6b5a2f; }
+
+    .modgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:1rem; }
+    .cardform { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.5rem .8rem; align-items:end; }
+    .cardform label { font-size:.82rem; margin-bottom:0; }
+    .cardform input, .cardform select { margin-bottom:0; }
+    .cardactions { display:flex; gap:.5rem; margin-top:.7rem; }
+
+    .logwrap { max-height:12rem; overflow:auto; border:1px solid var(--pico-muted-border-color);
+               border-radius:.5rem; background:#0f141b; margin-top:.6rem; }
+    table.logtable { width:100%; border-collapse:collapse; margin:0;
+                     font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.78rem; line-height:1.45; }
+    table.logtable td { padding:.18rem .6rem; border:0; border-bottom:1px solid rgba(255,255,255,.05); vertical-align:top; word-break:break-word; }
+    table.logtable tr:nth-child(odd) td { background:rgba(255,255,255,.025); }
+    table.logtable .ok { color:#7fd497; } table.logtable .bad { color:#f08a8a; } table.logtable .warn { color:#e2c586; }
+    .logempty { padding:.6rem .8rem; color:var(--pico-muted-color); font-size:.82rem; }
+
+    .mitigation { margin-top:.8rem; border-top:1px dashed var(--pico-muted-border-color); padding-top:.7rem; }
+    .mitigation summary { cursor:pointer; font-weight:600; color:#86c0ff; }
+    .mitigation pre { background:#0f141b; border:1px solid var(--pico-muted-border-color); border-radius:.4rem;
+                       padding:.7rem .9rem; font-size:.8rem; overflow-x:auto; margin:.5rem 0; }
+    .mitigation .observe { font-size:.85rem; color:var(--pico-muted-color); }
+
+    table.tight td, table.tight th { padding:.4rem .55rem; }
+    table.tight th { color:#cdd8e3; font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; }
+    .muted { color:var(--pico-muted-color); }
+    .ok { color:#7fd497; } .bad { color:#f08a8a; } .warn { color:#e2c586; }
+    .statnum { font-size:1.7rem; font-weight:700; color:#f4f7fa; line-height:1.1; }
+    code { font-size:.86em; background:rgba(255,255,255,.07); padding:.06em .35em; border-radius:.25em; color:#e9eef4; }
+    .blurb { font-size:.85rem; color:var(--pico-muted-color); margin:.2rem 0 .8rem; }
+  </style>
+</head>
+<body>
+{{end}}
+
+{{define "nav"}}
+<header class="topbar">
+  <div class="container">
+    <span class="brand">ðŸ›¡ï¸ Security Bench</span>
+    <nav>
+      <a href="/" class="{{if eq .Page "dashboard"}}active{{end}}">Dashboard</a>
+      <a href="/group/recon" class="{{if eq .Page "recon"}}active{{end}}">Recon</a>
+      <a href="/group/spoof" class="{{if eq .Page "spoof"}}active{{end}}">L2 Spoofing</a>
+      <a href="/group/dhcp" class="{{if eq .Page "dhcp"}}active{{end}}">DHCP</a>
+      <a href="/group/stp" class="{{if eq .Page "stp"}}active{{end}}">STP/Discovery</a>
+      <a href="/group/vlan" class="{{if eq .Page "vlan"}}active{{end}}">VLAN</a>
+      <a href="/group/fhrp" class="{{if eq .Page "fhrp"}}active{{end}}">FHRP/Routing</a>
+      <a href="/raw" class="{{if eq .Page "raw"}}active{{end}}">Raw</a>
+      <a href="/settings" class="{{if eq .Page "settings"}}active{{end}}">Settings</a>
+      <a href="/logout">Sign out</a>
+    </nav>
+  </div>
+</header>
+<main class="container">
+{{if .Flash}}<p class="{{if .FlashErr}}bad{{else}}ok{{end}}">{{.Flash}}</p>{{end}}
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "lock-notice"}}{{if not .HasLabIface}}
+<article style="border-color:#6b2f2f;">
+  <header><strong class="bad">eth1 (lab NIC) not present</strong></header>
+  <p><small>This node has no <code>eth1</code> interface yet â€” every attack/recon module is disabled.
+  Wire this node into a lab topology (right-click â†’ add a link to eth1) and give it an address
+  (right-click â†’ edit â†’ DHCP/static) before starting a module. Attacks are hard-locked to eth1 and
+  will never bind to eth0 (docker0 management).</small></p>
+</article>
+{{end}}{{end}}
+

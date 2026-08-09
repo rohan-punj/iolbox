@@ -143,6 +143,23 @@ fi
 
 mkdir -p "$BUILD_DIR"
 
+# P2's Python payload is assembled on the builder, never from a runtime
+# network connection. The requirements file is hash-locked, and --no-cache-dir
+# keeps pip's host cache from becoming an undeclared build input.
+SECBENCH_WHEELHOUSE="$BUILD_DIR/secbench-wheelhouse"
+rm -rf "$SECBENCH_WHEELHOUSE"
+mkdir -p "$SECBENCH_WHEELHOUSE"
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -m pip --version >/dev/null 2>&1; then
+    echo "build-rootfs: python3 with pip is required for the secbench wheelhouse" >&2
+    exit 1
+fi
+python3 -m pip download \
+    --no-cache-dir \
+    --only-binary=:all: \
+    --require-hashes \
+    --dest "$SECBENCH_WHEELHOUSE" \
+    -r "$SCRIPT_DIR/files/tools/packs/secbench/requirements.txt"
+
 # The helper binaries are standalone, dependency-free Linux tools. Build them
 # here so the shipped rootfs gets the same architecture and immutable payload
 # treatment as the supervisor; P2 owns population of the Python venv below.
@@ -154,6 +171,12 @@ echo "== build-rootfs: building tool launch helpers (linux/amd64) =="
 (
     cd "$TOOL_STUBGUI_SOURCE"
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOL_STUBGUI_BIN" .
+)
+SECBENCH_GUI_BIN="$BUILD_DIR/secbench-gui"
+(
+    cd "$SCRIPT_DIR/files/tools/packs/secbench/gui"
+    go test ./...
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$SECBENCH_GUI_BIN" .
 )
 if [ -d "$ROOTFS_DIR" ]; then
     echo "build-rootfs: removing previous rootfs at $ROOTFS_DIR"
@@ -299,6 +322,8 @@ install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/labs"     # durable lab-document stor
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/stub"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/attacks"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/venv"
 # /run/iolbox/tool is traversable by ioltool but not writable; Endpoint.Start
 # creates each per-node 0700 socket directory below it.
@@ -321,6 +346,38 @@ install -m 0644 -o root -g root "$SCRIPT_DIR/files/tools/packs/stub/pack.json" \
     "$ROOTFS_DIR/opt/iolbox/tools/packs/stub/pack.json"
 install -m 0755 -o root -g root "$TOOL_STUBGUI_BIN" \
     "$ROOTFS_DIR/opt/iolbox/tools/packs/stub/tool-stubgui"
+
+# P2 secbench payload and its offline Scapy environment. The wheelhouse and
+# requirements file are build-time inputs only and are removed before the
+# rootfs is handed off.
+install -m 0644 -o root -g root \
+    "$SCRIPT_DIR/files/tools/packs/secbench/pack.json" \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/pack.json"
+install -m 0644 -o root -g root \
+    "$SCRIPT_DIR"/files/tools/packs/secbench/attacks/*.py \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/attacks/"
+install -m 0755 -o root -g root "$SECBENCH_GUI_BIN" \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/secbench-gui"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/wheelhouse"
+cp "$SECBENCH_WHEELHOUSE"/* "$ROOTFS_DIR/opt/iolbox/tools/wheelhouse/"
+install -m 0644 -o root -g root \
+    "$SCRIPT_DIR/files/tools/packs/secbench/requirements.txt" \
+    "$ROOTFS_DIR/opt/iolbox/tools/secbench-requirements.txt"
+chroot "$ROOTFS_DIR" /usr/bin/python3 -m venv /opt/iolbox/tools/venv
+chroot "$ROOTFS_DIR" /opt/iolbox/tools/venv/bin/python -m pip install \
+    --no-cache-dir \
+    --no-index \
+    --find-links=/opt/iolbox/tools/wheelhouse \
+    --require-hashes \
+    -r /opt/iolbox/tools/secbench-requirements.txt
+chroot "$ROOTFS_DIR" /opt/iolbox/tools/venv/bin/python -c \
+    'import scapy; from scapy.contrib import cdp, lldp, dtp, ospf, eigrp'
+chroot "$ROOTFS_DIR" /opt/iolbox/tools/venv/bin/python -m compileall -q \
+    /opt/iolbox/tools/packs/secbench/attacks
+rm -rf "$SECBENCH_WHEELHOUSE" \
+    "$ROOTFS_DIR/opt/iolbox/tools/wheelhouse" \
+    "$ROOTFS_DIR/opt/iolbox/tools/secbench-requirements.txt" \
+    "$ROOTFS_DIR/root/.cache/pip"
 
 # firstboot-iourc.sh (called by both the systemd unit and the non-systemd
 # fallback init script) + the ExecStartPre stale-state sweep.

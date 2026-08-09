@@ -12,6 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,12 +22,28 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 	"github.com/rohanpunj/iolbox/supervisor/internal/server"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 	"github.com/rohanpunj/iolbox/supervisor/internal/ws"
 )
 
 // --- minimal WebSocket client helpers (test-only; mirrors internal/ws framing) ---
 
 func dialWS(t *testing.T, url string) net.Conn {
+	return dialWSHeaders(t, url, nil)
+}
+
+func dialAuthenticatedWS(t *testing.T, b *Bridge, url string) net.Conn {
+	addr := strings.TrimPrefix(url, "ws://")
+	if i := strings.Index(addr, "/"); i >= 0 {
+		addr = addr[:i]
+	}
+	return dialWSHeaders(t, url, map[string]string{
+		"Cookie": "iolbox_session=" + b.sessionToken,
+		"Origin": "http://" + addr,
+	})
+}
+
+func dialWSHeaders(t *testing.T, url string, headers map[string]string) net.Conn {
 	t.Helper()
 	addr := strings.TrimPrefix(url, "ws://")
 	path := "/"
@@ -41,7 +60,11 @@ func dialWS(t *testing.T, url string) net.Conn {
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
-		"Sec-WebSocket-Version: 13\r\n\r\n"
+		"Sec-WebSocket-Version: 13\r\n"
+	for key, value := range headers {
+		req += key + ": " + value + "\r\n"
+	}
+	req += "\r\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
 		t.Fatalf("write handshake: %v", err)
 	}
@@ -146,7 +169,7 @@ func TestControlEndpointRoundTrip(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/control"
-	conn := dialWS(t, wsURL)
+	conn := dialAuthenticatedWS(t, b, wsURL)
 	defer conn.Close()
 
 	req := protocol.Request{ID: "1", Op: "hello", Args: mustJSON(protocol.HelloArgs{Client: "test"})}
@@ -180,7 +203,7 @@ func TestControlEndpointMultipleRequests(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/control"
-	conn := dialWS(t, wsURL)
+	conn := dialAuthenticatedWS(t, b, wsURL)
 	defer conn.Close()
 
 	for i := 0; i < 3; i++ {
@@ -215,7 +238,7 @@ func TestStaticFallbackDoesNotShadowControl(t *testing.T) {
 
 	// /control still upgrades to WebSocket (not swallowed by static handler).
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/control"
-	conn := dialWS(t, wsURL)
+	conn := dialAuthenticatedWS(t, b, wsURL)
 	conn.Close()
 
 	// A plain GET to "/" is served the embedded GUI, not routed to /control.
@@ -240,13 +263,339 @@ func TestConsoleNotShadowedByStatic(t *testing.T) {
 	ts := httptest.NewServer(b.server.Handler)
 	defer ts.Close()
 
-	status, err := httpGetUpgradeAttempt(ts.URL + "/console/42")
+	status, err := httpGetUpgradeAttemptAuthenticated(ts.URL+"/console/42", b)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	if !strings.Contains(status, "404") {
 		t.Fatalf("expected 404 from console handler, got: %s", status)
 	}
+}
+
+const testToolHost = "192.168.226.233:4001"
+
+func newToolBridge(t *testing.T, upstream http.Handler, routes []tool.ProxyRoute) (*Bridge, *httptest.Server) {
+	t.Helper()
+	socket := filepath.Base(t.TempDir()) + "-gui.sock"
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Skipf("AF_UNIX is unavailable on this native test host: %v", err)
+	}
+	gui := &http.Server{Handler: upstream}
+	go func() { _ = gui.Serve(listener) }()
+	t.Cleanup(func() { _ = gui.Close() })
+	t.Cleanup(func() { _ = os.Remove(socket) })
+
+	fake := &fakeControlServer{proxySocket: socket, proxyRoutes: routes}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	ts := httptest.NewServer(b.server.Handler)
+	t.Cleanup(ts.Close)
+	return b, ts
+}
+
+func newToolRequest(t *testing.T, b *Bridge, ts *httptest.Server, method, requestPath string, cookie bool, origin string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, ts.URL+requestPath, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Host = testToolHost
+	if cookie {
+		req.AddCookie(&http.Cookie{Name: "iolbox_session", Value: b.sessionToken})
+	}
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	return req
+}
+
+func doToolRequest(t *testing.T, b *Bridge, ts *httptest.Server, method, requestPath string, cookie bool, origin string) *http.Response {
+	t.Helper()
+	resp, err := http.DefaultClient.Do(newToolRequest(t, b, ts, method, requestPath, cookie, origin))
+	if err != nil {
+		t.Fatalf("tool request: %v", err)
+	}
+	return resp
+}
+
+func TestToolProxyRejectsForeignOriginWithValidCookie(t *testing.T) {
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: true}})
+	resp := doToolRequest(t, b, ts, http.MethodGet, "/tool/7/attacks/arp_spoof", true, "http://evil.example")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign origin status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestToolProxyRejectsMissingSessionForHTTPAndWebSocket(t *testing.T) {
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: true}})
+	resp := doToolRequest(t, b, ts, http.MethodGet, "/tool/7/", false, "http://"+testToolHost)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing-session HTTP status = %d, want 401", resp.StatusCode)
+	}
+	status := websocketStatus(t, "ws://"+strings.TrimPrefix(ts.URL, "http://")+"/tool/7", nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("missing-session WS status = %d, want 401", status)
+	}
+}
+
+func TestToolProxyAcceptsCookieAndRequestHostOrigin(t *testing.T) {
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: true}})
+	resp := doToolRequest(t, b, ts, http.MethodGet, "/tool/7/", true, "http://"+testToolHost)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid cookie/origin status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestToolProxyRejectsWebSocketWithoutAllowWSRoute(t *testing.T) {
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: false}})
+	status := websocketStatus(t, "ws://"+strings.TrimPrefix(ts.URL, "http://")+"/tool/7/", map[string]string{
+		"Cookie": "iolbox_session=" + b.sessionToken,
+		"Origin": "http://" + strings.TrimPrefix(ts.URL, "http://"),
+	})
+	if status != http.StatusForbidden && status != http.StatusBadRequest {
+		t.Fatalf("disallowed WS status = %d, want 400 or 403", status)
+	}
+}
+
+func TestToolProxyTraversalNeverReachesControl(t *testing.T) {
+	fake := &fakeControlServer{}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	for _, requestTarget := range []string{
+		"http://" + testToolHost + "/tool/7/../control",
+		"http://" + testToolHost + "/tool/7/%2e%2e/control",
+	} {
+		req := httptest.NewRequest(http.MethodGet, requestTarget, nil)
+		req.Host = testToolHost
+		req.AddCookie(&http.Cookie{Name: "iolbox_session", Value: b.sessionToken})
+		req.Header.Set("Referer", "http://"+testToolHost+"/")
+		if !strings.Contains(req.URL.Path, "..") {
+			t.Fatalf("test request Path %q lost traversal segment", req.URL.Path)
+		}
+		if strings.Contains(requestTarget, "%2e%2e") && !strings.Contains(req.URL.RawPath, "%2e%2e") {
+			t.Fatalf("encoded test request RawPath %q lost encoded traversal", req.URL.RawPath)
+		}
+		rr := httptest.NewRecorder()
+		b.server.Handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("traversal %q status = %d, want 404", requestTarget, rr.Code)
+		}
+	}
+}
+
+func TestToolProxyHTMLResponseHasFrameAncestorsCSP(t *testing.T) {
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<html><body>ok</body></html>")
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: true}})
+	resp := doToolRequest(t, b, ts, http.MethodGet, "/tool/7/", true, "http://"+testToolHost)
+	defer resp.Body.Close()
+	if got := resp.Header.Get("Content-Security-Policy"); got != "frame-ancestors 'self'" {
+		t.Fatalf("CSP = %q, want frame-ancestors policy", got)
+	}
+}
+
+func TestSessionGateRejectsUnauthenticatedSharedRoutes(t *testing.T) {
+	b := New(Config{Addr: "127.0.0.1:0"}, &fakeControlServer{})
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+	for _, requestPath := range []string{"/control", "/console/7", "/capture/7"} {
+		status := websocketStatus(t, "ws://"+strings.TrimPrefix(ts.URL, "http://")+requestPath, nil)
+		if status != http.StatusUnauthorized {
+			t.Errorf("unauthenticated %s status = %d, want 401", requestPath, status)
+		}
+	}
+}
+
+func TestToolProxyAcceptsBearerTokenWithoutCookie(t *testing.T) {
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: true}})
+	req := newToolRequest(t, b, ts, http.MethodGet, "/tool/7/", false, "http://"+testToolHost)
+	req.Header.Set("Authorization", "Bearer "+b.sessionToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("bearer request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bearer status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestSessionCookieAttributes(t *testing.T) {
+	b := New(Config{Addr: "127.0.0.1:0"}, &fakeControlServer{})
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("SPA request: %v", err)
+	}
+	defer resp.Body.Close()
+	var session *http.Cookie
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "iolbox_session" {
+			session = cookie
+			break
+		}
+	}
+	if session == nil {
+		t.Fatal("SPA response did not set iolbox_session")
+	}
+	if !session.HttpOnly || session.SameSite != http.SameSiteStrictMode || session.Path != "/" || session.Secure {
+		t.Fatalf("session cookie = %#v, want HttpOnly; SameSite=Strict; Path=/ without Secure on HTTP", session)
+	}
+}
+
+func TestToolProxyStripsSessionAndForwardedHeadersButKeepsOtherCookies(t *testing.T) {
+	var received *http.Request
+	b, ts := newToolBridge(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r
+		w.WriteHeader(http.StatusOK)
+	}), []tool.ProxyRoute{{Prefix: "/", AllowWS: true}})
+	req := newToolRequest(t, b, ts, http.MethodGet, "/tool/7/", true, "http://"+testToolHost)
+	req.Header.Set("Cookie", "iolbox_session="+b.sessionToken+"; other=kept")
+	req.Header.Set("X-Forwarded-For", "198.51.100.1")
+	req.Header.Set("X-Forwarded-Host", "evil.example")
+	req.Header.Set("Forwarded", "for=198.51.100.1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("header sanitization request: %v", err)
+	}
+	resp.Body.Close()
+	if received == nil {
+		t.Fatal("upstream did not receive request")
+	}
+	if received.Header.Get("Accept-Encoding") != "" || received.Header.Get("X-Forwarded-For") != "" || received.Header.Get("X-Forwarded-Host") != "" || received.Header.Get("Forwarded") != "" {
+		t.Fatalf("sanitized upstream headers = %#v", received.Header)
+	}
+	if received.Header.Get("Cookie") != "other=kept" {
+		t.Fatalf("upstream Cookie = %q, want unrelated cookie only", received.Header.Get("Cookie"))
+	}
+}
+
+func TestToolHTMLRewriterAttributesAndLocation(t *testing.T) {
+	prefix := "/tool/7/"
+	body := []byte(`<base href="/wrong/"><a href="/foo">x</a><img src="/img.png"><form action="/submit"><input hx-get="/get" hx-post="/post" hx-delete="/delete"></form>`)
+	rewritten, err := rewriteHTML(body, prefix)
+	if err != nil {
+		t.Fatalf("rewriteHTML: %v", err)
+	}
+	got := string(rewritten)
+	for _, want := range []string{
+		`href="/tool/7/"`, `href="/tool/7/foo"`, `src="/tool/7/img.png"`,
+		`action="/tool/7/submit"`, `hx-get="/tool/7/get"`,
+		`hx-post="/tool/7/post"`, `hx-delete="/tool/7/delete"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rewritten HTML missing %q: %s", want, got)
+		}
+	}
+	if got := rewriteRootURL("/redirect", prefix); got != "/tool/7/redirect" {
+		t.Fatalf("rewritten Location = %q, want /tool/7/redirect", got)
+	}
+}
+
+func TestToolHTMLRewriterPassesNonHTMLAndOverCapBodies(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body []byte
+		head http.Header
+		len  int64
+	}{
+		{name: "non-html", body: []byte(`/asset`), head: http.Header{"Content-Type": []string{"application/javascript"}}, len: 6},
+		{name: "over-cap", body: bytes.Repeat([]byte("x"), toolHTMLRewriteCap+1), head: http.Header{"Content-Type": []string{"text/html"}}, len: toolHTMLRewriteCap + 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := &http.Response{Header: test.head, ContentLength: test.len, Body: io.NopCloser(bytes.NewReader(test.body))}
+			if err := rewriteHTMLResponse(response, "/tool/7/"); err != nil {
+				t.Fatalf("rewriteHTMLResponse: %v", err)
+			}
+			got, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if !bytes.Equal(got, test.body) {
+				t.Fatalf("body changed for %s", test.name)
+			}
+		})
+	}
+}
+
+func TestToolHTMLRewriterPassesEncodedHTMLOpaque(t *testing.T) {
+	body := []byte(`<a href="/must-not-change">x</a>`)
+	response := &http.Response{
+		Header:        http.Header{"Content-Type": []string{"text/html"}, "Content-Encoding": []string{"gzip"}},
+		ContentLength: int64(len(body)),
+		Body:          io.NopCloser(bytes.NewReader(body)),
+	}
+	if err := rewriteHTMLResponse(response, "/tool/7/"); err != nil {
+		t.Fatalf("rewriteHTMLResponse: %v", err)
+	}
+	got, _ := io.ReadAll(response.Body)
+	if !bytes.Equal(got, body) {
+		t.Fatalf("encoded HTML was rewritten: %q", got)
+	}
+}
+
+func TestToolHTMLRewriterDechunksAndSetsCorrectLength(t *testing.T) {
+	body := []byte(`<a href="/foo">x</a>`)
+	response := &http.Response{
+		Header:           http.Header{"Content-Type": []string{"text/html"}, "Transfer-Encoding": []string{"chunked"}},
+		ContentLength:    -1,
+		TransferEncoding: []string{"chunked"},
+		Body:             io.NopCloser(bytes.NewReader(body)),
+	}
+	if err := rewriteHTMLResponse(response, "/tool/7/"); err != nil {
+		t.Fatalf("rewriteHTMLResponse: %v", err)
+	}
+	got, _ := io.ReadAll(response.Body)
+	if !strings.Contains(string(got), `href="/tool/7/foo"`) {
+		t.Fatalf("chunked HTML was not rewritten: %q", got)
+	}
+	if response.ContentLength != int64(len(got)) || response.Header.Get("Content-Length") != strconv.Itoa(len(got)) || len(response.TransferEncoding) != 0 || response.Header.Get("Transfer-Encoding") != "" {
+		t.Fatalf("dechunked response metadata = length %d, header %q, transfer %v", response.ContentLength, response.Header.Get("Content-Length"), response.TransferEncoding)
+	}
+}
+
+func websocketStatus(t *testing.T, wsURL string, headers map[string]string) int {
+	t.Helper()
+	addr := strings.TrimPrefix(wsURL, "ws://")
+	path := "/"
+	if i := strings.Index(addr, "/"); i >= 0 {
+		path = addr[i:]
+		addr = addr[:i]
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("WS dial: %v", err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n", path, addr)
+	for key, value := range headers {
+		fmt.Fprintf(conn, "%s: %s\r\n", key, value)
+	}
+	fmt.Fprint(conn, "\r\n")
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("WS status: %v", err)
+	}
+	var status int
+	if _, err := fmt.Sscanf(line, "HTTP/1.1 %d", &status); err != nil {
+		t.Fatalf("parse WS status %q: %v", line, err)
+	}
+	return status
 }
 
 func mustJSON(v any) json.RawMessage {
@@ -306,7 +655,7 @@ func TestConsoleEndpointTelnetNegotiationAndData(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/console/7"
-	conn := dialWS(t, wsURL)
+	conn := dialAuthenticatedWS(t, b, wsURL)
 	defer conn.Close()
 
 	// First frame(s) from the bridge should be clean application data with
@@ -357,7 +706,7 @@ func TestConsoleEndpointInProcessSubscription(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/console/7"
-	conn := dialWS(t, wsURL)
+	conn := dialAuthenticatedWS(t, b, wsURL)
 	defer conn.Close()
 
 	// Feed some "node output" through the fake pty.
@@ -407,7 +756,7 @@ func TestConsoleEndpointUnknownNode(t *testing.T) {
 	ts := httptest.NewServer(b.server.Handler)
 	defer ts.Close()
 
-	resp, err := httpGetUpgradeAttempt(ts.URL + "/console/99")
+	resp, err := httpGetUpgradeAttemptAuthenticated(ts.URL+"/console/99", b)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -451,7 +800,7 @@ func TestCaptureEndpointStreamsBytes(t *testing.T) {
 	defer ts.Close()
 
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/capture/5"
-	conn := dialWS(t, wsURL)
+	conn := dialAuthenticatedWS(t, b, wsURL)
 	defer conn.Close()
 
 	op, data := readServerFrame(t, conn)
@@ -471,7 +820,13 @@ func TestCaptureEndpointNoActiveCapture(t *testing.T) {
 	ts := httptest.NewServer(b.server.Handler)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/capture/42")
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/capture/42", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: "iolbox_session", Value: b.sessionToken})
+	req.Header.Set("Referer", ts.URL+"/")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -496,6 +851,21 @@ func TestCaptureEndpointNoActiveCapture(t *testing.T) {
 // httpGetUpgradeAttempt issues a plain (non-websocket) GET and returns the
 // raw status line, enough to check the 404 path without a full handshake.
 func httpGetUpgradeAttempt(url string) (string, error) {
+	return httpGetUpgradeAttemptHeaders(url, nil)
+}
+
+func httpGetUpgradeAttemptAuthenticated(url string, b *Bridge) (string, error) {
+	addr := strings.TrimPrefix(url, "http://")
+	if i := strings.Index(addr, "/"); i >= 0 {
+		addr = addr[:i]
+	}
+	return httpGetUpgradeAttemptHeaders(url, map[string]string{
+		"Cookie":  "iolbox_session=" + b.sessionToken,
+		"Referer": "http://" + addr + "/",
+	})
+}
+
+func httpGetUpgradeAttemptHeaders(url string, headers map[string]string) (string, error) {
 	addr := strings.TrimPrefix(url, "http://")
 	path := "/"
 	if i := strings.Index(addr, "/"); i >= 0 {
@@ -507,7 +877,11 @@ func httpGetUpgradeAttempt(url string) (string, error) {
 		return "", err
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, addr)
+	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n", path, addr)
+	for key, value := range headers {
+		fmt.Fprintf(conn, "%s: %s\r\n", key, value)
+	}
+	fmt.Fprint(conn, "\r\n")
 	br := bufio.NewReader(conn)
 	status, err := br.ReadString('\n')
 	return status, err
@@ -524,6 +898,8 @@ type fakeControlServer struct {
 	consolePorts  map[int]int
 	capturePorts  map[int]int
 	subscriptions map[int]*node.Subscription
+	proxySocket   string
+	proxyRoutes   []tool.ProxyRoute
 }
 
 func (f *fakeControlServer) ServeConn(ctx context.Context, rwc io.ReadWriteCloser) {}
@@ -540,6 +916,13 @@ func (f *fakeControlServer) ConsoleSubscribe(nodeID int) *node.Subscription {
 func (f *fakeControlServer) CapturePort(linkID int) (int, bool) {
 	p, ok := f.capturePorts[linkID]
 	return p, ok
+}
+
+func (f *fakeControlServer) ToolProxyTarget(_ int) (string, []tool.ProxyRoute, bool) {
+	if f.proxySocket == "" {
+		return "", nil, false
+	}
+	return f.proxySocket, f.proxyRoutes, true
 }
 
 // Telnet constants duplicated here (rather than importing internal/telnet's

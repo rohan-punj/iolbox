@@ -27,20 +27,22 @@
 // ws://<vm-ip>:4001/control on the same origin. Because browser access needs a
 // routable address, this listener may bind a non-loopback host (e.g.
 // 0.0.0.0:4001) — unlike internal/server's raw control socket, which stays
-// loopback-only. The WebSocket handshake (internal/ws.Accept) performs no
-// Origin check, so a same-origin page served from <vm-ip>:4001 (Origin:
-// http://<vm-ip>:4001) is accepted; the trust boundary is the VM's own network
-// exposure, which the operator controls via -ws-addr.
+// loopback-only. Network-exposed bridge routes require the boot session token
+// and a same-origin Origin/Referer check before internal/ws.Accept runs.
 package wsbridge
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +50,7 @@ import (
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 	"github.com/rohanpunj/iolbox/supervisor/internal/web"
 	"github.com/rohanpunj/iolbox/supervisor/internal/ws"
 )
@@ -79,6 +82,9 @@ type ControlServer interface {
 	// CapturePort returns the local TCP port serving the live pcapng stream for
 	// linkID in the currently loaded lab, if that link has an active capture.
 	CapturePort(linkID int) (port int, ok bool)
+	// ToolProxyTarget returns the running tool GUI's AF_UNIX socket and its
+	// manifest-declared path routes.
+	ToolProxyTarget(nodeID int) (socket string, routes []tool.ProxyRoute, ok bool)
 }
 
 // Config configures a Bridge.
@@ -111,9 +117,10 @@ type Config struct {
 
 // Bridge is the WebSocket listener exposing /control and /console/{nodeId}.
 type Bridge struct {
-	cfg    Config
-	ctrl   ControlServer
-	server *http.Server
+	cfg          Config
+	ctrl         ControlServer
+	sessionToken string
+	server       *http.Server
 }
 
 // New builds a Bridge. srv provides the shared control core and console port
@@ -129,12 +136,14 @@ func New(cfg Config, srv ControlServer) *Bridge {
 			return net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 5*time.Second)
 		}
 	}
-	b := &Bridge{cfg: cfg, ctrl: srv}
+	b := &Bridge{cfg: cfg, ctrl: srv, sessionToken: newSessionToken()}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/control", b.handleControl)
-	mux.HandleFunc("/console/", b.handleConsole)
-	mux.HandleFunc("/capture/", b.handleCapture)
+	toolHandler := b.requireSession(b.handleTool)
+	mux.HandleFunc("/control", b.requireSession(b.handleControl))
+	mux.HandleFunc("/console/", b.requireSession(b.handleConsole))
+	mux.HandleFunc("/capture/", b.requireSession(b.handleCapture))
+	mux.HandleFunc("/tool/", toolHandler)
 	// Exact route: the GUI PUTs an image file body here, then registers it over
 	// WS with the returned path. The exact "/api/upload/image" pattern is more
 	// specific than the "/" catch-all, so ServeMux routes it here, not to the SPA.
@@ -144,9 +153,110 @@ func New(cfg Config, srv ControlServer) *Bridge {
 	// this fallback; everything else (the SPA and its assets) falls through
 	// here. Registered last only for readability — mux precedence is by pattern
 	// specificity, not registration order.
-	mux.Handle("/", web.Handler())
-	b.server = &http.Server{Handler: mux}
+	mux.Handle("/", b.handleSPA(web.Handler()))
+	b.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ServeMux canonicalizes dot segments before a matching handler runs.
+		// Check both decoded and raw URL forms first so a tool path can never be
+		// normalized into /control or another bridge endpoint.
+		if r.URL.Path == "/tool" || strings.HasPrefix(r.URL.Path, "/tool/") {
+			if toolPathHasTraversal(r.URL.Path, r.URL.RawPath) {
+				http.NotFound(w, r)
+				return
+			}
+			toolHandler.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})}
 	return b
+}
+
+func newSessionToken() string {
+	var token [32]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		panic(fmt.Sprintf("wsbridge: mint session token: %v", err))
+	}
+	return hex.EncodeToString(token[:])
+}
+
+func (b *Bridge) handleSPA(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "iolbox_session",
+			Value:    b.sessionToken,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   r.TLS != nil,
+			SameSite: http.SameSiteStrictMode,
+		})
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (b *Bridge) requireSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !b.validSession(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !b.sameOrigin(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (b *Bridge) validSession(r *http.Request) bool {
+	if cookie, err := r.Cookie("iolbox_session"); err == nil &&
+		subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(b.sessionToken)) == 1 {
+		return true
+	}
+	parts := strings.Fields(r.Header.Get("Authorization"))
+	return len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") &&
+		subtle.ConstantTimeCompare([]byte(parts[1]), []byte(b.sessionToken)) == 1
+}
+
+func (b *Bridge) sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if isWebSocketUpgrade(r) && origin == "" {
+		return false
+	}
+	if !isWebSocketUpgrade(r) && origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return strings.EqualFold(parsed.Scheme, scheme) &&
+		normalizedOriginHost(parsed.Host) == normalizedOriginHost(r.Host)
+}
+
+func normalizedOriginHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+}
+
+func toolPathHasTraversal(paths ...string) bool {
+	for _, candidate := range paths {
+		if candidate == "" {
+			continue
+		}
+		decoded, err := url.PathUnescape(candidate)
+		if err != nil {
+			return true
+		}
+		for _, part := range strings.Split(decoded, "/") {
+			if part == ".." {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ListenAndServe binds cfg.Addr and serves until ctx is cancelled.

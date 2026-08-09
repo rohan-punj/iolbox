@@ -246,6 +246,9 @@ func (e *Endpoint) PID() int {
 // HostVeth returns the deterministic root-network-namespace veth name.
 func (e *Endpoint) HostVeth() string { return HostVethName(e.endpointCfg.NodeID) }
 
+// SocketPath returns the AF_UNIX socket path used by the tool GUI.
+func (e *Endpoint) SocketPath() string { return e.endpointSocketPath }
+
 func (e *Endpoint) endpointLaunchSpec() LaunchSpec {
 	env := make([]string, 0, 9)
 	for _, name := range []string{"PATH", "HOME", "LANG", "PYTHONHOME", "PYTHONPATH"} {

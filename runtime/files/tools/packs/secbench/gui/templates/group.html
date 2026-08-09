@@ -1,0 +1,80 @@
+{{define "page-group"}}
+{{template "head" .}}
+{{template "nav" .}}
+  <hgroup>
+    <h3>{{.GroupLabel}}</h3>
+    <p class="muted">{{.GroupDesc}}</p>
+  </hgroup>
+  {{template "lock-notice" .}}
+
+  {{if .ReconHosts}}
+  <datalist id="reconhosts">
+    {{range .ReconHosts}}<option value="{{.IP}}">{{.MAC}}</option>{{end}}
+  </datalist>
+  <p class="muted"><small>{{len .ReconHosts}} host(s) from ARP Scan available as target suggestions below.</small></p>
+  {{end}}
+
+  <div class="modgrid">
+  {{range .Modules}}
+    {{template "module-card" (dict "M" . "ReconHosts" $.ReconHosts)}}
+  {{end}}
+  </div>
+{{template "foot" .}}
+{{end}}
+
+{{define "module-card"}}
+{{$m := .M}}
+<article id="card-{{$m.Def.Key}}">
+  <header>
+    <strong>{{$m.Def.Label}}</strong>
+    {{if $m.Running}}<span class="pill up">running</span>{{else}}<span class="pill down">stopped</span>{{end}}
+  </header>
+  <p class="blurb">{{$m.Def.Blurb}}</p>
+
+  <form hx-post="/module/{{$m.Def.Key}}/start" hx-target="#live-{{$m.Def.Key}}" hx-swap="innerHTML">
+    <div class="cardform">
+      {{range $m.Def.Fields}}
+        <label>{{.Label}}
+          <input name="{{.Name}}" type="{{if eq .Type "number"}}number{{else}}text{{end}}"
+                 value="{{index $m.Params .Name}}" placeholder="{{.Placeholder}}"
+                 {{if and (eq .Name "target_ip") $.ReconHosts}}list="reconhosts"{{end}}>
+        </label>
+      {{end}}
+            <label>Count <input name="count" type="number" min="0" value="{{index $m.Params "count"}}" placeholder="0 = until stopped"></label>
+      <label>Interval (s) <input name="interval" type="number" step="0.1" min="0" value="{{index $m.Params "interval"}}" placeholder="1"></label>
+    </div>
+    <div class="cardactions">
+      <button type="submit" {{if or $m.Running (not $m.HasLabIface)}}disabled{{end}}>Start</button>
+    </div>
+  </form>
+  <button class="secondary outline" style="margin-top:.4rem;" hx-post="/module/{{$m.Def.Key}}/stop"
+    hx-target="#live-{{$m.Def.Key}}" hx-swap="innerHTML" {{if not $m.Running}}disabled{{end}}>Stop</button>
+
+  <div id="live-{{$m.Def.Key}}" hx-get="/frag/module/{{$m.Def.Key}}" hx-trigger="load, every 3s" hx-swap="innerHTML">
+    {{template "module-live-inner" $m}}
+  </div>
+
+  {{if $m.Def.Mitigation.Config}}
+  <details class="mitigation">
+    <summary>Mitigation: {{$m.Def.Mitigation.Title}}</summary>
+    <pre>{{$m.Def.Mitigation.Config}}</pre>
+    <p class="observe">{{$m.Def.Mitigation.Observe}}</p>
+  </details>
+  {{end}}
+</article>
+{{end}}
+
+{{define "frag-module-live"}}
+{{range .Modules}}{{template "module-live-inner" .}}{{end}}
+{{end}}
+
+{{define "module-live-inner"}}
+{{if .Running}}<p><small class="ok">running{{if .StartedAt}} since {{.StartedAt}}{{end}}</small></p>{{end}}
+{{if .Log}}
+<div class="logwrap">
+  <table class="logtable"><tbody>
+  {{range .Log}}<tr><td class="{{.Cls}}">{{.Msg}}</td></tr>{{end}}
+  </tbody></table>
+</div>
+{{else}}<div class="logempty">No output yet.</div>{{end}}
+{{end}}

@@ -37,6 +37,9 @@ func (e *Endpoint) PID() int { return 0 }
 // HostVeth has no network device on an unsupported platform.
 func (e *Endpoint) HostVeth() string { return "" }
 
+// SocketPath has no AF_UNIX endpoint on an unsupported platform.
+func (e *Endpoint) SocketPath() string { return "" }
+
 func endpointOptionsPayload(options []byte) []byte {
 	if len(options) == 0 {
 		return []byte("{}")
