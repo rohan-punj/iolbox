@@ -42,9 +42,7 @@ MIRROR="${DEBIAN_MIRROR:-https://deb.debian.org/debian}"
 SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"   # matches PLAN.md repo layout + .gitignore's /supervisor/bin/
 VPCS_BIN="$BUILD_DIR/vpcs/vpcs"               # fetch-vpcs.sh's output path
 TOOLLAUNCH_SOURCE="$SCRIPT_DIR/../tools/iolbox-toollaunch"
-TOOL_STUBGUI_SOURCE="$SCRIPT_DIR/../tools/tool-stubgui"
 TOOLLAUNCH_BIN="$BUILD_DIR/iolbox-toollaunch"
-TOOL_STUBGUI_BIN="$BUILD_DIR/tool-stubgui"
 INCLUDE_I386=1                                # docs/providers.md requires libc6:i386; opt out with --no-i386
 
 usage() {
@@ -167,10 +165,6 @@ echo "== build-rootfs: building tool launch helpers (linux/amd64) =="
 (
     cd "$TOOLLAUNCH_SOURCE"
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOLLAUNCH_BIN" .
-)
-(
-    cd "$TOOL_STUBGUI_SOURCE"
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOL_STUBGUI_BIN" .
 )
 SECBENCH_GUI_BIN="$BUILD_DIR/secbench-gui"
 (
@@ -321,7 +315,6 @@ install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/labs"     # durable lab-document stor
 # populates the shared venv; this batch reserves the spec-defined location.
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
-install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/stub"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/attacks"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/venv"
@@ -340,12 +333,6 @@ install -m 0755 -o root -g root "$TOOLLAUNCH_BIN" "$ROOTFS_DIR/opt/iolbox/iolbox
 # (the supervisor spawns `vpcs` by bare name).
 install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolbox/vpcs"
 
-# P1's gate fixture. The manifest is metadata only; options.json is deliberately
-# not shipped and is created per run by the supervisor in the socket directory.
-install -m 0644 -o root -g root "$SCRIPT_DIR/files/tools/packs/stub/pack.json" \
-    "$ROOTFS_DIR/opt/iolbox/tools/packs/stub/pack.json"
-install -m 0755 -o root -g root "$TOOL_STUBGUI_BIN" \
-    "$ROOTFS_DIR/opt/iolbox/tools/packs/stub/tool-stubgui"
 
 # P2 secbench payload and its offline Scapy environment. The wheelhouse and
 # requirements file are build-time inputs only and are removed before the

@@ -3,6 +3,9 @@
 # Run on the Linux appliance as root from a world-traversable checkout path.
 set -Eeuo pipefail
 
+P1_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+P1_REPO_ROOT="$(cd "$P1_SCRIPT_DIR/../.." && pwd)"
+
 P1_CONTROL_HOST=127.0.0.1
 P1_CONTROL_PORT=4000
 P1_SYSTEMD_UNIT=iolbox-supervisor
@@ -341,6 +344,25 @@ for P1_COMMAND in awk date fuser id ip python3 sed setpriv seq sleep sort stat s
 	p1_need "$P1_COMMAND"
 done
 [[ -x /opt/iolbox/iolbox-toollaunch ]] || p1_fail "prerequisite: missing /opt/iolbox/iolbox-toollaunch"
+
+# The stub pack is a gate-only fixture (dependency-free, so it can prove the
+# tool-node lifecycle without needing secbench's python/scapy stack) and is
+# deliberately NOT installed into real appliance images by build-rootfs.sh -
+# provision it here instead of assuming it is already present, so this gate
+# has no dependency on how (or whether) the target image was built.
+if [[ ! -f /opt/iolbox/tools/packs/stub/pack.json ]]; then
+	echo "==> stub pack not installed; provisioning the gate-only fixture"
+	p1_need go
+	install -d -m 0755 -o root -g root /opt/iolbox/tools/packs/stub
+	install -m 0644 -o root -g root "$P1_REPO_ROOT/runtime/files/tools/packs/stub/pack.json" \
+		/opt/iolbox/tools/packs/stub/pack.json
+	(
+		cd "$P1_REPO_ROOT/tools/tool-stubgui"
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /opt/iolbox/tools/packs/stub/tool-stubgui .
+	)
+	chown root:root /opt/iolbox/tools/packs/stub/tool-stubgui
+	chmod 0755 /opt/iolbox/tools/packs/stub/tool-stubgui
+fi
 [[ -f /opt/iolbox/tools/packs/stub/pack.json ]] || p1_fail "prerequisite: missing installed stub pack manifest"
 id ioltool >/dev/null 2>&1 || p1_fail "prerequisite: missing unprivileged account: ioltool"
 P1_SETPRIV_VERSION="$(setpriv --version | sed -nE 's/.* ([0-9]+\.[0-9]+).*/\1/p' | head -n1)"
