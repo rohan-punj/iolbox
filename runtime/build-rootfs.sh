@@ -141,26 +141,9 @@ fi
 
 mkdir -p "$BUILD_DIR"
 
-# P2's Python payload is assembled on the builder, never from a runtime
-# network connection. The requirements file is hash-locked, and --no-cache-dir
-# keeps pip's host cache from becoming an undeclared build input.
-SECBENCH_WHEELHOUSE="$BUILD_DIR/secbench-wheelhouse"
-rm -rf "$SECBENCH_WHEELHOUSE"
-mkdir -p "$SECBENCH_WHEELHOUSE"
-if ! command -v python3 >/dev/null 2>&1 || ! python3 -m pip --version >/dev/null 2>&1; then
-    echo "build-rootfs: python3 with pip is required for the secbench wheelhouse" >&2
-    exit 1
-fi
-python3 -m pip download \
-    --no-cache-dir \
-    --only-binary=:all: \
-    --require-hashes \
-    --dest "$SECBENCH_WHEELHOUSE" \
-    -r "$SCRIPT_DIR/files/tools/packs/secbench/requirements.txt"
-
 # The helper binaries are standalone, dependency-free Linux tools. Build them
 # here so the shipped rootfs gets the same architecture and immutable payload
-# treatment as the supervisor; P2 owns population of the Python venv below.
+# treatment as the supervisor.
 echo "== build-rootfs: building tool launch helpers (linux/amd64) =="
 (
     cd "$TOOLLAUNCH_SOURCE"
@@ -172,6 +155,34 @@ SECBENCH_GUI_BIN="$BUILD_DIR/secbench-gui"
     go test ./...
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$SECBENCH_GUI_BIN" .
 )
+echo "== build-rootfs: building secbench attack binaries (linux/amd64) =="
+SECBENCH_ATTACKS_SRC="$SCRIPT_DIR/../tools/secbench-attacks-go"
+SECBENCH_BIN_STAGE="$BUILD_DIR/secbench-bin"
+rm -rf "$SECBENCH_BIN_STAGE"; mkdir -p "$SECBENCH_BIN_STAGE"
+(
+    cd "$SECBENCH_ATTACKS_SRC"
+    go vet ./...
+    go test ./...
+    for d in cmd/*/; do
+        key="$(basename "$d")"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -o "$SECBENCH_BIN_STAGE/$key" "./$d"
+    done
+)
+# P3 network-tool packs (aaa, webserver, httpclient): each ships a single
+# static Go binary that is both the pack's AF_UNIX GUI and its lab-facing
+# service (RADIUS listener / HTTP server / outbound HTTP client) — no
+# separate attack-style binaries, unlike secbench.
+for pack in aaa webserver httpclient; do
+    echo "== build-rootfs: building $pack pack GUI (linux/amd64) =="
+    (
+        cd "$SCRIPT_DIR/files/tools/packs/$pack/gui"
+        go vet ./...
+        go test ./...
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -o "$BUILD_DIR/$pack-gui" .
+    )
+done
 if [ -d "$ROOTFS_DIR" ]; then
     echo "build-rootfs: removing previous rootfs at $ROOTFS_DIR"
     rm -rf "$ROOTFS_DIR"
@@ -216,7 +227,6 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 #             only the capture tab, not the watcher, was affected).
 #   util-linux  setpriv (the cap/uid transition requires >= 2.33)
 #   libcap2-bin capsh (capability-state diagnostics and the P0 gate)
-#   python3 + python3-scapy (the tool-pack attack helpers)
 #   coreutils' hostid is used by -gen-iourc (in minbase already)
 # ca-certificates is omitted on purpose: the runtime itself makes no
 # outbound TLS connections (the NAT node MASQUERADEs lab traffic at L3;
@@ -225,7 +235,7 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 # button — without it a hypervisor-initiated shutdown (qemu QMP
 # system_powerdown, vmrun soft stop, OVA guest shutdown) is never acted
 # on in-guest and hosts fall back to hard-kill after their grace period.
-BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump,util-linux,libcap2-bin,python3,python3-scapy,python3-venv,libpcap0.8,passwd"
+BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump,util-linux,libcap2-bin,passwd"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
@@ -311,13 +321,14 @@ install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/images"   # image library (uploads la
 install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/run"      # supervisor's per-lab runtime state (sockets, NETMAPs, nvram scratch) — swept by prestart-clean.sh
 install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/labs"     # durable lab-document store (-labs-dir); seed labs materialize here on first connect when empty
 
-# The tools tree is root-owned and immutable in the shipped image. P2
-# populates the shared venv; this batch reserves the spec-defined location.
+# The tools tree is root-owned and immutable in the shipped image.
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench"
-install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/attacks"
-install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/venv"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/bin"
+for pack in aaa webserver httpclient; do
+    install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack"
+done
 # /run/iolbox/tool is traversable by ioltool but not writable; Endpoint.Start
 # creates each per-node 0700 socket directory below it.
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/run/iolbox/tool"
@@ -334,37 +345,25 @@ install -m 0755 -o root -g root "$TOOLLAUNCH_BIN" "$ROOTFS_DIR/opt/iolbox/iolbox
 install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolbox/vpcs"
 
 
-# P2 secbench payload and its offline Scapy environment. The wheelhouse and
-# requirements file are build-time inputs only and are removed before the
-# rootfs is handed off.
+# P2 secbench payload: manifest, GUI, and static Go attack binaries.
 install -m 0644 -o root -g root \
     "$SCRIPT_DIR/files/tools/packs/secbench/pack.json" \
     "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/pack.json"
-install -m 0644 -o root -g root \
-    "$SCRIPT_DIR"/files/tools/packs/secbench/attacks/*.py \
-    "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/attacks/"
 install -m 0755 -o root -g root "$SECBENCH_GUI_BIN" \
     "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/secbench-gui"
-install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/wheelhouse"
-cp "$SECBENCH_WHEELHOUSE"/* "$ROOTFS_DIR/opt/iolbox/tools/wheelhouse/"
-install -m 0644 -o root -g root \
-    "$SCRIPT_DIR/files/tools/packs/secbench/requirements.txt" \
-    "$ROOTFS_DIR/opt/iolbox/tools/secbench-requirements.txt"
-chroot "$ROOTFS_DIR" /usr/bin/python3 -m venv /opt/iolbox/tools/venv
-chroot "$ROOTFS_DIR" /opt/iolbox/tools/venv/bin/python -m pip install \
-    --no-cache-dir \
-    --no-index \
-    --find-links=/opt/iolbox/tools/wheelhouse \
-    --require-hashes \
-    -r /opt/iolbox/tools/secbench-requirements.txt
-chroot "$ROOTFS_DIR" /opt/iolbox/tools/venv/bin/python -c \
-    'import scapy; from scapy.contrib import cdp, lldp, dtp, ospf, eigrp'
-chroot "$ROOTFS_DIR" /opt/iolbox/tools/venv/bin/python -m compileall -q \
-    /opt/iolbox/tools/packs/secbench/attacks
-rm -rf "$SECBENCH_WHEELHOUSE" \
-    "$ROOTFS_DIR/opt/iolbox/tools/wheelhouse" \
-    "$ROOTFS_DIR/opt/iolbox/tools/secbench-requirements.txt" \
-    "$ROOTFS_DIR/root/.cache/pip"
+for bin in "$SECBENCH_BIN_STAGE"/*; do
+    install -m 0755 -o root -g root "$bin" \
+        "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/bin/$(basename "$bin")"
+done
+
+# P3 network-tool packs: manifest + single-binary GUI/service each.
+for pack in aaa webserver httpclient; do
+    install -m 0644 -o root -g root \
+        "$SCRIPT_DIR/files/tools/packs/$pack/pack.json" \
+        "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack/pack.json"
+    install -m 0755 -o root -g root "$BUILD_DIR/$pack-gui" \
+        "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack/$pack-gui"
+done
 
 # firstboot-iourc.sh (called by both the systemd unit and the non-systemd
 # fallback init script) + the ExecStartPre stale-state sweep.

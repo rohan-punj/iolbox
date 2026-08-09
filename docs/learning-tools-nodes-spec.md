@@ -274,6 +274,8 @@ can bind it exactly as they bind an IOL/VPCS/NAT tap.
 
 ### 2.4 Bundling Python + dependencies WITHOUT Docker
 
+**SUPERSEDED by `docs/p2-go-wireup-plan.md` — the shipped pack now runs static Go binaries, no Python/venv/wheelhouse.**
+
 **Decision: one vendored venv baked into the appliance rootfs at build time,
 shared read-only by every tool node.** See §7 for the corrected build recipe
 (offline pinned-hash wheelhouse, not a runtime `pip install`).
@@ -862,6 +864,8 @@ Spelled out to the same concreteness as the existing kinds:
 ---
 
 ## 7. Packaging / build impact
+
+**SUPERSEDED by `docs/p2-go-wireup-plan.md` — the shipped pack now runs static Go binaries, no Python/venv/wheelhouse.**
 
 - **`runtime/build-rootfs.sh` (`:186`):** `BASE_INCLUDE` currently has no Python.
   Add `python3 python3-venv libpcap0.8 util-linux` (`libpcap` for scapy raw L2,

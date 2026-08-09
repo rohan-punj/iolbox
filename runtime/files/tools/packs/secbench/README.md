@@ -4,5 +4,4 @@ This pack contains the 18 L2/L3 Scapy learning modules that operate against Cisc
 
 The GUI's compiled module definitions and this manifest are checked one-to-one by moduledefs_test.go. The pack intentionally has no NGFW/firewall modules, no fw_reach helper, and no Victim Mode target.
 
-requirements.txt is consumed only by the rootfs builder. The builder creates an offline, hash-verified venv and removes the temporary wheelhouse and pip caches before the image is complete.
-
+The pack ships 18 static Go binaries under `bin/`, built from `tools/secbench-attacks-go/`. They have no Python, venv, wheelhouse, or runtime package dependencies.

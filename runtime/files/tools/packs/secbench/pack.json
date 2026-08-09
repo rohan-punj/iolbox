@@ -3,7 +3,7 @@
   "id": "secbench",
   "name": "Security Bench",
   "icon": "firewall",
-  "interpreter": "venv",
+  "interpreter": "none",
   "gui": {
     "bin": "secbench-gui",
     "transport": "unix",
@@ -33,7 +33,7 @@
       "key": "arp_scan",
       "label": "ARP Scan",
       "group": "recon",
-      "script": "attacks/arp_scan.py",
+      "script": "bin/arp_scan",
       "fields": [
         {
           "name": "subnet",
@@ -48,7 +48,7 @@
       "key": "dhcp_discover",
       "label": "DHCP Discover",
       "group": "recon",
-      "script": "attacks/dhcp_discover.py",
+      "script": "bin/dhcp_discover",
       "fields": [
         {
           "name": "duration",
@@ -63,7 +63,7 @@
       "key": "sniff",
       "label": "Passive Sniff",
       "group": "recon",
-      "script": "attacks/sniff.py",
+      "script": "bin/sniff",
       "fields": [
         {
           "name": "duration",
@@ -78,7 +78,7 @@
       "key": "arp_spoof",
       "label": "ARP Spoof / MITM",
       "group": "spoof",
-      "script": "attacks/arp_spoof.py",
+      "script": "bin/arp_spoof",
       "fields": [
         {
           "name": "target_ip",
@@ -101,7 +101,7 @@
       "key": "mac_spoof",
       "label": "MAC Spoof",
       "group": "spoof",
-      "script": "attacks/mac_spoof.py",
+      "script": "bin/mac_spoof",
       "fields": [
         {
           "name": "spoof_mac",
@@ -124,7 +124,7 @@
       "key": "mac_flood",
       "label": "CAM / MAC Flood",
       "group": "spoof",
-      "script": "attacks/mac_flood.py",
+      "script": "bin/mac_flood",
       "fields": [],
       "mitigation": {
         "text": "Port security (max MAC addresses)"
@@ -134,7 +134,7 @@
       "key": "dhcp_rogue",
       "label": "Rogue DHCP Server",
       "group": "dhcp",
-      "script": "attacks/dhcp_rogue.py",
+      "script": "bin/dhcp_rogue",
       "fields": [
         {
           "name": "pool_start",
@@ -175,7 +175,7 @@
       "key": "dhcp_starve",
       "label": "DHCP Starvation",
       "group": "dhcp",
-      "script": "attacks/dhcp_starve.py",
+      "script": "bin/dhcp_starve",
       "fields": [],
       "mitigation": {
         "text": "DHCP snooping rate-limit + port security"
@@ -185,7 +185,7 @@
       "key": "stp_root",
       "label": "STP Root Hijack",
       "group": "stp",
-      "script": "attacks/stp_root.py",
+      "script": "bin/stp_root",
       "fields": [
         {
           "name": "priority",
@@ -208,7 +208,7 @@
       "key": "cdp_flood",
       "label": "CDP Flood / Spoof",
       "group": "stp",
-      "script": "attacks/cdp_flood.py",
+      "script": "bin/cdp_flood",
       "fields": [
         {
           "name": "device_id",
@@ -231,7 +231,7 @@
       "key": "lldp_flood",
       "label": "LLDP Flood / Spoof",
       "group": "stp",
-      "script": "attacks/lldp_flood.py",
+      "script": "bin/lldp_flood",
       "fields": [
         {
           "name": "chassis_id",
@@ -254,7 +254,7 @@
       "key": "dtp_hop",
       "label": "DTP Trunk Hop",
       "group": "vlan",
-      "script": "attacks/dtp_hop.py",
+      "script": "bin/dtp_hop",
       "fields": [],
       "mitigation": {
         "text": "switchport nonegotiate (static access)"
@@ -264,7 +264,7 @@
       "key": "vlan_hop",
       "label": "802.1Q Double-Tag Hop",
       "group": "vlan",
-      "script": "attacks/vlan_hop.py",
+      "script": "bin/vlan_hop",
       "fields": [
         {
           "name": "target_vlan",
@@ -287,7 +287,7 @@
       "key": "hsrp_hijack",
       "label": "HSRP Hijack",
       "group": "fhrp",
-      "script": "attacks/hsrp_hijack.py",
+      "script": "bin/hsrp_hijack",
       "fields": [
         {
           "name": "group",
@@ -316,7 +316,7 @@
       "key": "vrrp_hijack",
       "label": "VRRP Hijack",
       "group": "fhrp",
-      "script": "attacks/vrrp_hijack.py",
+      "script": "bin/vrrp_hijack",
       "fields": [
         {
           "name": "vrid",
@@ -345,7 +345,7 @@
       "key": "ospf_rogue",
       "label": "OSPF Rogue Adjacency",
       "group": "fhrp",
-      "script": "attacks/ospf_rogue.py",
+      "script": "bin/ospf_rogue",
       "fields": [
         {
           "name": "area",
@@ -368,7 +368,7 @@
       "key": "eigrp_rogue",
       "label": "EIGRP Rogue Adjacency",
       "group": "fhrp",
-      "script": "attacks/eigrp_rogue.py",
+      "script": "bin/eigrp_rogue",
       "fields": [
         {
           "name": "asn",
@@ -391,7 +391,7 @@
       "key": "ra_spoof",
       "label": "IPv6 RA / DHCPv6 Spoof",
       "group": "fhrp",
-      "script": "attacks/ra_spoof.py",
+      "script": "bin/ra_spoof",
       "fields": [
         {
           "name": "prefix",
@@ -412,4 +412,3 @@
     }
   ]
 }
-

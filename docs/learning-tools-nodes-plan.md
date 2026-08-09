@@ -431,6 +431,7 @@ explicitly overridden. Full mechanism, exact names, and tests: **T2.5**.
   `common.py`; GUI trimmed to 18 modules, listening on AF_UNIX (`net.Listen("unix",
   …)`) — the only GUI change. Build-time key-match test (T1.3/#7) wired into the
   pack build.
+- **SUPERSEDED by `docs/p2-go-wireup-plan.md` — the shipped pack now runs static Go binaries, no Python/venv/wheelhouse.**
 - **T2.2 — offline wheelhouse in rootfs (`build-rootfs.sh`).** Per spec §7:
   `pip download` scapy+pinned deps to `wheelhouse/` with `--require-hashes`; install
   `--no-index --find-links` into `/opt/iolbox/tools/venv`; verify imports; add

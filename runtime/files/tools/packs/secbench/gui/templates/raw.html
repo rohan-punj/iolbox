@@ -7,7 +7,7 @@
   <code>--count</code>/<code>--interval</code>). Useful for a helper flag that has no dedicated form
   field yet. The <code>--iface</code> flag is always fixed to <code>eth1</code> and cannot be
   overridden here — extra args are appended, not prepended, and every helper re-checks its own
-  iface argument regardless (see <code>attacks/common.py</code>).</small></p>
+  iface argument regardless (see <code>internal/attackcommon.EnforceLabIface</code>).</small></p>
 
   <form method="get" action="/raw" class="grid" style="grid-template-columns:1fr 3fr;">
     <select name="m" onchange="this.form.submit()">
@@ -24,4 +24,3 @@
   </form>
 {{template "foot" .}}
 {{end}}
-

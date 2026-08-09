@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// venvPython / attacksDir are baked into the image layout by the Dockerfile.
-const venvPython = "/opt/iolbox/tools/venv/bin/python"
-const attacksDir = "/opt/iolbox/tools/packs/secbench/attacks"
+// binDir is where the rootfs builder installs the secbench attack binaries.
+const binDir = "/opt/iolbox/tools/packs/secbench/bin"
 
 // labIface is the ONLY network interface any attack helper is ever allowed to
 // touch. It is not user-configurable from the GUI on purpose (see PATTERN.md
@@ -166,20 +165,21 @@ func hasLabIface() bool {
 	return err == nil && ifc != nil
 }
 
-// stripIfaceFlag removes any "--iface"/"-i" token (long "--iface=value" form,
-// or "--iface value" / "-i value" two-token form) from a caller-supplied argv
-// slice. Used by Start below so the Raw-args field (server.go moduleStart,
-// cfg.RawArgs) can never smuggle an alternate interface past the hardcoded
-// lock — see the ENFORCEMENT POINT comment on Start.
+// stripIfaceFlag removes any single- or double-dash iface token. Go's flag
+// package treats --iface and -iface identically, so both long forms must be
+// stripped, along with -i, from a caller-supplied argv slice. Used by Start
+// below so the Raw-args field (server.go moduleStart, cfg.RawArgs) can never
+// smuggle an alternate interface past the hardcoded lock — see the
+// ENFORCEMENT POINT comment on Start.
 func stripIfaceFlag(args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--iface" || a == "-i":
+		case a == "--iface" || a == "-iface" || a == "-i":
 			i++ // also drop the following value token, if any
-		case strings.HasPrefix(a, "--iface="):
-			// long "=" form carries its own value, nothing extra to skip
+		case strings.HasPrefix(a, "--iface=") || strings.HasPrefix(a, "-iface="):
+			// "=" form carries its own value, nothing extra to skip
 		default:
 			out = append(out, a)
 		}
@@ -191,15 +191,15 @@ func stripIfaceFlag(args []string) []string {
 //
 // ===== SAFETY / eth1-lock ENFORCEMENT POINT =====
 // This is the one and only place a helper process is exec'd. `--iface` is
-// hardcoded to the labIface constant ("eth1"). Any `--iface`/`-i` token in the
+// hardcoded to the labIface constant ("eth1"). Any `--iface`/`-iface`/`-i` token in the
 // caller-supplied extra args (RawArgs on the Raw tab — the only path a user
 // can inject arbitrary flags through) is stripped BEFORE appending, because
-// Python's argparse keeps the LAST occurrence of a flag: appending extra args
+// Go's flag package keeps the LAST occurrence of a flag: appending extra args
 // after "--iface eth1" would otherwise let a later "--iface eth2" silently
 // win. Stripping (rather than relying on ordering) also protects any helper
-// that instead uses a "first occurrence wins" parser. Every helper
-// additionally calls common.enforce_lab_iface() at startup as defense-in-depth
-// (attacks/common.py, now a hard allowlist of eth1 only). Start refuses
+// that instead uses a "first occurrence wins" parser. Every Go binary
+// additionally calls internal/attackcommon.EnforceLabIface at startup as
+// defense-in-depth (a hard allowlist of eth1 only). Start refuses
 // outright if eth1 does not exist on the container.
 func (s *Supervisor) Start(key string, extra []string) error {
 	m := moduleByKey(key)
@@ -214,7 +214,7 @@ func (s *Supervisor) Start(key string, extra []string) error {
 		return fmt.Errorf("no runner for %q", key)
 	}
 	extra = stripIfaceFlag(extra)
-	argv := append([]string{venvPython, attacksDir + "/" + m.Script, "--iface", labIface}, extra...)
+	argv := append([]string{binDir + "/" + m.Script, "--iface", labIface}, extra...)
 	return r.start(argv)
 }
 

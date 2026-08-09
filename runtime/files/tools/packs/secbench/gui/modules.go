@@ -3,9 +3,9 @@ package main
 // This file is the single source of truth for the 18 attack/recon modules.
 // Every tab, form, start/stop route and mitigation panel is generated from
 // this table (see server.go) so adding a module never means hand-rolling a
-// new page — just another ModuleDef entry + a small python helper.
+// new page — just another ModuleDef entry + a small Go binary.
 
-// Field describes one extra CLI parameter a module's helper accepts, beyond
+// Field describes one extra CLI parameter a module's binary accepts, beyond
 // the always-present --count/--interval. Rendered as a labelled <input> and
 // passed to the helper as "--name value" when non-empty.
 type Field struct {
@@ -28,13 +28,13 @@ type Mitigation struct {
 	Observe string // what to check after applying it
 }
 
-// ModuleDef is one attack/recon/test module: label, python helper, its form
+// ModuleDef is one attack/recon/test module: label, Go binary, its form
 // fields, and the paired mitigation/detection panel.
 type ModuleDef struct {
 	Key        string
 	Label      string
 	Group      string // tab key: recon | spoof | dhcp | stp | vlan | fhrp
-	Script     string // filename under /opt/iolbox/tools/packs/secbench/attacks/
+	Script     string // binary name under /opt/iolbox/tools/packs/secbench/bin/
 	Blurb      string
 	Fields     []Field
 	Mitigation Mitigation
@@ -61,21 +61,21 @@ var groupOrder = []struct{ Key, Label, Desc string }{
 var moduleDefs = []ModuleDef{
 	// ---- RECON ----
 	{
-		Key: "arp_scan", Label: "ARP Scan", Group: groupRecon, Script: "arp_scan.py",
+		Key: "arp_scan", Label: "ARP Scan", Group: groupRecon, Script: "arp_scan",
 		Blurb: "Sweeps a subnet with ARP requests and builds a host/MAC table other modules can target.",
 		Fields: []Field{
 			{"subnet", "Subnet", "192.168.1.0/24", "", "text"},
 		},
 	},
 	{
-		Key: "dhcp_discover", Label: "DHCP Discover", Group: groupRecon, Script: "dhcp_discover.py",
+		Key: "dhcp_discover", Label: "DHCP Discover", Group: groupRecon, Script: "dhcp_discover",
 		Blurb: "Broadcasts DHCPDISCOVER and reports every server that answers with an OFFER (finds rogue servers too).",
 		Fields: []Field{
 			{"duration", "Listen seconds", "10", "10", "number"},
 		},
 	},
 	{
-		Key: "sniff", Label: "Passive Sniff", Group: groupRecon, Script: "sniff.py",
+		Key: "sniff", Label: "Passive Sniff", Group: groupRecon, Script: "sniff",
 		Blurb: "Passively observes traffic on eth1 and summarizes MACs, VLAN tags and top talkers seen.",
 		Fields: []Field{
 			{"duration", "Duration (s)", "20", "20", "number"},
@@ -84,7 +84,7 @@ var moduleDefs = []ModuleDef{
 
 	// ---- L2 SPOOFING ----
 	{
-		Key: "arp_spoof", Label: "ARP Spoof / MITM", Group: groupSpoof, Script: "arp_spoof.py",
+		Key: "arp_spoof", Label: "ARP Spoof / MITM", Group: groupSpoof, Script: "arp_spoof",
 		Blurb: "Bidirectionally poisons target<->gateway ARP caches to sit in the middle of their traffic.",
 		Fields: []Field{
 			{"target_ip", "Target IP", "192.168.1.10", "", "text"},
@@ -105,7 +105,7 @@ interface Gi0/2                 ! any other trusted/uplink port
 		},
 	},
 	{
-		Key: "mac_spoof", Label: "MAC Spoof", Group: groupSpoof, Script: "mac_spoof.py",
+		Key: "mac_spoof", Label: "MAC Spoof", Group: groupSpoof, Script: "mac_spoof",
 		Blurb: "Sends traffic from a forged source MAC address to impersonate another host on the segment.",
 		Fields: []Field{
 			{"spoof_mac", "Source MAC to forge", "02:00:00:aa:bb:cc", "02:00:00:aa:bb:cc", "text"},
@@ -123,7 +123,7 @@ interface Gi0/2                 ! any other trusted/uplink port
 		},
 	},
 	{
-		Key: "mac_flood", Label: "CAM / MAC Flood", Group: groupSpoof, Script: "mac_flood.py",
+		Key: "mac_flood", Label: "CAM / MAC Flood", Group: groupSpoof, Script: "mac_flood",
 		Blurb:  "macof-style flood of frames with random source MACs to overflow the switch CAM table (fail-open -> flooding).",
 		Fields: []Field{},
 		Mitigation: Mitigation{
@@ -138,7 +138,7 @@ interface Gi0/2                 ! any other trusted/uplink port
 
 	// ---- DHCP ----
 	{
-		Key: "dhcp_rogue", Label: "Rogue DHCP Server", Group: groupDHCP, Script: "dhcp_rogue.py",
+		Key: "dhcp_rogue", Label: "Rogue DHCP Server", Group: groupDHCP, Script: "dhcp_rogue",
 		Blurb: "Answers DHCPDISCOVER with OFFERs handing out a forged gateway/DNS to redirect victim traffic.",
 		Fields: []Field{
 			{"pool_start", "Pool start", "192.168.1.100", "192.168.1.100", "text"},
@@ -157,7 +157,7 @@ interface Gi0/1                 ! uplink to the real DHCP server
 		},
 	},
 	{
-		Key: "dhcp_starve", Label: "DHCP Starvation", Group: groupDHCP, Script: "dhcp_starve.py",
+		Key: "dhcp_starve", Label: "DHCP Starvation", Group: groupDHCP, Script: "dhcp_starve",
 		Blurb:  "Floods DHCPDISCOVER with random client MACs (chaddr) to exhaust the real server's address pool.",
 		Fields: []Field{},
 		Mitigation: Mitigation{
@@ -172,7 +172,7 @@ interface Gi0/1                 ! uplink to the real DHCP server
 
 	// ---- STP / DISCOVERY ----
 	{
-		Key: "stp_root", Label: "STP Root Hijack", Group: groupSTP, Script: "stp_root.py",
+		Key: "stp_root", Label: "STP Root Hijack", Group: groupSTP, Script: "stp_root",
 		Blurb: "Transmits a superior (lower priority) BPDU to become the STP root bridge and pull traffic through the attacker.",
 		Fields: []Field{
 			{"priority", "Bridge priority", "0", "0", "number"},
@@ -189,7 +189,7 @@ interface Gi0/1                 ! port that must never become root-facing
 		},
 	},
 	{
-		Key: "cdp_flood", Label: "CDP Flood / Spoof", Group: groupSTP, Script: "cdp_flood.py",
+		Key: "cdp_flood", Label: "CDP Flood / Spoof", Group: groupSTP, Script: "cdp_flood",
 		Blurb: "Floods forged CDP neighbor announcements (device-id/platform) to pollute neighbor tables / exhaust NVRAM.",
 		Fields: []Field{
 			{"device_id", "Forged device-id", "fake-switch", "fake-switch", "text"},
@@ -205,7 +205,7 @@ interface Gi0/5
 		},
 	},
 	{
-		Key: "lldp_flood", Label: "LLDP Flood / Spoof", Group: groupSTP, Script: "lldp_flood.py",
+		Key: "lldp_flood", Label: "LLDP Flood / Spoof", Group: groupSTP, Script: "lldp_flood",
 		Blurb: "Floods forged LLDP TLVs (chassis-id/system-name) — the vendor-neutral twin of the CDP flood.",
 		Fields: []Field{
 			{"chassis_id", "Forged chassis-id", "fake-chassis", "fake-chassis", "text"},
@@ -224,7 +224,7 @@ interface Gi0/5
 
 	// ---- VLAN ----
 	{
-		Key: "dtp_hop", Label: "DTP Trunk Hop", Group: groupVLAN, Script: "dtp_hop.py",
+		Key: "dtp_hop", Label: "DTP Trunk Hop", Group: groupVLAN, Script: "dtp_hop",
 		Blurb:  "Forges DTP Desirable frames to negotiate the attached port into trunk mode, exposing every VLAN.",
 		Fields: []Field{},
 		Mitigation: Mitigation{
@@ -236,7 +236,7 @@ interface Gi0/5
 		},
 	},
 	{
-		Key: "vlan_hop", Label: "802.1Q Double-Tag Hop", Group: groupVLAN, Script: "vlan_hop.py",
+		Key: "vlan_hop", Label: "802.1Q Double-Tag Hop", Group: groupVLAN, Script: "vlan_hop",
 		Blurb: "Sends a double-tagged frame (outer = native VLAN) that a trunk strips once, hopping the inner VLAN onto the segment.",
 		Fields: []Field{
 			{"target_vlan", "Inner (target) VLAN", "20", "20", "number"},
@@ -253,7 +253,7 @@ interface Gi0/5
 
 	// ---- FHRP / ROUTING ----
 	{
-		Key: "hsrp_hijack", Label: "HSRP Hijack", Group: groupFHRP, Script: "hsrp_hijack.py",
+		Key: "hsrp_hijack", Label: "HSRP Hijack", Group: groupFHRP, Script: "hsrp_hijack",
 		Blurb: "Sends a higher-priority Coup/Hello to become HSRP Active and intercept the virtual gateway's traffic.",
 		Fields: []Field{
 			{"group", "HSRP group", "1", "1", "number"},
@@ -270,7 +270,7 @@ interface Gi0/5
 		},
 	},
 	{
-		Key: "vrrp_hijack", Label: "VRRP Hijack", Group: groupFHRP, Script: "vrrp_hijack.py",
+		Key: "vrrp_hijack", Label: "VRRP Hijack", Group: groupFHRP, Script: "vrrp_hijack",
 		Blurb: "Sends a higher-priority VRRP advertisement to become Master and intercept the virtual router's traffic.",
 		Fields: []Field{
 			{"vrid", "VRID", "1", "1", "number"},
@@ -287,7 +287,7 @@ interface Gi0/5
 		},
 	},
 	{
-		Key: "ospf_rogue", Label: "OSPF Rogue Adjacency", Group: groupFHRP, Script: "ospf_rogue.py",
+		Key: "ospf_rogue", Label: "OSPF Rogue Adjacency", Group: groupFHRP, Script: "ospf_rogue",
 		Blurb: "Forms (or floods hellos to attempt) a rogue OSPF adjacency to inject/black-hole routes or DoS the process.",
 		Fields: []Field{
 			{"area", "Area", "0", "0", "number"},
@@ -307,7 +307,7 @@ router ospf 1
 		},
 	},
 	{
-		Key: "eigrp_rogue", Label: "EIGRP Rogue Adjacency", Group: groupFHRP, Script: "eigrp_rogue.py",
+		Key: "eigrp_rogue", Label: "EIGRP Rogue Adjacency", Group: groupFHRP, Script: "eigrp_rogue",
 		Blurb: "Sends EIGRP hellos to attempt a rogue neighbor relationship on the target AS.",
 		Fields: []Field{
 			{"asn", "AS number", "100", "100", "number"},
@@ -326,7 +326,7 @@ interface Gi0/1
 		},
 	},
 	{
-		Key: "ra_spoof", Label: "IPv6 RA / DHCPv6 Spoof", Group: groupFHRP, Script: "ra_spoof.py",
+		Key: "ra_spoof", Label: "IPv6 RA / DHCPv6 Spoof", Group: groupFHRP, Script: "ra_spoof",
 		Blurb: "Sends rogue Router Advertisements (and optional DHCPv6 replies) to redirect IPv6 hosts to a forged default gateway/DNS.",
 		Fields: []Field{
 			{"prefix", "Advertised prefix", "2001:db8:dead::/64", "2001:db8:dead::/64", "text"},

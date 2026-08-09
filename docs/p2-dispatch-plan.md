@@ -298,6 +298,8 @@ one, prefix `toolsock*` and report it). **Build-tag discipline:** it touches
 `GOOS=linux go vet ./...`; `tool.go`, the wsbridge/proxy/rewriter code, and the new
 `x/net/html` dependency are all portable and compile natively on Windows.
 
+**SUPERSEDED by `docs/p2-go-wireup-plan.md` — the shipped pack now runs static Go binaries, no Python/venv/wheelhouse.**
+
 **B2 — secbench pack port + offline wheelhouse (T2.1 + T2.2).**
 Bundled because both edit `runtime/build-rootfs.sh` and both are "get the pack + its
 Python runtime into the rootfs." Different toolchain from the Go batches (bash +

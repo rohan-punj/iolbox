@@ -1,5 +1,7 @@
 # secbench Go port — remaining 16 modules (REVISION 2, post sol-medium review)
 
+**SUPERSEDED by `docs/p2-go-wireup-plan.md` — the shipped pack now runs static Go binaries, no Python/venv/wheelhouse.**
+
 Spike (`tools/secbench-attacks-go`) proved wire-equivalence for arp_spoof and
 cdp_flood: byte-identical frames vs. the real Python/scapy scripts, verified
 on the appliance VM. This plan ports the remaining 16 modules using the same
