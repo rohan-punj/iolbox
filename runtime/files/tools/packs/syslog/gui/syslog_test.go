@@ -389,13 +389,24 @@ func TestBuildRootfsSyslogStagingShape(t *testing.T) {
 	}
 }
 
+// receiverUDPAddr returns a deterministic IPv4 loopback destination for
+// dialing the receiver in tests. The receiver always binds net.IPv4zero
+// (syslog.go's replaceListener), so its LocalAddr().String() is literally
+// "0.0.0.0:<port>" — re-resolving that string via net.ResolveUDPAddr on the
+// ambiguous "udp" network lets Go's address-family heuristic pick IPv6
+// (favoriteAddrFamily in the stdlib prefers ::1 for an unspecified
+// destination IP on some hosts), which then connects to a loopback address
+// the IPv4-only listener never sees traffic arrive from as 127.0.0.1 — this
+// is host-dependent (confirmed diverging between a Windows dev machine and
+// an Ubuntu 24.04 builder) rather than a flake. Force IPv4 explicitly to
+// match what the listener actually binds.
 func receiverUDPAddr(t *testing.T, receiver *Receiver) *net.UDPAddr {
 	t.Helper()
 	addr, err := net.ResolveUDPAddr("udp", receiver.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return addr
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: addr.Port}
 }
 
 func receiverPort(t *testing.T, receiver *Receiver) int {
