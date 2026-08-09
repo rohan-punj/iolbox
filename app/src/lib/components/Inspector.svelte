@@ -100,6 +100,17 @@
     if (!cfg.net) delete cfg.net;
     node.config = cfg;
   }
+
+  let applyingConfig = $state(false);
+  async function applyConfig() {
+    if (!node || applyingConfig) return;
+    applyingConfig = true;
+    try {
+      await labStore.applyNodeConfig(node.id);
+    } finally {
+      applyingConfig = false;
+    }
+  }
 </script>
 
 <div class="inspector">
@@ -260,6 +271,16 @@
         />
       </label>
       <div class="vpcs-hint">Applied to eth1 when the node starts. Leave IP blank to leave it unaddressed (most modules don't need one).</div>
+
+      <button
+        class="btn btn-ghost savecfg-btn"
+        title="Push the pack/network changes above to the supervisor — the dropdown alone doesn't apply them"
+        disabled={applyingConfig}
+        onclick={applyConfig}
+      >{applyingConfig ? "Saving…" : "Save"}</button>
+      {#if running}
+        <div class="vpcs-hint">Node is running — the pack change applies on next stop/start.</div>
+      {/if}
     {:else}
       <div class="vpcs-hint">VPCS nodes take their config from canned commands (set later).</div>
     {/if}

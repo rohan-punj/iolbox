@@ -1166,6 +1166,43 @@ class LabStore {
       if (node) node.startupConfig = c.startupConfig;
     }
   }
+
+  /** Push a node's in-memory `config` (pack, net, ...) to the supervisor's
+   *  loaded lab. The Inspector's updatePack/updateNet handlers only mutate
+   *  the LOCAL doc — the supervisor keeps its own copy from the last
+   *  lab.load/node.add and never re-reads the frontend's state on its own,
+   *  so without this a pack change in the dropdown was pure UI with no
+   *  effect on what actually starts. Re-sends the whole doc via lab.load:
+   *  since editing `config` doesn't change node/link topology (sameTopology
+   *  ignores it), the supervisor's ADOPT path always takes over server-side
+   *  — it swaps in the new doc's config in place without touching any
+   *  already-running node elsewhere in the lab (see tryAdoptLoad). */
+  async applyNodeConfig(nodeId: number) {
+    await this.guarded(`apply config for node ${nodeId}`, async () => {
+      const res = await this.client.labLoad($state.snapshot(this.lab) as LabDocument);
+      if (!res.adopted) {
+        // Shouldn't happen for a config-only edit — topology is unchanged —
+        // but if the supervisor ever disagrees it already ran the full
+        // teardown-and-reload server-side; resync local state rather than
+        // let it drift from what's actually running.
+        const status = await this.client.status();
+        const states: Record<number, NodeState> = {};
+        for (const n of status.nodes ?? []) states[n.id] = n.state;
+        for (const n of this.lab.nodes) if (!(n.id in states)) states[n.id] = "stopped";
+        this.nodeStates = states;
+      }
+    });
+    this.scheduleAutosave();
+    const running = this.nodeStates[nodeId] === "running" || this.nodeStates[nodeId] === "starting";
+    const name = this.lab.nodes.find((n) => n.id === nodeId)?.name ?? `#${nodeId}`;
+    this.pushLog(
+      running ? "warn" : "info",
+      running
+        ? `${name}: config saved — stop and restart the node to apply it`
+        : `${name}: config applied`,
+      nodeId
+    );
+  }
 }
 
 export const labStore = new LabStore();
