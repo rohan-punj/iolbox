@@ -1,0 +1,1 @@
+{{define "content"}}<p><a href="/">← New request</a></p><h1>{{.Status}}</h1><h2>Response headers</h2><dl>{{range $key, $values := .Headers}}<dt>{{$key}}</dt>{{range $values}}<dd>{{.}}</dd>{{end}}{{end}}</dl><h2>Raw response body</h2><pre class="response-body">{{.Body}}</pre>{{end}}

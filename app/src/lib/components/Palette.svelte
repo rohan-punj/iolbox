@@ -19,6 +19,10 @@
 
   const iolImages = $derived(labStore.images);
   const toolPacks = $derived(labStore.toolPacks);
+  const defaultToolPack = $derived(
+    ["webserver", "aaa", "httpclient"].find((id) => toolPacks.some((p) => p.id === id))
+      ?? toolPacks[0]?.id
+  );
   const running = $derived(labStore.labRunning);
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
@@ -222,22 +226,20 @@
   </div>
 
   {#if toolPacks.length > 0}
-    {#each toolPacks as pack (pack.id)}
-      <div
-        class="palette-item"
-        draggable="true"
-        role="button"
-        tabindex="0"
-        ondragstart={(e) => onDragStart(e, "tool", undefined, pack.id)}
-        title={`${pack.name} learning tool`}
-      >
-        <span class="swatch tool" aria-hidden="true">{@html iconSvg(pack.icon || "tool", 28)}</span>
-        <div class="item-text">
-          <div class="item-name">{pack.name}</div>
-          <div class="item-sub">Learning tool</div>
-        </div>
+    <div
+      class="palette-item"
+      draggable="true"
+      role="button"
+      tabindex="0"
+      ondragstart={(e) => onDragStart(e, "tool", undefined, defaultToolPack)}
+      title="Network tools — pick RADIUS/AAA, web server, or HTTP client after dropping"
+    >
+      <span class="swatch tool" aria-hidden="true">{@html iconSvg("tool", 28)}</span>
+      <div class="item-text">
+        <div class="item-name">Network tools</div>
+        <div class="item-sub">Learning tool</div>
       </div>
-    {/each}
+    </div>
   {:else if labStore.toolPacksLoading}
     <div class="empty-hint">Loading learning tools…</div>
   {:else if labStore.toolPacksError}

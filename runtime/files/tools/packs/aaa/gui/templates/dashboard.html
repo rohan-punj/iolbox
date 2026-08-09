@@ -1,0 +1,7 @@
+{{define "content"}}
+<h1>RADIUS service</h1>
+{{if not .Iface}}<article class="warning">eth1 is not wired yet. Set an address in the Inspector before testing from the lab.</article>{{end}}
+<div class="grid"><article><strong>Protocol</strong><br>{{.Config.Protocol}}</article><article><strong>Listen</strong><br>UDP 0.0.0.0:1812</article><article><strong>Users</strong><br>{{len .Config.Users}}</article></div>
+<h2>Recent authentication attempts</h2><div id="auth-log" hx-get="/frag/log" hx-trigger="every 3s" hx-swap="innerHTML">{{template "attempts" .Attempts}}</div>
+{{end}}
+{{define "attempts"}}<table><thead><tr><th>Time</th><th>User</th><th>Remote</th><th>Result</th><th>Message</th></tr></thead><tbody>{{range .}}<tr><td>{{.At.Format "15:04:05"}}</td><td>{{.User}}</td><td>{{.Remote}}</td><td class="{{.Result}}">{{.Result}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="5">No attempts yet.</td></tr>{{end}}</tbody></table>{{end}}
