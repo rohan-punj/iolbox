@@ -3,7 +3,7 @@
 
 import { uuid } from "./uid";
 
-export type NodeKind = "iol" | "vpcs" | "nat";
+export type NodeKind = "iol" | "vpcs" | "nat" | "tool";
 export type ImageClass = "l2" | "l3" | "unknown";
 export type LinkType = "p2p" | "segment";
 export type CaptureMode = "live" | "file";

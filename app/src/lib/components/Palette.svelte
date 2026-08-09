@@ -5,17 +5,19 @@
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
   import { watcherStore } from "../watcherStore.svelte";
   import { painterStore } from "../painterStore.svelte";
+  import type { NodeKind } from "../labTypes";
 
-  function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat", imageId?: string) {
+  function onDragStart(e: DragEvent, kind: NodeKind, imageId?: string, packId?: string) {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(
       "application/iolbox-node",
-      JSON.stringify({ kind, imageId })
+      JSON.stringify({ kind, imageId, packId })
     );
   }
 
   const iolImages = $derived(labStore.images);
+  const toolPacks = $derived(labStore.toolPacks);
   const running = $derived(labStore.labRunning);
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
@@ -209,6 +211,29 @@
       <div class="item-sub">Virtual PC</div>
     </div>
   </div>
+
+  {#if toolPacks.length > 0}
+    {#each toolPacks as pack (pack.id)}
+      <div
+        class="palette-item"
+        draggable="true"
+        role="button"
+        tabindex="0"
+        ondragstart={(e) => onDragStart(e, "tool", undefined, pack.id)}
+        title={`${pack.name} learning tool`}
+      >
+        <span class="swatch tool" aria-hidden="true">{@html iconSvg(pack.icon || "tool", 28)}</span>
+        <div class="item-text">
+          <div class="item-name">{pack.name}</div>
+          <div class="item-sub">Learning tool</div>
+        </div>
+      </div>
+    {/each}
+  {:else if labStore.toolPacksLoading}
+    <div class="empty-hint">Loading learning tools…</div>
+  {:else if labStore.toolPacksError}
+    <div class="empty-hint error-hint">Learning tools unavailable</div>
+  {/if}
 
   {#if hasNat}
     <div
@@ -613,6 +638,12 @@
   .swatch.nat {
     color: var(--accent);
     position: relative;
+  }
+  .swatch.tool {
+    color: var(--accent);
+  }
+  .error-hint {
+    color: var(--danger);
   }
   /* WS6 — slirp egress: greyed NAT glyph + a warn chip on the palette entry.
      Inform-only; the row stays draggable. Filter the svg only so the warn chip

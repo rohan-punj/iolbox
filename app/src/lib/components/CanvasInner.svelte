@@ -18,6 +18,7 @@
   import { themeStore } from "../themeStore.svelte";
   import IolNode from "../nodes/IolNode.svelte";
   import VpcsNode from "../nodes/VpcsNode.svelte";
+  import ToolNode from "../nodes/ToolNode.svelte";
   import AnnoText from "../nodes/AnnoText.svelte";
   import AnnoShape from "../nodes/AnnoShape.svelte";
   import AnnoLine, { LINE_PAD } from "../nodes/AnnoLine.svelte";
@@ -32,7 +33,7 @@
   import { linking } from "../linking.svelte";
   import { nextFreeInterface } from "../interfaces";
   import { annoTool } from "../annoTool.svelte";
-  import type { Annotation, LabNode } from "../labTypes";
+  import type { Annotation, LabNode, NodeKind } from "../labTypes";
 
   // The NAT gateway reuses the VPCS single-interface node chrome; the
   // distinct glyph comes from its default icon (defaultIconFor). annoText /
@@ -42,6 +43,7 @@
     iol: IolNode,
     vpcs: VpcsNode,
     nat: VpcsNode,
+    tool: ToolNode,
     annoText: AnnoText,
     annoShape: AnnoShape,
     annoLine: AnnoLine,
@@ -416,14 +418,15 @@
     e.preventDefault();
     const raw = e.dataTransfer?.getData("application/iolbox-node");
     if (!raw) return;
-    const { kind, imageId } = JSON.parse(raw) as {
-      kind: "iol" | "vpcs" | "nat";
+    const { kind, imageId, packId } = JSON.parse(raw) as {
+      kind: NodeKind;
       imageId?: string;
+      packId?: string;
     };
     const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     const id = labStore.nextNodeId();
     const img = labStore.images.find((i) => i.id === imageId);
-    const node: LabNode = buildDroppedNode(kind, id, pos, img);
+    const node: LabNode = buildDroppedNode(kind, id, pos, img, packId);
     const registered = labStore.addNode(node);
     labStore.selectedNodeId = id;
     // A NAT gateway has no boot/config step and only exists to provide egress —
@@ -441,10 +444,11 @@
   }
 
   function buildDroppedNode(
-    kind: "iol" | "vpcs" | "nat",
+    kind: NodeKind,
     id: number,
     pos: { x: number; y: number },
-    img?: (typeof labStore.images)[number]
+    img?: (typeof labStore.images)[number],
+    packId?: string
   ): LabNode {
     if (kind === "iol") {
       return {
@@ -462,6 +466,16 @@
     if (kind === "nat") {
       // Single-interface builtin node (eth0), doc shape mirrors a VPCS node.
       return { id, kind, name: nameForKind(kind), x: pos.x, y: pos.y };
+    }
+    if (kind === "tool") {
+      return {
+        id,
+        kind,
+        name: `Tool${id}`,
+        x: pos.x,
+        y: pos.y,
+        config: { pack: packId ?? labStore.toolPacks[0]?.id ?? "" },
+      };
     }
     return { id, kind: "vpcs", name: `PC${id}`, x: pos.x, y: pos.y };
   }

@@ -10,6 +10,7 @@ export function allInterfaces(node: LabNode): string[] {
   // VPCS + the single-interface builtin NAT gateway all expose exactly one
   // "eth0" port.
   if (node.kind === "vpcs" || node.kind === "nat") return ["eth0"];
+  if (node.kind === "tool") return ["eth1"];
   const list: string[] = [];
   const eth = Math.max(node.ethernet ?? 1, 0);
   const ser = Math.max(node.serial ?? 0, 0);
@@ -43,5 +44,6 @@ export function freeInterfaces(node: LabNode): string[] {
 export function nextFreeInterface(node: LabNode): string {
   const free = freeInterfaces(node);
   if (free.length) return free[0];
-  return node.kind === "iol" ? "e0/0" : "eth0";
+  if (node.kind === "iol") return "e0/0";
+  return node.kind === "tool" ? "eth1" : "eth0";
 }

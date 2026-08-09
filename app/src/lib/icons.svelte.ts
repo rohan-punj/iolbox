@@ -94,6 +94,11 @@ const BUILTIN: Record<string, { label: string; inner: string; viewBox?: string }
     inner:
       '<circle cx="10" cy="12" r="7"/><path d="M3 12h14M10 5c2 2 2 12 0 14M10 5c-2 2-2 12 0 14"/><path d="M17 6h4v4M21 6l-5 5"/>',
   },
+  tool: {
+    label: "Learning Tool",
+    inner:
+      '<path d="m14.5 5.5 4-4 4 4-4 4"/><path d="m18.5 9.5-8.8 8.8a2.5 2.5 0 0 1-3.5 0l-.5-.5a2.5 2.5 0 0 1 0-3.5l8.8-8.8"/><path d="m5.5 18.5-3 3M14 3a5 5 0 0 0-6.2 6.2"/>',
+  },
 };
 
 // ---- UI (chrome) glyphs, not device icons ----
@@ -199,6 +204,7 @@ export function uiSvg(name: keyof typeof UI_GLYPHS | string, size = 15): string 
 export function defaultIconFor(kind: string, imageClass?: string): string {
   if (kind === "vpcs") return "pc";
   if (kind === "nat") return "nat";
+  if (kind === "tool") return "tool";
   if (imageClass === "l2") return "switch";
   return "router"; // l3 / unknown
 }

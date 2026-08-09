@@ -12,6 +12,7 @@ import type {
   NodeRuntimeStatus,
   NodeSetImageResult,
   StatusResult,
+  ToolListPacksResult,
 } from "./protocol";
 import type { LabDocument, LibraryImage, NodeState } from "./labTypes";
 import { labFromText } from "./yaml";
@@ -41,6 +42,20 @@ const MOCK_IMAGES: LibraryImage[] = [
     arch: "x86_64",
     sha256: "c3d4e5f6a7b8".padEnd(64, "0"),
     size: 104_857_600,
+  },
+];
+
+const MOCK_TOOL_PACKS: ToolListPacksResult["packs"] = [
+  {
+    id: "secbench",
+    name: "Security Bench",
+    icon: "tool",
+    transport: "unix",
+    groups: ["recon", "spoof", "dhcp", "stp", "vlan", "fhrp"],
+    modules: [
+      { key: "arp_scan", label: "ARP Scan", group: "recon" },
+      { key: "arp_spoof", label: "ARP Spoof / MITM", group: "spoof" },
+    ],
   },
 ];
 
@@ -179,6 +194,11 @@ export class MockTransport implements Transport {
 
       case "image.list": {
         this.ok<ImageListResult>(id, { images: this.images });
+        return;
+      }
+
+      case "tool.listPacks": {
+        this.ok<ToolListPacksResult>(id, { packs: MOCK_TOOL_PACKS });
         return;
       }
 
@@ -678,7 +698,7 @@ export class MockTransport implements Transport {
       const kinds = l.endpoints.map(
         (e) => this.lab?.nodes.find((n) => n.id === e.node)?.kind
       );
-      return kinds.some((k) => k === "vpcs" || k === "nat");
+      return kinds.some((k) => k === "vpcs" || k === "nat" || k === "tool");
     };
     // Network Watcher demo — fixed control-plane mixes so the overlays are
     // demo-able with predictable direction: link 0 shows one-way STP (from

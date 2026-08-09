@@ -7,7 +7,7 @@ import { MockTransport } from "./mockTransport";
 import { selectTransport } from "./transportSelect";
 import { consoleUiStore } from "./consoleUiStore.svelte";
 import { encodePcapng, type CapturedPacket } from "./pcapng";
-import type { StatusResult, SupervisorEvent } from "./protocol";
+import type { StatusResult, SupervisorEvent, ToolPackInfo } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
 export type ProviderStatus = "unknown" | "connecting" | "connected" | "error";
@@ -51,6 +51,10 @@ class LabStore {
    *  though they were never actually gone server-side. Drives a "Loading
    *  images…" hint instead of a false empty state; never fake the list. */
   imagesLoading = $state(false);
+  /** Installed learning-tool pack metadata for the palette and tool editor. */
+  toolPacks = $state<ToolPackInfo[]>([]);
+  toolPacksLoading = $state(false);
+  toolPacksError = $state<string | null>(null);
   logs = $state<LogLine[]>([]);
   /** Last user-visible failure (start/stop/load); shown in the top bar until
    *  the next successful action clears it. Never silently swallow errors. */
@@ -238,6 +242,17 @@ class LabStore {
         this.images = images;
       } finally {
         this.imagesLoading = false;
+      }
+      this.toolPacksLoading = true;
+      this.toolPacksError = null;
+      try {
+        const { packs } = await this.client.listPacks();
+        this.toolPacks = packs;
+      } catch (e) {
+        this.toolPacksError = (e as Error).message;
+        this.pushLog("warn", `learning-tool packs unavailable: ${this.toolPacksError}`);
+      } finally {
+        this.toolPacksLoading = false;
       }
       // WS2 — "adopt, don't load": if the supervisor is already running a lab
       // (survived our disconnect — e.g. this is a browser refresh, not a fresh

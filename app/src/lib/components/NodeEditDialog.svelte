@@ -20,6 +20,7 @@
   const nodeState = $derived(labStore.nodeStates[nodeId] ?? "stopped");
   const running = $derived(nodeState === "running" || nodeState === "starting");
   const isIol = $derived(node?.kind === "iol");
+  const isTool = $derived(node?.kind === "tool");
 
   // Local editable copy — committed to the lab node on Save.
   let name = $state("");
@@ -30,6 +31,7 @@
   let serial = $state(1);
   let bootConfig = $state(true);
   let startupConfig = $state("");
+  let packId = $state("");
 
   onMount(() => {
     if (!node) return;
@@ -41,6 +43,7 @@
     serial = node.serial ?? 0;
     bootConfig = node.config?.bootFromStartup !== false;
     startupConfig = node.startupConfig ?? "";
+    packId = typeof node.config?.pack === "string" ? node.config.pack : "";
   });
 
   const iconKey = $derived(
@@ -49,6 +52,14 @@
   const iconMarkup = $derived(iconSvg(iconKey, 21));
   const kindLabel = $derived(
     node?.kind === "vpcs" ? "VPCS" : (image?.class ?? node?.image?.class) === "l2" ? "IOL · L2" : "IOL · L3"
+  );
+
+  const displayedKindLabel = $derived(node?.kind === "tool" ? "LEARNING TOOL" : kindLabel);
+  const toolPackInvalid = $derived(
+    isTool &&
+      (!packId ||
+        (labStore.toolPacks.length > 0 &&
+          !labStore.toolPacks.some((pack) => pack.id === packId)))
   );
 
   // Highest adapter group index consumed by an existing link, per family.
@@ -101,9 +112,9 @@
   }
 
   async function save() {
-    if (!node || hasWarn) return;
+    if (!node || hasWarn || toolPackInvalid) return;
     node.name = name.trim() || node.name;
-    node.icon = icon;
+    if (!isTool) node.icon = icon;
     if (isIol) {
       node.ram = Math.max(0, ram);
       node.ethernet = Math.max(0, ethernet);
@@ -114,6 +125,8 @@
       if (imageId && imageId !== node.image?.id) {
         await labStore.setNodeImage(nodeId, imageId);
       }
+    } else if (isTool) {
+      node.config = { ...(node.config ?? {}), pack: packId };
     }
     onClose();
   }
@@ -125,7 +138,7 @@
   <div class="dialog" bind:this={el} role="dialog" aria-label="Edit node" aria-modal="true">
     {#if node}
       <h3>Edit {node.name}</h3>
-      <div class="dsub">{kindLabel}</div>
+      <div class="dsub">{displayedKindLabel}</div>
 
       <div class="dgrid">
         <div class="field">
@@ -133,13 +146,15 @@
           <input class="mono" bind:value={name} />
         </div>
 
-        <div class="field">
+        {#if !isTool}
+          <div class="field">
           <span class="label">Icon</span>
           <div class="icon-inline">
             <div class="prev">{@html iconMarkup}</div>
             <button class="btn btn-ghost" onclick={openIconPicker}>Change icon…</button>
           </div>
-        </div>
+          </div>
+        {/if}
 
         {#if isIol}
           <div class="field">
@@ -199,6 +214,25 @@
               bind:value={startupConfig}
             ></textarea>
           </div>
+        {:else if isTool}
+          <div class="field">
+            <span class="label">Pack</span>
+            <select class="mono" bind:value={packId}>
+              {#if packId && !labStore.toolPacks.some((pack) => pack.id === packId)}
+                <option value={packId}>Unavailable · {packId}</option>
+              {/if}
+              {#each labStore.toolPacks as pack (pack.id)}
+                <option value={pack.id}>{pack.name}</option>
+              {/each}
+            </select>
+            {#if labStore.toolPacksLoading}
+              <span class="hint">Loading installed packs…</span>
+            {:else if labStore.toolPacksError}
+              <span class="warn">Could not load installed packs: {labStore.toolPacksError}</span>
+            {:else if toolPackInvalid}
+              <span class="warn">Choose an installed pack before saving.</span>
+            {/if}
+          </div>
         {:else}
           <div class="vpcs-hint">VPCS nodes have a single eth0 interface and take canned commands.</div>
         {/if}
@@ -210,7 +244,7 @@
 
       <div class="acts">
         <button class="btn btn-ghost" onclick={onClose}>Cancel</button>
-        <button class="btn btn-primary" onclick={save} disabled={hasWarn}>Save</button>
+        <button class="btn btn-primary" onclick={save} disabled={hasWarn || toolPackInvalid}>Save</button>
       </div>
     {/if}
   </div>

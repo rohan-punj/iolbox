@@ -64,6 +64,8 @@
         return "var(--node-vpcs)";
       case "nat":
         return "var(--accent)";
+      case "tool":
+        return "var(--accent)";
       default:
         return "var(--node-iol-l3)";
     }

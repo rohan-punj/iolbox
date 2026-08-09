@@ -135,6 +135,28 @@ export interface ImageRegisterResult {
   sha256: string;
 }
 
+/** Wire-safe metadata returned by tool.listPacks. Keep these fields aligned
+ * with supervisor/internal/protocol/verbs.go; module fields and mitigations
+ * intentionally stay inside the proxied pack GUI for this frontend slice. */
+export interface ToolListPacksResult {
+  packs: ToolPackInfo[];
+}
+
+export interface ToolPackInfo {
+  id: string;
+  name: string;
+  icon: string;
+  transport: string;
+  groups: string[];
+  modules: ToolModuleInfo[];
+}
+
+export interface ToolModuleInfo {
+  key: string;
+  label: string;
+  group: string;
+}
+
 export interface LabLoadResult {
   labId: string;
   nodes: { id: number; consolePort: number }[];
