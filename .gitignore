@@ -75,3 +75,13 @@ Thumbs.db
 # Session scratch dirs (agent prompt batches, throwaway build caches)
 /.tmp-p2-prompts/
 /.tmp-secbench-gocache/
+
+# Historical/point-in-time docs — kept on disk for local reference, not
+# committed. Live reference docs (INSTALL, architecture, protocol, build,
+# providers, roadmap, design-brief, p0-spike, v0.3.0-console-unification,
+# v0.2.1-enhancements — the last cited by line number from the doc above)
+# stay tracked.
+/docs/RELEASE-NOTES-v0.4.1.md
+/docs/bridge-fabric-migration.md
+/docs/bridge-fabric-retirement-map.md
+/docs/slowproto-lacp-lldp.md
