@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // DefaultRouteIface returns the interface name holding the VM's IPv4 default
@@ -48,7 +50,15 @@ func Detect(sudoOK bool) Capabilities {
 // SudoOK probes whether `sudo -n true` succeeds (passwordless sudo available),
 // the precondition for every privileged extnet command.
 func SudoOK() bool {
-	return exec.Command("sudo", "-n", "true").Run() == nil
+	cmd := exec.Command("sudo", "-n", "true")
+	// Start and register atomically so the subreaper cannot reap this direct
+	// child—`sudo -n true` returns almost instantly—before Wait owns it.
+	if err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err != nil {
+		return false
+	}
+	err := cmd.Wait()
+	tool.Registry.Remove(cmd.Process.Pid)
+	return err == nil
 }
 
 func fileExists(path string) bool {

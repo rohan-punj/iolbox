@@ -1,6 +1,8 @@
 <script lang="ts">
   import { labStore } from "./lib/labStore.svelte";
   import { consoleUiStore } from "./lib/consoleUiStore.svelte";
+  import { paletteUiStore } from "./lib/paletteUiStore.svelte";
+  import { uiSvg } from "./lib/icons.svelte";
   import TopBar from "./lib/components/TopBar.svelte";
   import Palette from "./lib/components/Palette.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
@@ -39,7 +41,7 @@
   // the pane and handing its width back to the canvas.
   const showTasks = $derived(labStore.showTasks);
   const showInspector = $derived(
-    !showTasks && (labStore.selectedNodeId !== null || labStore.selectedLinkId !== null)
+    !showTasks && (labStore.inspectorNodeId !== null || labStore.selectedLinkId !== null)
   );
 </script>
 
@@ -49,16 +51,27 @@
   <TopBar />
 
   <div class="body">
-    <SplitPane
-      direction="horizontal"
-      edge="start"
-      bind:size={paletteWidth}
-      min={180}
-      max={360}
-      storageKey="iolbox.split.palette"
-    >
-      <Palette />
-    </SplitPane>
+    {#if paletteUiStore.collapsed}
+      <button
+        class="palette-rail"
+        title="Show palette"
+        aria-label="Show palette"
+        onclick={() => paletteUiStore.toggle()}
+      >
+        {@html uiSvg("chevronRight", 13)}
+      </button>
+    {:else}
+      <SplitPane
+        direction="horizontal"
+        edge="start"
+        bind:size={paletteWidth}
+        min={180}
+        max={360}
+        storageKey="iolbox.split.palette"
+      >
+        <Palette />
+      </SplitPane>
+    {/if}
 
     <div class="center-col">
       <div class="canvas-area">
@@ -151,5 +164,22 @@
     background: var(--bg-1);
     border-left: 1px solid var(--border);
     overflow: hidden;
+  }
+  /* Collapsed left palette — a slim rail with just an expand affordance,
+     replacing the full SplitPane so the canvas reclaims that width. */
+  .palette-rail {
+    flex-shrink: 0;
+    width: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-1);
+    border-right: 1px solid var(--border);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .palette-rail:hover {
+    color: var(--text);
+    background: var(--panel);
   }
 </style>

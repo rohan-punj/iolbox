@@ -1,0 +1,2 @@
+{{define "content"}}{{template "logs" .}}{{end}}
+{{define "logs"}}<table><thead><tr><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>Remote</th></tr></thead><tbody>{{range .}}<tr><td>{{.At.Format "15:04:05"}}</td><td>{{.Method}}</td><td>{{.Path}}</td><td>{{.Status}}</td><td>{{.RemoteIP}}</td></tr>{{else}}<tr><td colspan="5">No requests yet.</td></tr>{{end}}</tbody></table>{{end}}

@@ -1,0 +1,414 @@
+{
+  "manifestVersion": 1,
+  "id": "secbench",
+  "name": "Security Bench",
+  "icon": "firewall",
+  "interpreter": "none",
+  "gui": {
+    "bin": "secbench-gui",
+    "transport": "unix",
+    "console": "http",
+    "health": "/healthz",
+    "proxyRoutes": [
+      {
+        "prefix": "/",
+        "allowWS": true
+      }
+    ]
+  },
+  "caps": [
+    "NET_RAW"
+  ],
+  "options": [],
+  "groups": [
+    "recon",
+    "spoof",
+    "dhcp",
+    "stp",
+    "vlan",
+    "fhrp"
+  ],
+  "modules": [
+    {
+      "key": "arp_scan",
+      "label": "ARP Scan",
+      "group": "recon",
+      "script": "bin/arp_scan",
+      "fields": [
+        {
+          "name": "subnet",
+          "type": "text",
+          "label": "Subnet",
+          "required": false
+        }
+      ],
+      "mitigation": null
+    },
+    {
+      "key": "dhcp_discover",
+      "label": "DHCP Discover",
+      "group": "recon",
+      "script": "bin/dhcp_discover",
+      "fields": [
+        {
+          "name": "duration",
+          "type": "number",
+          "label": "Listen seconds",
+          "required": false
+        }
+      ],
+      "mitigation": null
+    },
+    {
+      "key": "sniff",
+      "label": "Passive Sniff",
+      "group": "recon",
+      "script": "bin/sniff",
+      "fields": [
+        {
+          "name": "duration",
+          "type": "number",
+          "label": "Duration (s)",
+          "required": false
+        }
+      ],
+      "mitigation": null
+    },
+    {
+      "key": "arp_spoof",
+      "label": "ARP Spoof / MITM",
+      "group": "spoof",
+      "script": "bin/arp_spoof",
+      "fields": [
+        {
+          "name": "target_ip",
+          "type": "ipv4",
+          "label": "Target IP",
+          "required": false
+        },
+        {
+          "name": "gateway_ip",
+          "type": "ipv4",
+          "label": "Gateway IP",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "Dynamic ARP Inspection + DHCP snooping"
+      }
+    },
+    {
+      "key": "mac_spoof",
+      "label": "MAC Spoof",
+      "group": "spoof",
+      "script": "bin/mac_spoof",
+      "fields": [
+        {
+          "name": "spoof_mac",
+          "type": "text",
+          "label": "Source MAC to forge",
+          "required": false
+        },
+        {
+          "name": "target_ip",
+          "type": "ipv4",
+          "label": "Destination IP",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "Port security (sticky, violation restrict)"
+      }
+    },
+    {
+      "key": "mac_flood",
+      "label": "CAM / MAC Flood",
+      "group": "spoof",
+      "script": "bin/mac_flood",
+      "fields": [],
+      "mitigation": {
+        "text": "Port security (max MAC addresses)"
+      }
+    },
+    {
+      "key": "dhcp_rogue",
+      "label": "Rogue DHCP Server",
+      "group": "dhcp",
+      "script": "bin/dhcp_rogue",
+      "fields": [
+        {
+          "name": "pool_start",
+          "type": "ipv4",
+          "label": "Pool start",
+          "required": false
+        },
+        {
+          "name": "pool_end",
+          "type": "ipv4",
+          "label": "Pool end",
+          "required": false
+        },
+        {
+          "name": "gateway",
+          "type": "ipv4",
+          "label": "Gateway to hand out",
+          "required": false
+        },
+        {
+          "name": "dns",
+          "type": "ipv4",
+          "label": "DNS to hand out",
+          "required": false
+        },
+        {
+          "name": "lease_time",
+          "type": "number",
+          "label": "Lease (s)",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "DHCP snooping + trusted uplink"
+      }
+    },
+    {
+      "key": "dhcp_starve",
+      "label": "DHCP Starvation",
+      "group": "dhcp",
+      "script": "bin/dhcp_starve",
+      "fields": [],
+      "mitigation": {
+        "text": "DHCP snooping rate-limit + port security"
+      }
+    },
+    {
+      "key": "stp_root",
+      "label": "STP Root Hijack",
+      "group": "stp",
+      "script": "bin/stp_root",
+      "fields": [
+        {
+          "name": "priority",
+          "type": "number",
+          "label": "Bridge priority",
+          "required": false
+        },
+        {
+          "name": "vlan",
+          "type": "number",
+          "label": "VLAN (0=none/PVST off)",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "BPDU Guard (edge ports) + Root Guard (uplinks)"
+      }
+    },
+    {
+      "key": "cdp_flood",
+      "label": "CDP Flood / Spoof",
+      "group": "stp",
+      "script": "bin/cdp_flood",
+      "fields": [
+        {
+          "name": "device_id",
+          "type": "text",
+          "label": "Forged device-id",
+          "required": false
+        },
+        {
+          "name": "platform",
+          "type": "text",
+          "label": "Forged platform",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "Disable CDP"
+      }
+    },
+    {
+      "key": "lldp_flood",
+      "label": "LLDP Flood / Spoof",
+      "group": "stp",
+      "script": "bin/lldp_flood",
+      "fields": [
+        {
+          "name": "chassis_id",
+          "type": "text",
+          "label": "Forged chassis-id",
+          "required": false
+        },
+        {
+          "name": "system_name",
+          "type": "text",
+          "label": "Forged system name",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "Disable LLDP"
+      }
+    },
+    {
+      "key": "dtp_hop",
+      "label": "DTP Trunk Hop",
+      "group": "vlan",
+      "script": "bin/dtp_hop",
+      "fields": [],
+      "mitigation": {
+        "text": "switchport nonegotiate (static access)"
+      }
+    },
+    {
+      "key": "vlan_hop",
+      "label": "802.1Q Double-Tag Hop",
+      "group": "vlan",
+      "script": "bin/vlan_hop",
+      "fields": [
+        {
+          "name": "target_vlan",
+          "type": "number",
+          "label": "Inner (target) VLAN",
+          "required": false
+        },
+        {
+          "name": "native_vlan",
+          "type": "number",
+          "label": "Outer (native) VLAN",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "Change/park the native VLAN, drop it from the trunk"
+      }
+    },
+    {
+      "key": "hsrp_hijack",
+      "label": "HSRP Hijack",
+      "group": "fhrp",
+      "script": "bin/hsrp_hijack",
+      "fields": [
+        {
+          "name": "group",
+          "type": "number",
+          "label": "HSRP group",
+          "required": false
+        },
+        {
+          "name": "virtual_ip",
+          "type": "ipv4",
+          "label": "Virtual IP",
+          "required": false
+        },
+        {
+          "name": "priority",
+          "type": "number",
+          "label": "Forged priority",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "HSRP MD5 authentication"
+      }
+    },
+    {
+      "key": "vrrp_hijack",
+      "label": "VRRP Hijack",
+      "group": "fhrp",
+      "script": "bin/vrrp_hijack",
+      "fields": [
+        {
+          "name": "vrid",
+          "type": "number",
+          "label": "VRID",
+          "required": false
+        },
+        {
+          "name": "virtual_ip",
+          "type": "ipv4",
+          "label": "Virtual IP",
+          "required": false
+        },
+        {
+          "name": "priority",
+          "type": "number",
+          "label": "Forged priority",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "VRRP authentication"
+      }
+    },
+    {
+      "key": "ospf_rogue",
+      "label": "OSPF Rogue Adjacency",
+      "group": "fhrp",
+      "script": "bin/ospf_rogue",
+      "fields": [
+        {
+          "name": "area",
+          "type": "number",
+          "label": "Area",
+          "required": false
+        },
+        {
+          "name": "router_id",
+          "type": "ipv4",
+          "label": "Forged router-id",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "OSPF MD5 authentication + passive-interface default"
+      }
+    },
+    {
+      "key": "eigrp_rogue",
+      "label": "EIGRP Rogue Adjacency",
+      "group": "fhrp",
+      "script": "bin/eigrp_rogue",
+      "fields": [
+        {
+          "name": "asn",
+          "type": "number",
+          "label": "AS number",
+          "required": false
+        },
+        {
+          "name": "router_id",
+          "type": "ipv4",
+          "label": "Forged router-id",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "EIGRP MD5 authentication (key chain)"
+      }
+    },
+    {
+      "key": "ra_spoof",
+      "label": "IPv6 RA / DHCPv6 Spoof",
+      "group": "fhrp",
+      "script": "bin/ra_spoof",
+      "fields": [
+        {
+          "name": "prefix",
+          "type": "text",
+          "label": "Advertised prefix",
+          "required": false
+        },
+        {
+          "name": "dns_server",
+          "type": "text",
+          "label": "DNS to advertise (RDNSS)",
+          "required": false
+        }
+      ],
+      "mitigation": {
+        "text": "IPv6 RA Guard + DHCPv6 Guard"
+      }
+    }
+  ]
+}

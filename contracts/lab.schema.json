@@ -56,9 +56,9 @@
           "minimum": 0
         },
         "kind": {
-          "description": "iol = Cisco IOL (L2 or L3). vpcs = virtual PC. nat = NAT gateway to the outside world (supervisor-internal tap + DHCP + MASQUERADE). nat has exactly one interface, 'eth0', and may be referenced by at most one link endpoint.",
+          "description": "iol = Cisco IOL (L2 or L3). vpcs = virtual PC. nat = NAT gateway to the outside world (supervisor-internal tap + DHCP + MASQUERADE). nat has exactly one interface, 'eth0', and may be referenced by at most one link endpoint. tool = bundled learning-tool node (e.g. secbench) run as a supervised process tree in a netns + cgroup cage; it has exactly one interface, 'eth1', and may be referenced by at most one link endpoint. Tool-specific data, including the pack id, rides the existing config object; there are no additional top-level node fields.",
           "type": "string",
-          "enum": ["iol", "vpcs", "nat"]
+          "enum": ["iol", "vpcs", "nat", "tool"]
         },
         "name": { "type": "string", "minLength": 1 },
         "x": { "type": "number" },
@@ -159,7 +159,7 @@
       "properties": {
         "node": { "description": "node.id", "type": "integer", "minimum": 0 },
         "interface": {
-          "description": "IOL: 'e0/0','s1/1' (adapter/port). VPCS/nat: 'eth0'.",
+          "description": "IOL: 'e0/0','s1/1' (adapter/port). VPCS/nat: 'eth0'. tool: 'eth1' (its only connectable interface).",
           "type": "string",
           "minLength": 1
         }

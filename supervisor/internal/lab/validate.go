@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
@@ -12,8 +13,9 @@ import (
 //   - version must equal 1
 //   - id and name are non-empty
 //   - node ids are unique and >= 0
-//   - node kind is iol or vpcs
+//   - node kind is iol, vpcs, nat, or tool
 //   - iol nodes carry an image reference with a non-empty id
+//   - tool nodes carry a non-empty string config.pack
 //   - ethernet/serial group counts are within 0..16
 //   - ram, when set, is >= 32
 //   - link ids are unique and >= 0
@@ -61,8 +63,20 @@ func (l *Lab) Validate() error {
 		case KindNAT:
 			// nat is a supervisor-internal endpoint (no image); it has exactly one
 			// connectable interface, "eth0", enforced below.
+		case KindTool:
+			pack, ok := n.Config["pack"]
+			if !ok {
+				return fmt.Errorf("tool: node %d: config.pack is required", n.ID)
+			}
+			var packID string
+			if err := json.Unmarshal(pack, &packID); err != nil || packID == "" {
+				return fmt.Errorf("tool: node %d: config.pack must be a non-empty string", n.ID)
+			}
+			// Per D11, the registry-aware known-pack check runs at the server's
+			// lab.load boundary, preserving load-time timing without making this
+			// pure document package import internal/tool.
 		default:
-			return fmt.Errorf("node %d: kind must be iol, vpcs or nat, got %q", n.ID, n.Kind)
+			return fmt.Errorf("node %d: kind must be iol, vpcs, nat or tool, got %q", n.ID, n.Kind)
 		}
 		if n.Ethernet != nil && (*n.Ethernet < 0 || *n.Ethernet > 16) {
 			return fmt.Errorf("node %d: ethernet groups must be 0..16, got %d", n.ID, *n.Ethernet)
@@ -76,7 +90,7 @@ func (l *Lab) Validate() error {
 		nodeByID[n.ID] = n
 	}
 
-	// extEndpoints counts how many link endpoints reference each nat/mgmt node,
+	// extEndpoints counts how many link endpoints reference each nat/tool node,
 	// so we can enforce their single-interface constraint (at most one link).
 	extEndpoints := make(map[int]int)
 
@@ -120,6 +134,15 @@ func (l *Lab) Validate() error {
 				extEndpoints[ep.Node]++
 				if extEndpoints[ep.Node] > 1 {
 					return fmt.Errorf("%s node %d may be referenced by at most one link endpoint", n.Kind, ep.Node)
+				}
+			case KindTool:
+				// Exactly one connectable interface, "eth1".
+				if ep.Interface != "eth1" {
+					return fmt.Errorf("tool: link %d: node %d has only interface eth1, got %q", link.ID, ep.Node, ep.Interface)
+				}
+				extEndpoints[ep.Node]++
+				if extEndpoints[ep.Node] > 1 {
+					return fmt.Errorf("tool: node %d may be referenced by at most one link endpoint", ep.Node)
 				}
 			}
 		}

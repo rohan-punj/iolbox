@@ -1,0 +1,9 @@
+{{define "content"}}
+<h1>AAA services</h1>
+{{if not .Iface}}<article class="warning">eth1 is not wired yet. Set an address in the Inspector before testing from the lab.</article>{{end}}
+{{if .RadiusErr}}<article class="warning">RADIUS could not bind UDP 1812: {{.RadiusErr}}</article>{{end}}
+{{if .TacacsErr}}<article class="warning">TACACS+ could not bind TCP 49: {{.TacacsErr}}. This appliance may be missing the netns unprivileged-port setting (see p4 plan §2); redeploy the supervisor.</article>{{end}}
+<div class="grid"><article><strong>Primary protocol</strong><br>{{.Config.Protocol}}</article><article><strong>RADIUS</strong><br>UDP 0.0.0.0:1812</article><article><strong>TACACS+</strong><br>TCP 0.0.0.0:49</article><article><strong>Users</strong><br>{{len .Config.Users}}</article></div>
+<h2>Recent authentication attempts</h2><div id="auth-log" hx-get="/frag/log" hx-trigger="every 3s" hx-swap="innerHTML">{{template "attempts" .Attempts}}</div>
+{{end}}
+{{define "attempts"}}<table><thead><tr><th>Time</th><th>Protocol</th><th>User</th><th>Remote</th><th>Result</th><th>Message</th></tr></thead><tbody>{{range .}}<tr><td>{{.At.Format "15:04:05"}}</td><td>{{.Proto}}</td><td>{{.User}}</td><td>{{.Remote}}</td><td class="{{.Result}}">{{.Result}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="6">No attempts yet.</td></tr>{{end}}</tbody></table>{{end}}

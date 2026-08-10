@@ -115,6 +115,10 @@
     return labStore.lab.nodes.find((n) => n.id === id)?.name ?? `#${id}`;
   }
 
+  function isToolNode(id: number): boolean {
+    return labStore.lab.nodes.find((n) => n.id === id)?.kind === "tool";
+  }
+
   /** host:port for a node's telnet console, or null if the port isn't known yet. */
   function consoleAddr(nodeId: number): { host: string; port: number } | null {
     const port = labStore.consolePorts[nodeId];
@@ -157,7 +161,7 @@
     {#if !collapsed}
       <div class="tabs" role="tablist">
         {#each labStore.openConsoleTabs as nodeId (nodeId)}
-          <div class="tab" class:active={labStore.activeConsoleTab === nodeId}>
+          <div class="tab" class:tab-tool={isToolNode(nodeId)} class:active={labStore.activeConsoleTab === nodeId}>
             <button
               class="tab-label"
               role="tab"
@@ -259,7 +263,16 @@
     <div class="term-area">
       {#each labStore.openConsoleTabs as nodeId (nodeId)}
         <div class="term-slot" class:hidden={labStore.activeConsoleTab !== nodeId}>
-          <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
+          {#if isToolNode(nodeId)}
+            <iframe
+              class="tool-frame"
+              src={`/tool/${nodeId}/`}
+              sandbox="allow-scripts allow-forms allow-same-origin"
+              title={`${nodeName(nodeId)} proxied GUI`}
+            ></iframe>
+          {:else}
+            <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
+          {/if}
         </div>
       {/each}
       {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
@@ -432,6 +445,9 @@
   .tab.active .tab-label {
     color: var(--text-primary);
   }
+  .tab-tool.active {
+    border-bottom-color: var(--accent);
+  }
   .tab-ext,
   .tab-close {
     all: unset;
@@ -512,6 +528,13 @@
   .term-slot {
     position: absolute;
     inset: 0;
+  }
+  .tool-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: white;
   }
   .term-slot.hidden {
     visibility: hidden;

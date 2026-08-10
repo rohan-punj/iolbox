@@ -1,0 +1,73 @@
+{{define "page-dashboard"}}
+{{template "head" .}}
+{{template "nav" .}}
+  <hgroup>
+    <h3>Dashboard</h3>
+    <p class="muted">Security Bench — L2/L3 attack modules each pair with the config that
+    defeats them, and NGFW test modules fire traffic at a next-gen firewall to trip its security
+    profiles. Everything is hard-locked to <code>eth1</code> (the lab NIC) and disabled when it is
+    absent. Auto-refreshes every 3s.</p>
+  </hgroup>
+    <div id="dash" hx-get="/frag/dash" hx-trigger="every 3s" hx-swap="innerHTML">
+    {{template "frag-dash" .}}
+  </div>
+{{template "foot" .}}
+{{end}}
+
+{{define "frag-dash"}}
+{{template "lock-notice" .}}
+<div class="grid">
+  <article>
+    <header><strong>Lab NIC</strong></header>
+    <p class="statnum">{{if .HasLabIface}}<span class="ok">eth1 up</span>{{else}}<span class="bad">missing</span>{{end}}</p>
+    <p><small class="muted">attacks bind ONLY here, never eth0</small></p>
+  </article>
+  <article>
+    <header><strong>Running modules</strong></header>
+    <p class="statnum">{{.RunningCount}}</p>
+    <p><small class="muted">of {{len .Modules}} total</small></p>
+  </article>
+  <article>
+    <header><strong>Stop everything</strong></header>
+    <p><small class="muted">kill every running attack/recon helper immediately</small></p>
+    <button class="contrast" hx-post="/stopall" hx-target="#dash" hx-swap="innerHTML">Stop all attacks</button>
+  </article>
+</div>
+
+<article>
+  <header><strong>Interfaces</strong></header>
+  <table class="tight">
+    <thead><tr><th>Interface</th><th>IPv4 address</th><th>Role</th></tr></thead>
+    <tbody>
+    {{range .IFaces}}
+      <tr>
+        <td><code>{{.Name}}</code>{{if not .Up}} <span class="muted">(down)</span>{{end}}</td>
+        <td>{{if .IP}}<code>{{.IP}}</code>{{else}}<span class="muted">— no IP yet</span>{{end}}</td>
+        <td>{{if eq .Name "eth1"}}<span class="pill up" style="margin-left:0;">lab (attacks here)</span>
+            {{else if .Lab}}<span class="pill mid" style="margin-left:0;">extra lab NIC (unused by attacks)</span>
+            {{else}}<span class="muted">mgmt (docker0)</span>{{end}}</td>
+      </tr>
+    {{else}}
+      <tr><td colspan="3" class="muted">No interfaces detected yet.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</article>
+
+<article>
+  <header><strong>Module status</strong></header>
+  <table class="tight">
+    <thead><tr><th>Module</th><th>Group</th><th>State</th></tr></thead>
+    <tbody>
+    {{range .Modules}}
+      <tr>
+        <td>{{.Def.Label}}</td>
+        <td class="muted">{{.Def.Group}}</td>
+        <td>{{if .Running}}<span class="pill up">running since {{.StartedAt}}</span>{{else}}<span class="pill down">stopped</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</article>
+{{end}}
+

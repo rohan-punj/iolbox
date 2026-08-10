@@ -16,6 +16,7 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 	"github.com/rohanpunj/iolbox/supervisor/internal/slowtee"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 	"github.com/rohanpunj/iolbox/supervisor/internal/vtap"
 )
 
@@ -221,6 +222,9 @@ func (s *Server) fabricLinkFullyAttached(ll *loadedLab, l *lab.Link) bool {
 	if err != nil || !tapDeviceExists(br) {
 		return false
 	}
+	// For a tool endpoint this is the bridge-side veth in the root namespace;
+	// the kernel puts the bridge master symlink on that end, so this check is
+	// the restart-skip proof of actual bridge attachment.
 	devs := s.fabricLinkTapDevs(ll, l)
 	// fabricLinkTapDevs only returns devs for endpoints that currently HAVE a
 	// tap (it silently skips a not-yet-started NAT/VPCS). A link whose
@@ -314,6 +318,16 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 			if err := mgr.Attach(ctx, br, nr.vtapName); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric vpcs attach %s->%s: %v", nr.vtapName, br, err)
 			}
+		case node != nil && node.Kind == lab.KindTool:
+			// Tool: hand the bridge to its netns endpoint. A tool not yet started
+			// is skipped; startToolNode attaches it when it comes up.
+			nr := ll.get(ep.Node)
+			if nr == nil || nr.tool == nil {
+				continue
+			}
+			if err := nr.tool.AttachBridge(br); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tool %d attach %s: %v", ep.Node, br, err)
+			}
 		default:
 			// IOL: attach its static tap.
 			t, ok := tapForEndpoint(ll.staticTaps, ep)
@@ -393,6 +407,8 @@ func (s *Server) openLinkSlowTee(ll *loadedLab, l *lab.Link) {
 	ll.mu.Unlock()
 	old.Close()
 
+	// Conscious skip: linkIsIOLToIOL excludes tool endpoints, which have no
+	// LACP slow-protocol tee.
 	if !linkIsIOLToIOL(ll, l) {
 		return
 	}
@@ -480,6 +496,10 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 		case node != nil && node.Kind == lab.KindVPCS:
 			if nr := ll.get(ep.Node); nr != nil && nr.vtapName != "" {
 				_ = mgr.Detach(ctx, nr.vtapName)
+			}
+		case node != nil && node.Kind == lab.KindTool:
+			if nr := ll.get(ep.Node); nr != nil && nr.tool != nil {
+				nr.tool.DetachBridge()
 			}
 		default:
 			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
@@ -594,7 +614,8 @@ func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat {
 }
 
 // fabricLinkTapDevs returns the tap device names of a fabric link's endpoints:
-// an IOL interface's static tap, a VPCS node's shim tap, or a NAT node's tap.
+// an IOL interface's static tap, a VPCS node's shim tap, a NAT node's tap, or
+// a running tool's root-side veth.
 func (s *Server) fabricLinkTapDevs(ll *loadedLab, l *lab.Link) []string {
 	var devs []string
 	for _, ep := range l.Endpoints {
@@ -606,6 +627,10 @@ func (s *Server) fabricLinkTapDevs(ll *loadedLab, l *lab.Link) []string {
 			}
 		case node != nil && node.Kind == lab.KindNAT:
 			devs = append(devs, "iolnat"+strconv.Itoa(ep.Node)) // matches extnet tapName
+		case node != nil && node.Kind == lab.KindTool:
+			if nr := ll.get(ep.Node); nr != nil && nr.tool != nil {
+				devs = append(devs, tool.HostVethName(ep.Node))
+			}
 		default:
 			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
 				devs = append(devs, t.tapName)
@@ -701,6 +726,10 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 		}
 	}
 	for _, nr := range nodes {
+		if nr.tool != nil {
+			_ = nr.tool.Stop()
+			nr.tool = nil
+		}
 		if nr.vtap != nil || nr.vtapName != "" {
 			s.teardownVPCS(nr)
 		}

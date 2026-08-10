@@ -1,21 +1,28 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
   import { consoleUiStore } from "../consoleUiStore.svelte";
-  import { iconSvg } from "../icons.svelte";
+  import { paletteUiStore } from "../paletteUiStore.svelte";
+  import { iconSvg, uiSvg } from "../icons.svelte";
   import { annoTool, ANNO_COLORS, type AnnoTool } from "../annoTool.svelte";
   import { watcherStore } from "../watcherStore.svelte";
   import { painterStore } from "../painterStore.svelte";
+  import type { NodeKind } from "../labTypes";
 
-  function onDragStart(e: DragEvent, kind: "iol" | "vpcs" | "nat", imageId?: string) {
+  function onDragStart(e: DragEvent, kind: NodeKind, imageId?: string, packId?: string) {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(
       "application/iolbox-node",
-      JSON.stringify({ kind, imageId })
+      JSON.stringify({ kind, imageId, packId })
     );
   }
 
   const iolImages = $derived(labStore.images);
+  const toolPacks = $derived(labStore.toolPacks);
+  const defaultToolPack = $derived(
+    ["webserver", "aaa", "httpclient"].find((id) => toolPacks.some((p) => p.id === id))
+      ?? toolPacks[0]?.id
+  );
   const running = $derived(labStore.labRunning);
   // Feature-gated builtin nodes (feature 5). Only shown when the supervisor
   // advertised the capability in its hello handshake.
@@ -87,6 +94,14 @@
 </script>
 
 <div class="palette">
+  <button
+    class="collapse-btn"
+    title="Hide palette"
+    aria-label="Hide palette"
+    onclick={() => paletteUiStore.toggle()}
+  >
+    {@html uiSvg("chevronLeft", 13)}
+  </button>
   <div class="section-title">Session</div>
   <div class="session-actions">
     <button class="btn btn-primary session-primary" onclick={startAll} disabled={running}>
@@ -210,6 +225,27 @@
     </div>
   </div>
 
+  {#if toolPacks.length > 0}
+    <div
+      class="palette-item"
+      draggable="true"
+      role="button"
+      tabindex="0"
+      ondragstart={(e) => onDragStart(e, "tool", undefined, defaultToolPack)}
+      title="Network tools — pick RADIUS/AAA, web server, HTTP client, or syslog collector after dropping"
+    >
+      <span class="swatch tool" aria-hidden="true">{@html iconSvg("tool", 28)}</span>
+      <div class="item-text">
+        <div class="item-name">Network tools</div>
+        <div class="item-sub">Learning tool</div>
+      </div>
+    </div>
+  {:else if labStore.toolPacksLoading}
+    <div class="empty-hint">Loading learning tools…</div>
+  {:else if labStore.toolPacksError}
+    <div class="empty-hint error-hint">Learning tools unavailable</div>
+  {/if}
+
   {#if hasNat}
     <div
       class="palette-item"
@@ -254,7 +290,7 @@
         {@html iconSvg(img.class === "l2" ? "switch" : "router", 28)}
       </span>
       <div class="item-text">
-        <div class="item-name">{img.filename}</div>
+        <div class="item-name">{img.class === "l2" ? "Switch" : "Router"}</div>
         <div class="item-sub">
           <span class="class-badge" class:l2={img.class === "l2"}>{img.class.toUpperCase()}</span>
           <span class="arch">{img.arch}</span>
@@ -456,6 +492,20 @@
     text-align: right;
     padding: 0 2px;
   }
+  .collapse-btn {
+    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .collapse-btn:hover {
+    color: var(--ink-1);
+  }
   .section-title {
     font-size: var(--fs-xs);
     font-weight: 600;
@@ -613,6 +663,12 @@
   .swatch.nat {
     color: var(--accent);
     position: relative;
+  }
+  .swatch.tool {
+    color: var(--accent);
+  }
+  .error-hint {
+    color: var(--danger);
   }
   /* WS6 — slirp egress: greyed NAT glyph + a warn chip on the palette entry.
      Inform-only; the row stays draggable. Filter the svg only so the warn chip

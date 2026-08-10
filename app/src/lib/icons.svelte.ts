@@ -94,6 +94,11 @@ const BUILTIN: Record<string, { label: string; inner: string; viewBox?: string }
     inner:
       '<circle cx="10" cy="12" r="7"/><path d="M3 12h14M10 5c2 2 2 12 0 14M10 5c-2 2-2 12 0 14"/><path d="M17 6h4v4M21 6l-5 5"/>',
   },
+  tool: {
+    label: "Learning Tool",
+    inner:
+      '<path d="m14.5 5.5 4-4 4 4-4 4"/><path d="m18.5 9.5-8.8 8.8a2.5 2.5 0 0 1-3.5 0l-.5-.5a2.5 2.5 0 0 1 0-3.5l8.8-8.8"/><path d="m5.5 18.5-3 3M14 3a5 5 0 0 0-6.2 6.2"/>',
+  },
 };
 
 // ---- UI (chrome) glyphs, not device icons ----
@@ -120,6 +125,14 @@ export const UI_GLYPHS: Record<string, string> = {
   // Floppy-disk "save config" glyph.
   savecfg:
     '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 21v-6h8v6"/>',
+  // Four detached corner brackets pointing outward — enter fullscreen.
+  fullscreen:
+    '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/>',
+  // Corner brackets pointing inward — exit fullscreen.
+  fullscreenExit:
+    '<path d="M9 3v3a2 2 0 0 1-2 2H4M15 3v3a2 2 0 0 0 2 2h3M9 21v-3a2 2 0 0 0-2-2H4M15 21v-3a2 2 0 0 1 2-2h3"/>',
+  chevronLeft: '<path d="M15 5 8 12l7 7"/>',
+  chevronRight: '<path d="M9 5l7 7-7 7"/>',
 };
 
 /** Runtime store of user-imported icons, keyed by registry key. */
@@ -199,6 +212,7 @@ export function uiSvg(name: keyof typeof UI_GLYPHS | string, size = 15): string 
 export function defaultIconFor(kind: string, imageClass?: string): string {
   if (kind === "vpcs") return "pc";
   if (kind === "nat") return "nat";
+  if (kind === "tool") return "tool";
   if (imageClass === "l2") return "switch";
   return "router"; // l3 / unknown
 }

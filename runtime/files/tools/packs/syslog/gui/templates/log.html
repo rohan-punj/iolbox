@@ -1,0 +1,2 @@
+{{define "content"}}{{template "entries" .}}{{end}}
+{{define "entries"}}<table><thead><tr><th>Received</th><th>Device time</th><th>Severity</th><th>Source</th><th>Host</th><th>Tag</th><th>Message</th></tr></thead><tbody>{{range .}}<tr><td>{{.Received.Format "15:04:05"}}</td><td>{{.DeviceTime}}</td><td class="{{severityClass .}}">{{severityName .}}</td><td>{{.SourceIP}}</td><td>{{.Hostname}}</td><td>{{.Tag}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="7">No messages yet.</td></tr>{{end}}</tbody></table>{{end}}

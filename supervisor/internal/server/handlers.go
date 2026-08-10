@@ -14,6 +14,7 @@ import (
 	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // decode unmarshals raw args into v, returning a schema_invalid protocol error
@@ -33,10 +34,11 @@ func (s *Server) handleHello(raw json.RawMessage) (any, error) {
 	if err := decode(raw, &args); err != nil {
 		return nil, err
 	}
-	// Base features are always present; nat is advertised ("natgw") only when the
-	// runtime detected support at startup (see extnet.Detect).
+	// Base features are always present; nat and tools are advertised only when
+	// their runtime probes detected support at startup.
 	features := []string{"nvram", "capture", "i386"}
 	features = append(features, s.caps.GateFeatures()...)
+	features = append(features, s.toolCaps.GateFeatures()...)
 	return protocol.HelloResult{
 		Supervisor: s.cfg.Version,
 		Runtime:    s.cfg.Runtime,
@@ -104,6 +106,26 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 		return nil, protocol.Errorf(protocol.CodeSchemaInvalid, "%v", err)
 	}
 
+	// T1.1 requires every tool node to name a known installed pack at load
+	// time. internal/lab deliberately performs only the structural half of
+	// that rule because importing internal/tool there would invert the package
+	// layering; checking only in startToolNode would silently defer an invalid
+	// document's failure until a later lifecycle operation.
+	for _, n := range doc.Nodes {
+		if n.Kind != lab.KindTool {
+			continue
+		}
+		var packID string
+		if err := json.Unmarshal(n.Config["pack"], &packID); err != nil {
+			return nil, protocol.Errorf(protocol.CodeBadRequest,
+				"tool: node %d has invalid pack id: %v", n.ID, err)
+		}
+		if _, ok := s.toolPack(packID); !ok {
+			return nil, protocol.Errorf(protocol.CodeBadRequest,
+				"tool: node %d references unknown pack %q", n.ID, packID)
+		}
+	}
+
 	// ADOPT PATH (WS2): a lab.load for the SAME id, SAME topology, while at
 	// least one node of the currently-loaded lab is actually up, must NOT go
 	// through the teardown-and-reload path below. This is what makes a
@@ -120,8 +142,8 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	}
 
 	ll := newLoadedLab(&doc, s.cfg.RunDir)
-	var nodes []protocol.NodeConsole
-	var warnings []string
+	nodes := []protocol.NodeConsole{}
+	warnings := []string{}
 
 	for i := range doc.Nodes {
 		n := &doc.Nodes[i]
@@ -546,6 +568,15 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 			continue
 		}
 
+		if docNode.Kind == lab.KindTool {
+			started, err := s.startToolNode(ll, docNode, nr)
+			if err != nil {
+				return nil, err
+			}
+			out.Started = append(out.Started, started)
+			continue
+		}
+
 		// VPCS: bring up its udp<->tap shim BEFORE buildSpec, so VPCS is launched
 		// with argv pointing at the shim's ports. Its tap is bridge-attached at
 		// link time (hot-connect).
@@ -649,6 +680,98 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
 }
 
+// startToolNode starts the pack GUI through internal/tool, which owns the
+// ordered preclean, cage, netns/veth, socket/options-file, launch, readiness,
+// and exit-watcher lifecycle. The endpoint turns Options into the 0600,
+// ioltool-owned options.json read through IOLBOX_TOOL_OPTIONS; a tool node
+// cannot start without that file existing, so the handler passes the document
+// payload through and lets tool.Start create {} when it is absent.
+func (s *Server) startToolNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (protocol.StartedNode, error) {
+	if !s.toolCaps.Supports(tool.KindTool) {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeUnsupported,
+			"tool: runtime does not support %s nodes: %v", tool.KindTool, s.toolCaps.Reasons)
+	}
+	if nr.tool != nil {
+		// Already running; report current state without recreating the endpoint.
+		return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
+	}
+	if !nr.machine.To(node.StateStarting) {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed,
+			"node %d: not in a startable state", n.ID)
+	}
+
+	var packID string
+	if err := json.Unmarshal(n.Config["pack"], &packID); err != nil {
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+			"tool: node %d has invalid pack id: %v", n.ID, err)
+	}
+	pack, ok := s.toolPack(packID)
+	if !ok {
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+			"tool: node %d references unknown pack %q", n.ID, packID)
+	}
+
+	var options []byte
+	if raw, exists := n.Config["options"]; exists {
+		if !json.Valid(raw) {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+				"tool: node %d has invalid options JSON", n.ID)
+		}
+		options = append([]byte(nil), raw...)
+	}
+
+	// Optional static IP for GuestIface (eth1) — most packs don't need one
+	// (they operate at L2 or forge their own L3 headers), so an absent/empty
+	// "net.ip" leaves the interface unaddressed exactly as before this field
+	// existed.
+	var netCfg *tool.NetAddrConfig
+	if raw, exists := n.Config["net"]; exists {
+		var addr struct {
+			IP        string `json:"ip"`
+			PrefixLen int    `json:"prefixLen"`
+			Gateway   string `json:"gateway"`
+		}
+		if err := json.Unmarshal(raw, &addr); err != nil {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+				"tool: node %d has invalid net config: %v", n.ID, err)
+		}
+		if addr.IP != "" {
+			if addr.PrefixLen <= 0 || addr.PrefixLen > 32 {
+				addr.PrefixLen = 24
+			}
+			netCfg = &tool.NetAddrConfig{IP: addr.IP, PrefixLen: addr.PrefixLen, Gateway: addr.Gateway}
+		}
+	}
+
+	cfg := tool.Config{
+		NodeID:   n.ID,
+		Pack:     pack,
+		Root:     s.toolRoot,
+		StateDir: s.cfg.StateDir,
+		RunDir:   s.cfg.RunDir,
+		Options:  options,
+		Net:      netCfg,
+	}
+	ep, err := tool.Start(cfg)
+	if err != nil {
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed,
+			"tool: node %d: %v", n.ID, err)
+	}
+	nr.tool = ep
+	nr.machine.To(node.StateRunning)
+	// A tool started after its bridge exists must hot-connect immediately; this
+	// is the same late-start seam used by the extnet endpoint.
+	if err := s.attachFabricForNode(ll, n.ID); err != nil {
+		return protocol.StartedNode{}, err
+	}
+	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
+}
+
 // buildSpec assembles a node.Spec from the lab node + runtime state.
 func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Spec, error) {
 	spec := node.Spec{
@@ -701,6 +824,14 @@ func (s *Server) stopNode(ll *loadedLab, id int) {
 			s.natSubnets.Release(nr.natSubnet)
 			nr.natSubnet = 0
 		}
+		nr.machine.To(node.StateStopped)
+		return
+	}
+	if nr.tool != nil {
+		// handleLabReap (the GUI's "Force clean") already loops stopNode and
+		// teardownFabric, so tool endpoints are covered by that path as well.
+		_ = nr.tool.Stop()
+		nr.tool = nil
 		nr.machine.To(node.StateStopped)
 		return
 	}

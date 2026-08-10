@@ -87,8 +87,8 @@
   <div class="two">
     <div class="col">
       <span class="lab">{nodeA?.name ?? ""} — local</span>
-      {#if nodeA?.kind === "vpcs"}
-        <div class="fixed mono">eth0</div>
+      {#if nodeA?.kind === "vpcs" || nodeA?.kind === "nat" || nodeA?.kind === "tool"}
+        <div class="fixed mono">{nodeA.kind === "tool" ? "eth1" : "eth0"}</div>
       {:else if noFreeA}
         <div class="fixed mono none">no free ports</div>
       {:else}
@@ -102,8 +102,8 @@
     <span class="arrow mono">&harr;</span>
     <div class="col">
       <span class="lab">{nodeB?.name ?? ""} — remote</span>
-      {#if nodeB?.kind === "vpcs"}
-        <div class="fixed mono">eth0</div>
+      {#if nodeB?.kind === "vpcs" || nodeB?.kind === "nat" || nodeB?.kind === "tool"}
+        <div class="fixed mono">{nodeB.kind === "tool" ? "eth1" : "eth0"}</div>
       {:else if noFreeB}
         <div class="fixed mono none">no free ports</div>
       {:else}

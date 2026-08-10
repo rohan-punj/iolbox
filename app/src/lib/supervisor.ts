@@ -14,6 +14,7 @@ import type {
   NodeSetImageResult,
   StatusResult,
   SupervisorEvent,
+  ToolListPacksResult,
 } from "./protocol";
 import type { LabDocument, LabLink, LabNode } from "./labTypes";
 import type { PainterProto, PainterResult, StpVlansResult } from "./painterTypes";
@@ -89,6 +90,10 @@ export class SupervisorClient {
 
   imageList() {
     return this.call<ImageListResult>("image.list");
+  }
+
+  listPacks() {
+    return this.call<ToolListPacksResult>("tool.listPacks");
   }
 
   imageRegister(path: string) {
@@ -196,7 +201,7 @@ export class SupervisorClient {
   async labListDocs(): Promise<LabListDocsResult> {
     const res = await this.call<{ labs: string[] }>("lab.listDocs", {});
     const labs: LabDocument[] = [];
-    for (const text of res.labs) {
+    for (const text of res.labs ?? []) {
       try {
         labs.push(labFromText(text));
       } catch {

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/relay"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // Capture runs tcpdump against a Linux bridge fabric link and re-serves its
@@ -49,7 +50,9 @@ func Start(bridgeName, bind string, port int) (*Capture, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Start(); err != nil {
+	// Start and register atomically: the subreaper must never see this direct
+	// child as an unregistered orphan between fork+exec and registration.
+	if err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err != nil {
 		server.Close()
 		return nil, fmt.Errorf("bcap: start tcpdump on %s: %w", bridgeName, err)
 	}
@@ -117,6 +120,7 @@ func (c *Capture) Close() error {
 		killErr = c.cmd.Process.Kill()
 	}
 	_ = c.cmd.Wait()
+	tool.Registry.Remove(c.cmd.Process.Pid)
 	c.server.Close()
 	return killErr
 }

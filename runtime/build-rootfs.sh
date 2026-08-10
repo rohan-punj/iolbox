@@ -41,6 +41,8 @@ SUITE="bookworm"                              # Debian 12, pinned deliberately (
 MIRROR="${DEBIAN_MIRROR:-https://deb.debian.org/debian}"
 SUPERVISOR_BIN="$SCRIPT_DIR/../supervisor/bin/supervisor-linux-amd64"   # matches PLAN.md repo layout + .gitignore's /supervisor/bin/
 VPCS_BIN="$BUILD_DIR/vpcs/vpcs"               # fetch-vpcs.sh's output path
+TOOLLAUNCH_SOURCE="$SCRIPT_DIR/../tools/iolbox-toollaunch"
+TOOLLAUNCH_BIN="$BUILD_DIR/iolbox-toollaunch"
 INCLUDE_I386=1                                # docs/providers.md requires libc6:i386; opt out with --no-i386
 
 usage() {
@@ -132,7 +134,56 @@ EOF
     exit 1
 fi
 
+if ! command -v go >/dev/null 2>&1; then
+    echo "build-rootfs: Go is required to build the tool launch helpers" >&2
+    exit 1
+fi
+
 mkdir -p "$BUILD_DIR"
+
+# The helper binaries are standalone, dependency-free Linux tools. Build them
+# here so the shipped rootfs gets the same architecture and immutable payload
+# treatment as the supervisor.
+echo "== build-rootfs: building tool launch helpers (linux/amd64) =="
+(
+    cd "$TOOLLAUNCH_SOURCE"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOLLAUNCH_BIN" .
+)
+SECBENCH_GUI_BIN="$BUILD_DIR/secbench-gui"
+(
+    cd "$SCRIPT_DIR/files/tools/packs/secbench/gui"
+    go test ./...
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$SECBENCH_GUI_BIN" .
+)
+echo "== build-rootfs: building secbench attack binaries (linux/amd64) =="
+SECBENCH_ATTACKS_SRC="$SCRIPT_DIR/../tools/secbench-attacks-go"
+SECBENCH_BIN_STAGE="$BUILD_DIR/secbench-bin"
+rm -rf "$SECBENCH_BIN_STAGE"; mkdir -p "$SECBENCH_BIN_STAGE"
+(
+    cd "$SECBENCH_ATTACKS_SRC"
+    go vet ./...
+    go test ./...
+    for d in cmd/*/; do
+        key="$(basename "$d")"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -o "$SECBENCH_BIN_STAGE/$key" "./$d"
+    done
+)
+# P3 network-tool packs (aaa, webserver, httpclient): each ships a single
+# static Go binary that is both the pack's AF_UNIX GUI and its lab-facing
+# service (RADIUS listener / HTTP server / outbound HTTP client) — no
+# separate attack-style binaries, unlike secbench.
+# The syslog receiver follows the same standalone pack layout.
+for pack in aaa webserver httpclient syslog; do
+    echo "== build-rootfs: building $pack pack GUI (linux/amd64) =="
+    (
+        cd "$SCRIPT_DIR/files/tools/packs/$pack/gui"
+        go vet ./...
+        go test ./...
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -o "$BUILD_DIR/$pack-gui" .
+    )
+done
 if [ -d "$ROOTFS_DIR" ]; then
     echo "build-rootfs: removing previous rootfs at $ROOTFS_DIR"
     rm -rf "$ROOTFS_DIR"
@@ -175,6 +226,8 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 #             GUI capture tab; without it captures come up EMPTY (the always-on
 #             watcher uses in-process AF_PACKET so it still works — which is why
 #             only the capture tab, not the watcher, was affected).
+#   util-linux  setpriv (the cap/uid transition requires >= 2.33)
+#   libcap2-bin capsh (capability-state diagnostics and the P0 gate)
 #   coreutils' hostid is used by -gen-iourc (in minbase already)
 # ca-certificates is omitted on purpose: the runtime itself makes no
 # outbound TLS connections (the NAT node MASQUERADEs lab traffic at L3;
@@ -183,7 +236,7 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 # button — without it a hypervisor-initiated shutdown (qemu QMP
 # system_powerdown, vmrun soft stop, OVA guest shutdown) is never acted
 # on in-guest and hosts fall back to hard-kill after their grace period.
-BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump"
+BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump,util-linux,libcap2-bin,passwd"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
@@ -229,6 +282,11 @@ else
     echo "== build-rootfs: --no-i386 given, skipping libc6:i386 (32-bit IOL images will NOT run) =="
 fi
 
+# T0.5 proved the tool boundary with this dedicated account. Keep it without a
+# home directory or login shell: pack GUIs run as ioltool, while their socket
+# and options files are created per node by the supervisor.
+chroot "$ROOTFS_DIR" useradd -r -M -s /usr/sbin/nologin ioltool
+
 # ---------------------------------------------------------------------------
 # Stage 3: strip docs/locales/caches to hit the size target
 # ---------------------------------------------------------------------------
@@ -264,12 +322,49 @@ install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/images"   # image library (uploads la
 install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/run"      # supervisor's per-lab runtime state (sockets, NETMAPs, nvram scratch) — swept by prestart-clean.sh
 install -d -m 0755 "$ROOTFS_DIR/opt/iolbox/labs"     # durable lab-document store (-labs-dir); seed labs materialize here on first connect when empty
 
+# The tools tree is root-owned and immutable in the shipped image.
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench"
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/bin"
+for pack in aaa webserver httpclient syslog; do
+    install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack"
+done
+# /run/iolbox/tool is traversable by ioltool but not writable; Endpoint.Start
+# creates each per-node 0700 socket directory below it.
+install -d -m 0755 -o root -g root "$ROOTFS_DIR/run/iolbox/tool"
+
 # The supervisor binary itself (a FILE at /opt/iolbox/supervisor).
 install -m 0755 -o root -g root "$SUPERVISOR_BIN" "$ROOTFS_DIR/opt/iolbox/supervisor"
+
+# Tool launch transition helper; cgroup placement happens while this helper is
+# still privileged, before it drops to ioltool and execs the pack GUI.
+install -m 0755 -o root -g root "$TOOLLAUNCH_BIN" "$ROOTFS_DIR/opt/iolbox/iolbox-toollaunch"
 
 # VPCS binary. Lives in /opt/iolbox, which the supervisor unit puts on PATH
 # (the supervisor spawns `vpcs` by bare name).
 install -m 0755 -o root -g root "$VPCS_BIN" "$ROOTFS_DIR/opt/iolbox/vpcs"
+
+
+# P2 secbench payload: manifest, GUI, and static Go attack binaries.
+install -m 0644 -o root -g root \
+    "$SCRIPT_DIR/files/tools/packs/secbench/pack.json" \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/pack.json"
+install -m 0755 -o root -g root "$SECBENCH_GUI_BIN" \
+    "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/secbench-gui"
+for bin in "$SECBENCH_BIN_STAGE"/*; do
+    install -m 0755 -o root -g root "$bin" \
+        "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/bin/$(basename "$bin")"
+done
+
+# P3 network-tool packs: manifest + single-binary GUI/service each.
+for pack in aaa webserver httpclient syslog; do
+    install -m 0644 -o root -g root \
+        "$SCRIPT_DIR/files/tools/packs/$pack/pack.json" \
+        "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack/pack.json"
+    install -m 0755 -o root -g root "$BUILD_DIR/$pack-gui" \
+        "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack/$pack-gui"
+done
 
 # firstboot-iourc.sh (called by both the systemd unit and the non-systemd
 # fallback init script) + the ExecStartPre stale-state sweep.

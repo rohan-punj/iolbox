@@ -2,12 +2,15 @@
   import { labStore } from "../labStore.svelte";
   import { stateColor, stateLabel } from "../nodeVisuals";
   import { iconSvg, defaultIconFor, iconRegistryVersion, uiSvg } from "../icons.svelte";
-  import { linking } from "../linking.svelte";
+  import { usedInterfaces } from "../interfaces";
   import IconPicker from "./IconPicker.svelte";
 
-  const node = $derived(labStore.selectedNode);
+  const node = $derived(labStore.inspectorNode);
   const nodeState = $derived(node ? labStore.nodeStates[node.id] ?? "stopped" : "stopped");
+  const running = $derived(nodeState === "running" || nodeState === "starting");
   const image = $derived(labStore.images.find((i) => i.id === node?.image?.id));
+  const isIol = $derived(node?.kind === "iol");
+  const isTool = $derived(node?.kind === "tool");
 
   let showImagePicker = $state(false);
   let iconPicker = $state<{ x: number; y: number } | null>(null);
@@ -18,6 +21,32 @@
       : undefined
   );
   const iconMarkup = $derived((iconRegistryVersion(), iconSvg(iconKey, 20)));
+
+  // Highest adapter group index consumed by an existing link, per family —
+  // same rule NodeEditDialog used (warn, don't silently orphan a link).
+  function minGroups(nodeId: number, family: "e" | "s"): number {
+    const used = usedInterfaces(nodeId);
+    let max = -1;
+    for (const iface of used) {
+      const m = iface.match(/^([es])(\d+)\/(\d+)$/);
+      if (m && m[1] === family) max = Math.max(max, Number(m[2]));
+    }
+    return max + 1;
+  }
+  const minEth = $derived(node ? (usedInterfaces(node.id), minGroups(node.id, "e")) : 0);
+  const minSer = $derived(node ? (usedInterfaces(node.id), minGroups(node.id, "s")) : 0);
+  const ethWarn = $derived(isIol && !!node && (node.ethernet ?? 1) < minEth);
+  const serWarn = $derived(isIol && !!node && (node.serial ?? 0) < minSer);
+
+  const packId = $derived(typeof node?.config?.pack === "string" ? node.config.pack : "");
+  const toolPackInvalid = $derived(
+    isTool &&
+      (!packId ||
+        (labStore.toolPacks.length > 0 && !labStore.toolPacks.some((p) => p.id === packId)))
+  );
+  const netCfg = $derived(
+    node?.config?.net as { ip?: string; prefixLen?: number; gateway?: string } | undefined
+  );
 
   function openIconPicker(e: MouseEvent) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -50,13 +79,45 @@
     if (!node) return;
     node.startupConfig = (e.target as HTMLTextAreaElement).value;
   }
+  function toggleBoot() {
+    if (!node) return;
+    const on = node.config?.bootFromStartup !== false;
+    node.config = { ...(node.config ?? {}), bootFromStartup: !on };
+  }
+  async function saveConfigFromNvram() {
+    if (!node) return;
+    await labStore.saveNodeConfig(node.id);
+  }
+  function updatePack(e: Event) {
+    if (!node) return;
+    node.config = { ...(node.config ?? {}), pack: (e.target as HTMLSelectElement).value };
+  }
+  function updateNet(field: "ip" | "prefixLen" | "gateway", value: string) {
+    if (!node) return;
+    const cur = (node.config?.net as { ip?: string; prefixLen?: number; gateway?: string }) ?? {};
+    const next = { ...cur, [field]: field === "prefixLen" ? Number(value) || 24 : value };
+    const cfg = { ...(node.config ?? {}), net: next.ip?.trim() ? next : undefined };
+    if (!cfg.net) delete cfg.net;
+    node.config = cfg;
+  }
+
+  let applyingConfig = $state(false);
+  async function applyConfig() {
+    if (!node || applyingConfig) return;
+    applyingConfig = true;
+    try {
+      await labStore.applyNodeConfig(node.id);
+    } finally {
+      applyingConfig = false;
+    }
+  }
 </script>
 
 <div class="inspector">
   {#if !node}
     <div class="empty">
       <div class="empty-title">No selection</div>
-      <div class="empty-sub">Click a node on the canvas to inspect it.</div>
+      <div class="empty-sub">Right-click a node and choose Edit… to inspect it.</div>
     </div>
   {:else}
     <div class="header">
@@ -65,6 +126,12 @@
         {stateLabel(nodeState)}
       </span>
       <span class="kind">{node.kind.toUpperCase()}</span>
+      <button
+        class="close-btn"
+        title="Close"
+        aria-label="Close inspector"
+        onclick={() => (labStore.inspectorNodeId = null)}
+      >{@html uiSvg("x", 13)}</button>
     </div>
 
     <label class="field">
@@ -80,15 +147,7 @@
       </button>
     </div>
 
-    <div class="field">
-      <span class="label">Properties</span>
-      <button class="icon-btn" onclick={() => node && linking.requestEdit?.(node.id)}>
-        <span class="icon-glyph">{@html uiSvg("edit", 18)}</span>
-        <span class="icon-lab">Edit node…</span>
-      </button>
-    </div>
-
-    {#if node.kind === "iol"}
+    {#if isIol}
       <label class="field">
         <span class="label">Image</span>
         <div class="image-row">
@@ -122,15 +181,37 @@
         <label class="field">
           <span class="label">Ethernet adapters</span>
           <input type="number" min="0" max="16" value={node.ethernet ?? 1} oninput={updateEthernet} />
+          {#if ethWarn}<span class="warn">≥ {minEth} needed — links use e{minEth - 1}/x</span>{/if}
         </label>
         <label class="field">
           <span class="label">Serial adapters</span>
           <input type="number" min="0" max="16" value={node.serial ?? 1} oninput={updateSerial} />
+          {#if serWarn}<span class="warn">≥ {minSer} needed — links use s{minSer - 1}/x</span>{/if}
         </label>
+      </div>
+
+      <div class="field">
+        <span class="label">Boot from startup-config</span>
+        <button
+          class="toggle"
+          class:on={node.config?.bootFromStartup !== false}
+          role="switch"
+          aria-checked={node.config?.bootFromStartup !== false}
+          onclick={toggleBoot}
+        >
+          <span class="sw"></span><span class="tl">{node.config?.bootFromStartup !== false ? "On" : "Off"}</span>
+        </button>
       </div>
 
       <label class="field grow">
         <span class="label">Startup config</span>
+        {#if running}
+          <button
+            class="btn btn-ghost savecfg-btn"
+            title="Runs on the node's saved NVRAM — do write memory on the node first"
+            onclick={saveConfigFromNvram}
+          >Save config from NVRAM</button>
+        {/if}
         <textarea
           class="mono config-editor"
           spellcheck="false"
@@ -139,8 +220,71 @@
           oninput={updateConfig}
         ></textarea>
       </label>
+    {:else if isTool}
+      <div class="field">
+        <span class="label">Pack</span>
+        <select class="mono" value={packId} onchange={updatePack}>
+          {#if packId && !labStore.toolPacks.some((p) => p.id === packId)}
+            <option value={packId}>Unavailable · {packId}</option>
+          {/if}
+          {#each labStore.toolPacks as pack (pack.id)}
+            <option value={pack.id}>{pack.name}</option>
+          {/each}
+        </select>
+        {#if labStore.toolPacksLoading}
+          <span class="warn hint">Loading installed packs…</span>
+        {:else if labStore.toolPacksError}
+          <span class="warn">Could not load installed packs: {labStore.toolPacksError}</span>
+        {:else if toolPackInvalid}
+          <span class="warn">Choose an installed pack.</span>
+        {/if}
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="label">IP address</span>
+          <input
+            type="text"
+            placeholder="unaddressed"
+            value={netCfg?.ip ?? ""}
+            oninput={(e) => updateNet("ip", (e.target as HTMLInputElement).value)}
+          />
+        </label>
+        <label class="field">
+          <span class="label">Prefix length</span>
+          <input
+            type="number"
+            min="1"
+            max="32"
+            value={netCfg?.prefixLen ?? 24}
+            oninput={(e) => updateNet("prefixLen", (e.target as HTMLInputElement).value)}
+          />
+        </label>
+      </div>
+      <label class="field">
+        <span class="label">Gateway (optional)</span>
+        <input
+          type="text"
+          placeholder="none"
+          value={netCfg?.gateway ?? ""}
+          oninput={(e) => updateNet("gateway", (e.target as HTMLInputElement).value)}
+        />
+      </label>
+      <div class="vpcs-hint">Applied to eth1 when the node starts. Leave IP blank to leave it unaddressed (most modules don't need one).</div>
     {:else}
       <div class="vpcs-hint">VPCS nodes take their config from canned commands (set later).</div>
+    {/if}
+
+    {#if isIol || isTool}
+      <button
+        class="btn btn-success savecfg-btn"
+        title="Push the changes above to the supervisor — editing the fields alone doesn't apply them"
+        disabled={applyingConfig}
+        onclick={applyConfig}
+      >{applyingConfig ? "Saving…" : "Save"}</button>
+      {#if running}
+        <div class="vpcs-hint">Node is running — changes apply on next stop/start.</div>
+      {/if}
     {/if}
   {/if}
 </div>
@@ -185,7 +329,7 @@
   .header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: var(--sp-2);
   }
   .state-pill {
     display: inline-flex;
@@ -202,10 +346,26 @@
     border-radius: 50%;
   }
   .kind {
+    flex: 1;
     font-size: var(--fs-xs);
     color: var(--text-tertiary);
     font-weight: 600;
     letter-spacing: 0.04em;
+  }
+  .close-btn {
+    all: unset;
+    box-sizing: border-box;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .close-btn:hover {
+    color: var(--text);
+    background: var(--bg-hover);
   }
   .field {
     display: flex;
@@ -227,6 +387,10 @@
     font-size: var(--fs-xs);
     color: var(--text-tertiary);
     font-weight: 500;
+  }
+  .warn {
+    font-size: var(--fs-xs);
+    color: var(--danger);
   }
   .image-row {
     display: flex;
@@ -324,5 +488,52 @@
   }
   .icon-lab {
     font-size: var(--fs-sm);
+  }
+  .toggle {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--panel-solid);
+    cursor: pointer;
+    width: fit-content;
+  }
+  .toggle .sw {
+    width: 26px;
+    height: 15px;
+    border-radius: var(--radius-full);
+    background: var(--border-strong);
+    position: relative;
+    transition: background var(--transition-fast);
+  }
+  .toggle .sw::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--ink);
+    transition: transform var(--transition-fast);
+  }
+  .toggle.on .sw {
+    background: var(--accent);
+  }
+  .toggle.on .sw::after {
+    transform: translateX(11px);
+  }
+  .toggle .tl {
+    font-size: var(--fs-xs);
+    color: var(--text-tertiary);
+  }
+  .savecfg-btn {
+    align-self: flex-start;
+    margin-bottom: 4px;
+    font-size: var(--fs-xs);
   }
 </style>

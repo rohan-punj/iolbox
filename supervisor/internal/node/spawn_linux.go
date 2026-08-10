@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
 // Process is a spawned node process with its lifecycle state.
@@ -112,7 +113,17 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 	// pty.Start allocates a pty, wires cmd's stdin/stdout/stderr to the slave,
 	// and sets SysProcAttr{Setsid:true, Setctty:true} so the slave is the
 	// process's controlling terminal — the IOL console.
-	ptmx, err := pty.Start(cmd)
+	//
+	// pty.Start is the fork+exec here, so it is what runs inside StartAndAdd:
+	// the registry lock is held across the start and the PID registration
+	// together, so the supervisor's subreaper can never observe this IOL child
+	// as an unregistered orphan and reap it before cmd.Wait owns its status.
+	var ptmx *os.File
+	err = tool.Registry.StartAndAdd(func() error {
+		var startErr error
+		ptmx, startErr = pty.Start(cmd)
+		return startErr
+	}, func() int { return cmd.Process.Pid })
 	if err != nil {
 		m.To(StateCrashed)
 		_ = ln.Close()
@@ -168,7 +179,10 @@ func spawnVPCS(spec Spec, m *Machine) (*Process, error) {
 	if !m.To(StateStarting) {
 		return nil, fmt.Errorf("node %d: not in a startable state", spec.NodeID)
 	}
-	if err := cmd.Start(); err != nil {
+	// Start and register atomically: vpcs daemonizes, so the launcher exits
+	// almost immediately and the subreaper would otherwise be free to reap it
+	// between Start and registration.
+	if err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid }); err != nil {
 		m.To(StateCrashed)
 		return nil, fmt.Errorf("node %d: vpcs start: %w", spec.NodeID, err)
 	}
@@ -185,7 +199,14 @@ func spawnVPCS(spec Spec, m *Machine) (*Process, error) {
 	// Reap the launcher: vpcs daemonizes, so this returns almost immediately with
 	// success. Do NOT mark the node stopped/crashed on that reap — the real vpcs
 	// lives on in the process group. Readiness is decided by the console port.
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		// VPCS daemonizes, so Wait returns almost immediately and the real
+		// process lives on in the group; this registry entry is only for the
+		// short-lived launcher, while the daemonized grandchild is an orphan
+		// for the subreaper loop to collect.
+		tool.Registry.Remove(cmd.Process.Pid)
+	}()
 
 	// Wait for vpcs to open its telnet console port, then report running. If it
 	// never comes up, the process group is killed and the node is marked crashed.
@@ -394,6 +415,7 @@ func (p *Process) serveConsole() {
 // wait reaps the process and updates state on exit, then tears down the console.
 func (p *Process) wait() {
 	err := p.cmd.Wait()
+	tool.Registry.Remove(p.cmd.Process.Pid)
 	// If we deliberately stopped it, state is already/soon Stopped; only mark
 	// crashed when still running/starting.
 	switch p.Machine.State() {
