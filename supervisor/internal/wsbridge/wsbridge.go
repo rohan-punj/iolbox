@@ -437,7 +437,18 @@ func bridgeConsole(ctx context.Context, wsConn *ws.Conn, telnetConn net.Conn) {
 					return
 				}
 			case ws.OpText:
-				if err := handleTextFrame(telnetConn, data); err != nil {
+				// Resize is a documented no-op here too — see validateResizeFrame's
+				// doc comment for why: VPCS's own telnet server was never actually
+				// negotiated to accept a NAWS subnegotiation (our Negotiator only
+				// ever agrees to SGA, refusing NAWS outright), so writing raw NAWS
+				// bytes into its input stream regardless was not a working feature
+				// — it was an un-negotiated, unsolicited subnegotiation that VPCS's
+				// small telnet parser could fail to fully consume, leaking a
+				// trailing byte into the command line as a phantom keystroke
+				// (confirmed live: a stray digit matching the low byte of a resize
+				// dimension appeared at the VPCS prompt right after a terminal
+				// resize). Parse-and-ignore, matching bridgeConsoleSub's IOL path.
+				if err := validateResizeFrame(data); err != nil {
 					log.Printf("wsbridge: console resize frame: %v", err)
 				}
 			}
@@ -655,31 +666,21 @@ type resizeMessage struct {
 	} `json:"resize"`
 }
 
-// handleTextFrame parses a text-frame control message from the client and, if
-// it is a resize request, writes the NAWS subnegotiation to the node.
-func handleTextFrame(telnetConn net.Conn, data []byte) error {
-	msg, err := parseResizeFrame(data)
-	if err != nil {
-		return err
-	}
-	_, err = telnetConn.Write(telnet.NAWS(msg.Resize.Cols, msg.Resize.Rows))
-	return err
-}
-
-// validateResizeFrame parses a text-frame control message exactly like
-// handleTextFrame, but for the in-process subscription path (bridgeConsoleSub)
-// there is no telnet socket to write a NAWS subnegotiation to — see
-// bridgeConsoleSub's doc comment for why that was already a no-op for IOL
-// even on the old TCP path. Returning the parse error (if any) lets the
-// caller log a malformed frame exactly as before; a well-formed resize frame
-// is simply acknowledged as parsed and otherwise ignored.
+// validateResizeFrame parses a text-frame control message ({"resize":{...}})
+// and otherwise ignores it — for BOTH console paths now (bridgeConsole's raw
+// telnet dial to VPCS, and bridgeConsoleSub's in-process IOL subscription).
+// It used to write a NAWS subnegotiation into the VPCS telnet socket, but
+// that was never actually negotiated (see the OpText case in bridgeConsole)
+// and could leak a stray byte into VPCS's input; IOL's path was already a
+// documented no-op (there is no telnet socket to write to — a real
+// pty-resize via pty.Setsize would be a separate, not-yet-designed feature).
+// Returning the parse error (if any) lets the caller log a malformed frame.
 func validateResizeFrame(data []byte) error {
 	_, err := parseResizeFrame(data)
 	return err
 }
 
-// parseResizeFrame is the shared validation both handleTextFrame and
-// validateResizeFrame build on.
+// parseResizeFrame is the shared validation validateResizeFrame builds on.
 func parseResizeFrame(data []byte) (resizeMessage, error) {
 	var msg resizeMessage
 	if err := json.Unmarshal(data, &msg); err != nil {

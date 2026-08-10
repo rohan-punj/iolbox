@@ -179,6 +179,16 @@ class LabStore {
     // Subscribe before the handshake settles so no push (node.state etc.)
     // arriving mid-connect is dropped.
     this.client.onEvent((evt) => this.handleEvent(evt));
+    // A transport reconnect (network blip, or a burst of activity like Stop
+    // all + Start all tripping the WS) means every push event sent during the
+    // gap is gone for good — there's no server-side replay (see
+    // broadcaster.publish). Without this, nodeStates/consolePorts/
+    // capturePorts stay frozen at whatever they were right before the drop
+    // until the user manually reloads the page; a bulk stop-then-restart
+    // landing in that gap left every LED stuck non-green even though the
+    // nodes were actually running. Re-query status() and refresh them instead
+    // of waiting for a page reload to notice.
+    this.client.onReconnect(() => void this.resyncAfterReconnect());
     try {
       const hello = await this.client.connect();
       this.features = hello.features ?? [];
@@ -233,6 +243,39 @@ class LabStore {
       this.providerStatus = "error";
       this.lastError = `connect failed: ${(e as Error).message}`;
       this.pushLog("error", `connect failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** Refresh live node/link runtime state after a transport reconnect (see
+   *  the onReconnect subscription in connect()). Only handles the common
+   *  case — the supervisor still has THIS lab loaded, which is true for any
+   *  network-level blip since the supervisor process itself never restarted.
+   *  If it reports a different (or no) lab — the supervisor process itself
+   *  restarted during the drop — this can't safely reconcile locally; ask for
+   *  a manual reload rather than guess. */
+  private async resyncAfterReconnect() {
+    try {
+      const status = await this.client.status();
+      if (!status.labId || status.labId !== this.lab.id) {
+        this.pushLog(
+          "warn",
+          "reconnected, but the supervisor is no longer tracking this lab (it may have restarted) — reload the page"
+        );
+        return;
+      }
+      const states: Record<number, NodeState> = {};
+      for (const n of status.nodes ?? []) states[n.id] = n.state;
+      for (const n of this.lab.nodes) if (!(n.id in states)) states[n.id] = "stopped";
+      this.nodeStates = states;
+      const consolePorts: Record<number, number> = {};
+      for (const n of status.nodes ?? []) if (n.consolePort) consolePorts[n.id] = n.consolePort;
+      this.consolePorts = consolePorts;
+      const capPorts: Record<number, number> = {};
+      for (const l of status.links ?? []) if (l.capturePort) capPorts[l.id] = l.capturePort;
+      this.capturePorts = capPorts;
+      this.pushLog("info", "reconnected to the supervisor — refreshed node/link state");
+    } catch (e) {
+      this.pushLog("warn", `reconnect: failed to refresh state: ${(e as Error).message}`);
     }
   }
 
@@ -502,9 +545,13 @@ class LabStore {
 
   // ---- durable lab-document store (feature 3) ----
 
-  /** True once the current lab has been saved to the durable store this session. */
-  get currentLabSaved(): boolean {
-    return this.savedDocIds.has(this.lab.id);
+  /** True when the current lab has unsaved content: it has nodes and was
+   *  never saved to the durable store this session. Approximate (doesn't
+   *  detect edits made after a save within the same session), but matches
+   *  what the three former per-entry-point confirm() prompts already used —
+   *  now centralized for SwitchLabDialog. */
+  get currentLabDirty(): boolean {
+    return this.lab.nodes.length > 0 && !this.savedDocIds.has(this.lab.id);
   }
 
   /** localStorage key holding the id of the lab the user last had open, so a
@@ -596,16 +643,36 @@ class LabStore {
     return out;
   }
 
+  /** Set when openLab is blocked on the user resolving a lab switch (see
+   *  pendingSwitch doc below). Read by SwitchLabDialog to render itself. */
+  pendingSwitch = $state<{ lab: LabDocument; fromStore: boolean } | null>(null);
+
   /** Open a doc into the workspace (reuses loadLab's connect-time path). Pass
    *  fromStore=true when the doc came from the durable store (so it's treated as
    *  already-saved and eligible for autosave); false for New/Import of a doc the
-   *  user hasn't persisted yet. */
-  async openLab(lab: LabDocument, fromStore = false) {
+   *  user hasn't persisted yet.
+   *
+   *  iolbox runs exactly one lab at a time: switching to a DIFFERENT lab id
+   *  always closes/replaces whatever is currently loaded (the server's
+   *  lab.load already stops every node and tears down the old lab's fabric —
+   *  see handleLabLoad). Per product decision, that must never happen without
+   *  the user being warned and given the chance to save first, so any
+   *  cross-id call is intercepted here into pendingSwitch instead of
+   *  proceeding straight to loadLab; SwitchLabDialog resolves it via
+   *  resolveSwitch/cancelSwitch. This is the SINGLE funnel for every
+   *  lab-switch entry point (Labs browser open/clone, New, Import) — callers
+   *  should not roll their own confirm() before calling openLab. */
+  async openLab(lab: LabDocument, fromStore = false, decision?: "save" | "discard") {
     // A load is already in flight (e.g. a double-click on New, or Open
     // clicked again before the first one settled) — let it finish rather
     // than interleaving two loadLab() calls, which can let a slow first
     // response's runtime state overwrite the second lab's after the fact.
     if (this.labLoading) return;
+    if (!decision && this.lab.id !== lab.id) {
+      this.pendingSwitch = { lab, fromStore };
+      return;
+    }
+    this.pendingSwitch = null;
     await this.guarded("open lab", async () => {
       if (fromStore) this.savedDocIds.add(lab.id);
       else this.savedDocIds.delete(lab.id);
@@ -615,6 +682,27 @@ class LabStore {
       // it, and New-lab intentionally isn't remembered until the user edits it.)
       if (fromStore) this.rememberActiveLab(lab.id);
     });
+  }
+
+  /** Resolve a pending lab switch (see pendingSwitch/openLab). "save" saves
+   *  the OUTGOING lab first and aborts the switch if the save fails (the
+   *  dialog stays up so the user can retry or cancel); "discard" proceeds
+   *  straight to the switch, leaving the outgoing lab's unsaved edits
+   *  behind. Either way loadLab itself already cancels the outgoing lab's
+   *  pending autosave timer without flushing it, so "discard" can never be
+   *  turned into an accidental save by a debounce firing mid-switch. */
+  async resolveSwitch(decision: "save" | "discard") {
+    const pending = this.pendingSwitch;
+    if (!pending) return;
+    if (decision === "save") {
+      if (!(await this.saveLab())) return; // save failed: leave the dialog up
+    }
+    await this.openLab(pending.lab, pending.fromStore, decision);
+  }
+
+  /** Dismiss a pending lab switch with no action; the current lab stays open. */
+  cancelSwitch() {
+    this.pendingSwitch = null;
   }
 
   /** Debounced autosave after any topology/annotation edit (real supervisor
@@ -1045,6 +1133,26 @@ class LabStore {
 
   newAnnotationId(): string {
     return uuid();
+  }
+
+  /** Clone an annotation: fresh id, same content, offset +40/+40 (both
+   *  endpoints for a line) so the copy doesn't sit exactly on top of the
+   *  source. Mirrors duplicateNode. Returns the new annotation's id, or null
+   *  if src is missing. */
+  duplicateAnnotation(id: string): string | null {
+    const src = this.lab.annotations?.find((a) => a.id === id);
+    if (!src) return null;
+    const clone = { ...structuredClone($state.snapshot(src)), id: this.newAnnotationId() } as Annotation;
+    if (clone.type === "line") {
+      clone.x1 += 40;
+      clone.y1 += 40;
+      clone.x2 += 40;
+      clone.y2 += 40;
+    } else {
+      clone.x += 40;
+      clone.y += 40;
+    }
+    return this.addAnnotation(clone);
   }
 
   // ---- lab tasks ----

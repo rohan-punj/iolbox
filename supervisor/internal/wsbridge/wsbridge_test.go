@@ -681,6 +681,87 @@ func TestConsoleEndpointTelnetNegotiationAndData(t *testing.T) {
 	}
 }
 
+// TestConsoleResizeFrameNotForwardedAsRawBytes is the regression test for a
+// live bug: a resize control frame on the VPCS raw-telnet path used to write
+// a NAWS subnegotiation straight into the node's telnet socket, but our
+// Negotiator never actually agrees to NAWS (it only ever agrees to SGA — see
+// telnet.Negotiator.handleOption), so this was an un-negotiated, unsolicited
+// sequence VPCS's small telnet parser could fail to fully consume — leaking a
+// trailing byte into the command line as a phantom keystroke at the VPCS
+// prompt, repeating every time the console's ResizeObserver fired (even from
+// layout jitter with no actual size change). The fix makes resize a pure
+// parse-and-ignore no-op on this path too (see validateResizeFrame), matching
+// bridgeConsoleSub's already-established IOL behavior. This test proves NO
+// bytes reach the telnet socket for a resize frame, while a real keystroke
+// still does.
+func TestConsoleResizeFrameNotForwardedAsRawBytes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	received := make(chan []byte, 8)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 256)
+		for {
+			n, rerr := c.Read(buf)
+			if n > 0 {
+				got := make([]byte, n)
+				copy(got, buf[:n])
+				received <- got
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+
+	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+
+	fake := &fakeControlServer{consolePorts: map[int]int{7: port}}
+	b := New(Config{Addr: "127.0.0.1:0"}, fake)
+	ts := httptest.NewServer(b.server.Handler)
+	defer ts.Close()
+
+	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/console/7"
+	conn := dialAuthenticatedWS(t, b, wsURL)
+	defer conn.Close()
+
+	if err := writeClientFrame(conn, ws.OpText, []byte(`{"resize":{"cols":80,"rows":24}}`)); err != nil {
+		t.Fatalf("write resize frame: %v", err)
+	}
+	// A real keystroke right after proves the connection is alive and the
+	// fake server DOES receive data in general — only the resize frame itself
+	// must produce nothing.
+	if err := writeClientFrame(conn, ws.OpBinary, []byte("x")); err != nil {
+		t.Fatalf("write keystroke: %v", err)
+	}
+
+	select {
+	case got := <-received:
+		if string(got) != "x" {
+			t.Fatalf("expected only the keystroke to reach the telnet socket, got %q (resize leaked?)", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("keystroke never reached the telnet socket")
+	}
+
+	select {
+	case extra := <-received:
+		t.Fatalf("unexpected extra bytes reached the telnet socket after the keystroke: %q", extra)
+	case <-time.After(200 * time.Millisecond):
+		// nothing else arrived — good.
+	}
+}
+
 // TestConsoleEndpointInProcessSubscription is the v0.3.0 Phase 2 regression
 // test: when ConsoleSubscribe returns a live subscription (simulating a
 // running IOL node's hub), handleConsole must use the in-process path

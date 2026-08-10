@@ -12,11 +12,28 @@ import "fmt"
 const ifnamsiz = 16
 
 // tapCreateCmds returns the argv (without the leading "sudo"/"-n") to create a
-// tap device owned by uid and bring it up: `ip tuntap add ... user <uid>`
-// then `ip link set <name> up`.
+// tap device owned by uid and bring it up: `ip tuntap add ... user <uid>`,
+// disable IPv6 on it, then `ip link set <name> up`.
+//
+// disable_ipv6 matters: every UP interface with IPv6 enabled (the kernel
+// default) auto-assigns a link-local address and periodically emits
+// Neighbor Discovery / MLD background traffic sourced from ITS OWN kernel
+// MAC — even a tap nothing is cabled to. Because a tap is bidirectional
+// (whatever the kernel wants to "transmit" on it is exactly what iouyap
+// reads and forwards into IOL as traffic "received" on that port), this
+// background noise gets handed to IOL as if it arrived from off-box. IOL
+// then does exactly what a real switch does with an unknown-destination
+// multicast frame: learns the source MAC and floods it out every other
+// port — which is how this leaked from unwired ports onto wired ones too.
+// Confirmed live: the Linux bridge's own FDB showed sibling ports' kernel
+// MACs "arriving via" a bridged tap, meaning IOL itself was relaying this
+// traffic between its ports exactly as flooding predicts. Disabling IPv6
+// at creation, before the interface is ever brought up, stops the kernel
+// from generating this traffic in the first place.
 func tapCreateCmds(name string, uid int) [][]string {
 	return [][]string{
 		{"ip", "tuntap", "add", "dev", name, "mode", "tap", "user", fmt.Sprintf("%d", uid)},
+		{"sysctl", "-w", fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6=1", name)},
 		{"ip", "link", "set", name, "up"},
 	}
 }
@@ -42,6 +59,7 @@ func tapDeleteCmds(name string) [][]string {
 func bridgeCreateCmds(name string) [][]string {
 	return [][]string{
 		{"ip", "link", "add", name, "type", "bridge", "group_fwd_mask", "0xfff8"},
+		{"sysctl", "-w", fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6=1", name)},
 		{"ip", "link", "set", name, "up"},
 	}
 }

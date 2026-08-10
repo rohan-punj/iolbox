@@ -40,9 +40,15 @@ func (c cmd) String() string {
 // address it or attach it to a bridge (that is natBridgeAttachCmds, run when the
 // link exists). The tap sits unbridged until then, exactly like an IOL fabric
 // interface's static tap.
+//
+// disable_ipv6: same hardening as fabric.tapCreateCmds — an UP tap with IPv6
+// enabled (the kernel default) leaks its own Neighbor Discovery/MLD
+// background traffic into the emulated segment once bridged, which a
+// connected switch legitimately learns and floods to its other ports.
 func natBridgeTapCmds(iface, owner string) []cmd {
 	return []cmd{
 		{[]string{"ip", "tuntap", "add", "dev", iface, "mode", "tap", "user", owner}},
+		{[]string{"sysctl", "-w", fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6=1", iface)}},
 		{[]string{"ip", "link", "set", iface, "up"}},
 	}
 }

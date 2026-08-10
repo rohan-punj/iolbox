@@ -12,6 +12,7 @@
   import Preflight from "./lib/components/Preflight.svelte";
   import ImageManager from "./lib/components/ImageManager.svelte";
   import LabBrowser from "./lib/components/LabBrowser.svelte";
+  import SwitchLabDialog from "./lib/components/SwitchLabDialog.svelte";
   import SplitPane from "./lib/components/SplitPane.svelte";
   import WatcherPanel from "./lib/components/WatcherPanel.svelte";
   import PainterPanel from "./lib/components/PainterPanel.svelte";
@@ -134,6 +135,8 @@
 {#if labStore.showLabBrowser}
   <LabBrowser onClose={() => (labStore.showLabBrowser = false)} />
 {/if}
+
+<SwitchLabDialog />
 
 <style>
   .shell {

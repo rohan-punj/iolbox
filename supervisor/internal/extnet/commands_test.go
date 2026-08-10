@@ -22,6 +22,9 @@ func TestNatBridgeTapCommands(t *testing.T) {
 	got := joinCmds(natBridgeTapCmds("iolnat9", "iolbox"))
 	for _, want := range []string{
 		"ip tuntap add dev iolnat9 mode tap user iolbox",
+		// Same IPv6-leak hardening as fabric.tapCreateCmds, before the device
+		// comes up so the kernel never emits ND/MLD on it.
+		"sysctl -w net.ipv6.conf.iolnat9.disable_ipv6=1",
 		"ip link set iolnat9 up",
 	} {
 		if !strings.Contains(got, want) {
@@ -30,6 +33,11 @@ func TestNatBridgeTapCommands(t *testing.T) {
 	}
 	if strings.Contains(got, "master") || strings.Contains(got, "addr add") {
 		t.Fatalf("tap must be created unbridged/unaddressed:\n%s", got)
+	}
+	sysctlIdx := strings.Index(got, "sysctl")
+	upIdx := strings.Index(got, "ip link set iolnat9 up")
+	if sysctlIdx < 0 || upIdx < 0 || sysctlIdx > upIdx {
+		t.Fatalf("disable_ipv6 must be set before the device is brought up:\n%s", got)
 	}
 }
 

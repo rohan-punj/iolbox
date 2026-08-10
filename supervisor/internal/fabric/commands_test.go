@@ -20,11 +20,21 @@ func TestTapCreateCmds(t *testing.T) {
 	got := joinArgv(tapCreateCmds("iol3_17", 1000))
 	for _, want := range []string{
 		"ip tuntap add dev iol3_17 mode tap user 1000",
+		// disable_ipv6 must run BEFORE the device comes up, so the kernel never
+		// gets a chance to start emitting ND/MLD background traffic on it (see
+		// tapCreateCmds's doc for why that traffic otherwise leaks into IOL as
+		// phantom learned MACs, floodable to every other port on the switch).
+		"sysctl -w net.ipv6.conf.iol3_17.disable_ipv6=1",
 		"ip link set iol3_17 up",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tapCreateCmds missing %q in:\n%s", want, got)
 		}
+	}
+	sysctlIdx := strings.Index(got, "sysctl")
+	upIdx := strings.Index(got, "ip link set iol3_17 up")
+	if sysctlIdx < 0 || upIdx < 0 || sysctlIdx > upIdx {
+		t.Fatalf("disable_ipv6 must be set before the device is brought up:\n%s", got)
 	}
 }
 
@@ -39,6 +49,7 @@ func TestBridgeCreateCmds(t *testing.T) {
 	got := joinArgv(bridgeCreateCmds("iolbr12"))
 	for _, want := range []string{
 		"ip link add iolbr12 type bridge group_fwd_mask 0xfff8",
+		"sysctl -w net.ipv6.conf.iolbr12.disable_ipv6=1",
 		"ip link set iolbr12 up",
 	} {
 		if !strings.Contains(got, want) {

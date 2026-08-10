@@ -42,6 +42,11 @@ export class TcpTransport implements Transport {
     return () => this.handlers.delete(handler);
   }
 
+  onReconnect(_handler: () => void): () => void {
+    // TODO(P1): fire when the Tauri-side socket reconnects, once implemented.
+    return () => {};
+  }
+
   send(_req: Request): void {
     // TODO(P1): invoke `supervisor_send` with the serialized request line.
     throw new Error("TcpTransport not implemented yet — use MockTransport for now.");

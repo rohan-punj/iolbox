@@ -79,16 +79,8 @@
   }
 
   async function open(doc: LabDocument) {
-    if (doc.id === labStore.lab.id) {
-      onClose();
-      return;
-    }
-    // Warn on unsaved changes only when the current lab was never saved OR was
-    // modified since last save. We approximate "dirty" as "has content and is
-    // not the doc currently being opened".
-    if (labStore.lab.nodes.length > 0 && !labStore.currentLabSaved) {
-      if (!confirm("The current lab hasn't been saved. Discard it and open this lab?")) return;
-    }
+    // openLab is the single switch funnel: it warns via SwitchLabDialog
+    // whenever doc.id differs from the current lab, so no confirm() here.
     await labStore.openLab(doc, true);
     onClose();
   }
@@ -106,6 +98,7 @@
     ev.stopPropagation();
     const copy = await labStore.cloneLab(doc);
     if (copy) {
+      // openLab warns via SwitchLabDialog if this replaces a different lab.
       await labStore.openLab(copy, true);
       onClose();
     }

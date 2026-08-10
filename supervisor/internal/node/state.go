@@ -77,3 +77,30 @@ func (m *Machine) To(to State) bool {
 	}
 	return true
 }
+
+// ReapDecision returns the transition a process's background exit-waiter
+// (Process.wait, spawn_linux.go) should apply to its shared Machine when the
+// OS process is finally reaped, or ok=false to apply none.
+//
+// explicitlyStopped is true once Stop() has been called on THIS Process
+// instance — a fact recorded locally on the Process the moment Stop() runs,
+// never revised afterward. It is NOT the same as checking the Machine's
+// current state: killing a process is asynchronous (the OS may take a while
+// to actually reap it), and a fast stop-then-restart of the same node id
+// reuses the same Machine for a brand-new Process. By the time the OLD
+// process's exit is finally reaped, the Machine may already have moved past
+// Stopped to Starting/Running for that NEW process — reading the Machine's
+// live state at that point would misattribute the new process's progress as
+// "this old, already-intentionally-stopped process is somehow still going,
+// so its exit must be a crash", clobbering a legitimately running node back
+// to Crashed. explicitlyStopped sidesteps that by asking a question with an
+// answer fixed the instant Stop() ran, before any restart could occur.
+func ReapDecision(explicitlyStopped bool, waitErr error) (state State, ok bool) {
+	if explicitlyStopped {
+		return "", false
+	}
+	if waitErr != nil {
+		return StateCrashed, true
+	}
+	return StateStopped, true
+}

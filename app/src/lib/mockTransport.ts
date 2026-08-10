@@ -138,6 +138,11 @@ export class MockTransport implements Transport {
     return () => this.handlers.delete(handler);
   }
 
+  /** The mock never drops/reconnects, so this never fires. */
+  onReconnect(_handler: () => void): () => void {
+    return () => {};
+  }
+
   private emit(frame: IncomingFrame) {
     for (const h of this.handlers) h(frame);
   }

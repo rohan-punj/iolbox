@@ -851,6 +851,13 @@
         annoTool.editRequestId = menu.annoId;
       },
     });
+    items.push({
+      label: "Duplicate",
+      action: () => {
+        const newId = labStore.duplicateAnnotation(menu.annoId);
+        if (newId !== null) labStore.selectedAnnotationId = newId;
+      },
+    });
     items.push({ separator: true, label: "sep", action: () => {} });
     items.push({
       label: "Delete",

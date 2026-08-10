@@ -83,12 +83,21 @@ func (m *Manager) Detach(ctx context.Context, tap string) error {
 // command of a create/delete pair is tolerated when isBenign classifies its
 // output as an idempotent no-op (device already exists / already gone); the
 // remaining commands still run so e.g. `up` is applied even when create found
-// the device already there. Any other failure aborts and is returned.
+// the device already there. Any other failure aborts and is returned — EXCEPT
+// a "sysctl" command (the disable_ipv6 hardening step in tapCreateCmds/
+// bridgeCreateCmds), which is best-effort by design: it stops IPv6 background
+// noise from leaking into the emulated fabric (see tapCreateCmds's doc), but
+// it is not load-bearing for the device actually working, and a runtime
+// without IPv6 support at all (sysctl path missing) must not fail every tap/
+// bridge creation over a purely cosmetic hardening step.
 func (m *Manager) runIdempotent(ctx context.Context, o op, cmds [][]string) error {
 	for i, argv := range cmds {
 		out, err := runOne(ctx, argv)
 		if err != nil {
 			if i == 0 && isBenign(o, strings.ToLower(out)) {
+				continue
+			}
+			if len(argv) > 0 && argv[0] == "sysctl" {
 				continue
 			}
 			return fmt.Errorf("fabric: `%s` failed: %v: %s",

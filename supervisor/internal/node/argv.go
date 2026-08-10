@@ -146,6 +146,18 @@ func (s Spec) Environ() []string {
 //
 // When no UDP tunnel is wired (VPCSUDPLocal/Remote == 0) the -s/-c/-t flags are
 // omitted and the PC is unconnected.
+//
+// MAC uniqueness ("-m"): every lab node is its OWN vpcs process, and vpcs
+// derives each PC's MAC as 00:50:79:66:68:XX where XX = (intra-process PC
+// index + "-m" value) & 0xff (vpcs.c pth_reader, confirmed against the
+// v0.8.3 source). The intra-process index is always 0 for a single-PC node,
+// and without "-m" it defaults to 0 too — so every VPCS node in a lab was
+// generating the IDENTICAL MAC (00:50:79:66:68:00), which broke L2
+// forwarding for any lab with more than one VPCS node on the same segment
+// (switches flapping the MAC between ports, duplicate-address warnings).
+// Passing "-m" = NodeID makes the last octet vary per node (vpcs's own
+// arg2int() does not actually clamp to the documented 0..240 range — only
+// the final "& 0xff" in pth_reader bounds it — so any NodeID is safe here).
 func (s Spec) VPCSArgv(name string) ([]string, error) {
 	_ = name // vpcs 0.8.3 has no name flag; see doc above.
 	if s.VPCSCount < 1 || s.VPCSCount > 9 {
@@ -158,6 +170,7 @@ func (s Spec) VPCSArgv(name string) ([]string, error) {
 		"vpcs",
 		"-p", strconv.Itoa(s.ConsolePort),
 		"-i", strconv.Itoa(s.VPCSCount),
+		"-m", strconv.Itoa(s.NodeID),
 	}
 	if s.VPCSUDPLocal > 0 && s.VPCSUDPRemote > 0 {
 		argv = append(argv,

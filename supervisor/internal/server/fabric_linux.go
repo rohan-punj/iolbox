@@ -50,6 +50,58 @@ func tapMasterIs(dev, bridgeName string) bool {
 	return base == bridgeName
 }
 
+// tapHasMaster reports whether the named netdev currently has ANY bridge
+// master, regardless of which. Used to detect that a tap/bridge adopted from
+// a pre-existing device (EnsureTap/EnsureBridge tolerating "already exists")
+// carried over bridge membership it should not have — the mechanism behind a
+// reported bug where a switch node saw MAC-table entries on ports it never
+// wired: two labs on one host reuse the same tap/bridge names (they are not
+// lab-scoped), and a leftover device from a prior/other lab run stayed
+// bridged, so a freshly loaded lab silently inherited its traffic.
+func tapHasMaster(name string) bool {
+	_, err := os.Readlink("/sys/class/net/" + name + "/master")
+	return err == nil
+}
+
+// bridgeMembers lists the netdevs currently enslaved to the named bridge, via
+// a cheap sysfs directory read (no privileged call). Used the same way as
+// tapHasMaster, but for a bridge being adopted: a leftover bridge can carry
+// members from whatever lab created it.
+func bridgeMembers(name string) ([]string, error) {
+	entries, err := os.ReadDir("/sys/class/net/" + name + "/brif")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+// deleteBridgeVerified/deleteTapVerified delete a device and, with one cheap
+// sysfs stat, log when it's still present afterward. This is deliberately
+// NOT a retry loop with a backoff budget: teardown runs synchronously inside
+// request handlers, and a lab with many taps/bridges retrying a stuck delete
+// for even a second each would make lab.stop/lab.load visibly hang. A single
+// verified attempt gives operators a log line to act on without risking that
+// latency blowup; teardown remains best-effort by design.
+func deleteBridgeVerified(mgr *fabric.Manager, ctx context.Context, name string) {
+	if err := mgr.DeleteBridge(ctx, name); err != nil {
+		log.Printf("fabric: teardown: delete bridge %s: %v", name, err)
+	} else if tapDeviceExists(name) {
+		log.Printf("fabric: teardown: bridge %s still present after delete", name)
+	}
+}
+
+func deleteTapVerified(mgr *fabric.Manager, ctx context.Context, name string) {
+	if err := mgr.DeleteTap(ctx, name); err != nil {
+		log.Printf("fabric: teardown: delete tap %s: %v", name, err)
+	} else if tapDeviceExists(name) {
+		log.Printf("fabric: teardown: tap %s still present after delete", name)
+	}
+}
+
 // startFabric realises the static-tap fabric for the current plan, BEFORE any
 // IOL spawns: it pre-creates every fabric-eligible IOL interface's tap
 // (persistent, owned by this uid, unbridged) and starts a netio<->tap iouyap for
@@ -105,8 +157,18 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 				delete(ll.tapBridges, t.netioPath)
 				ll.mu.Unlock()
 			}
+			existed := tapDeviceExists(t.tapName)
 			if err := mgr.EnsureTap(ctx, t.tapName, uid); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tap %s: %v", t.tapName, err)
+			}
+			// A static tap is unbridged until attachFabricLink wires it; if we
+			// just ADOPTED a pre-existing device (rather than creating a fresh
+			// one) and it's still carrying a bridge master, that membership is
+			// leftover from some earlier run, not this lab's own wiring. Strip
+			// it so this lab can never silently inherit another lab's traffic.
+			if existed && tapHasMaster(t.tapName) {
+				log.Printf("fabric: tap %s already existed and was still bridged; detaching stale membership", t.tapName)
+				_ = mgr.Detach(ctx, t.tapName)
 			}
 			cfg := iouyap.Config{
 				NetioPath:      t.netioPath,
@@ -291,8 +353,24 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 	if err != nil {
 		return protocol.Errorf(protocol.CodeBadRequest, "fabric bridge name link %d: %v", l.ID, err)
 	}
+	existed := tapDeviceExists(br)
 	if err := mgr.EnsureBridge(ctx, br); err != nil {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric bridge %s: %v", br, err)
+	}
+	// Bridge names are not lab-scoped (iolbr<linkid>, and link ids restart at
+	// 0 in every lab), so ADOPTING a pre-existing bridge here can mean we just
+	// inherited another lab's (or a crashed previous run's) leftover bridge,
+	// members and all. Strip every existing member before the loop below
+	// attaches this lab's own endpoints — any member that legitimately
+	// belongs to this link (e.g. a partial attach from earlier in this same
+	// session) is simply re-attached a moment later.
+	if existed {
+		if members, err := bridgeMembers(br); err == nil && len(members) > 0 {
+			log.Printf("fabric: bridge %s already existed with %d member(s); detaching before rewiring link %d", br, len(members), l.ID)
+			for _, m := range members {
+				_ = mgr.Detach(ctx, m)
+			}
+		}
 	}
 	for _, ep := range l.Endpoints {
 		node := ll.findNode(ep.Node)
@@ -508,7 +586,7 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 		}
 	}
 	if br, err := fabric.BridgeName(l.ID); err == nil {
-		_ = mgr.DeleteBridge(ctx, br)
+		deleteBridgeVerified(mgr, ctx, br)
 	}
 	ll.mu.Lock()
 	delete(ll.fabricLinks, l.ID)
@@ -536,10 +614,17 @@ func (s *Server) setupVPCSFabric(ll *loadedLab, nr *nodeRuntime, n *lab.Node) er
 	tapName := vtapDevName(n.ID)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
+	existed := tapDeviceExists(tapName)
 	if err := mgr.EnsureTap(ctx, tapName, currentUID()); err != nil {
 		s.udpPorts.Release(vpcsBind)
 		s.udpPorts.Release(shimBind)
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "vpcs %d tap %s: %v", n.ID, tapName, err)
+	}
+	// Same leftover-bridge-membership hazard as the IOL static taps (see
+	// startFabric): a VPCS shim tap name is also unscoped by lab id.
+	if existed && tapHasMaster(tapName) {
+		log.Printf("fabric: vpcs tap %s already existed and was still bridged; detaching stale membership", tapName)
+		_ = mgr.Detach(ctx, tapName)
 	}
 	shim, err := vtap.Start(tapName, shimBind, vpcsBind)
 	if err != nil {
@@ -666,7 +751,7 @@ func (s *Server) teardownVPCS(nr *nodeRuntime) {
 		nr.vtap = nil
 	}
 	if nr.vtapName != "" {
-		_ = fabric.NewManager().DeleteTap(context.Background(), nr.vtapName)
+		deleteTapVerified(fabric.NewManager(), context.Background(), nr.vtapName)
 		nr.vtapName = ""
 	}
 	if nr.vtapPorts[0] != 0 {
@@ -717,12 +802,12 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	ctx := context.Background()
 	for id := range links {
 		if br, err := fabric.BridgeName(id); err == nil {
-			_ = mgr.DeleteBridge(ctx, br)
+			deleteBridgeVerified(mgr, ctx, br)
 		}
 	}
 	for _, m := range taps {
 		for _, t := range m {
-			_ = mgr.DeleteTap(ctx, t.tapName)
+			deleteTapVerified(mgr, ctx, t.tapName)
 		}
 	}
 	for _, nr := range nodes {

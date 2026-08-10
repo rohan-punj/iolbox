@@ -39,13 +39,14 @@ type Process struct {
 	Spec    Spec
 	Machine *Machine
 
-	mu   sync.Mutex
-	cmd  *exec.Cmd
-	ptmx *os.File     // pty master (IOL only); the node's console I/O flows through this
-	ln   net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
-	hub  *consoleHub  // multi-client console fan-out over ptmx (IOL only)
-	pgid int          // process group id to kill on Stop (VPCS: the daemonized group)
-	done chan struct{}
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	ptmx    *os.File     // pty master (IOL only); the node's console I/O flows through this
+	ln      net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
+	hub     *consoleHub  // multi-client console fan-out over ptmx (IOL only)
+	pgid    int          // process group id to kill on Stop (VPCS: the daemonized group)
+	done    chan struct{}
+	stopped bool // true once Stop() has been called on THIS instance — see wait()/ReapDecision
 }
 
 // Spawn launches the node described by spec, dispatching to the console model
@@ -412,21 +413,22 @@ func (p *Process) serveConsole() {
 	}
 }
 
-// wait reaps the process and updates state on exit, then tears down the console.
+// wait reaps the process and updates state on exit, then tears down the
+// console. Whether this exit gets applied to the shared Machine is decided by
+// ReapDecision from p.stopped (a fact fixed the instant Stop() ran on THIS
+// Process, if ever) — NOT by re-reading the Machine's current state, which by
+// the time a killed process is actually reaped may already belong to an
+// entirely different, newer Process for the same node id (a fast
+// stop-then-restart of the node races this reaper against the new spawn; see
+// ReapDecision's doc for why that makes the live-state check wrong).
 func (p *Process) wait() {
 	err := p.cmd.Wait()
 	tool.Registry.Remove(p.cmd.Process.Pid)
-	// If we deliberately stopped it, state is already/soon Stopped; only mark
-	// crashed when still running/starting.
-	switch p.Machine.State() {
-	case StateStopped:
-		// expected shutdown
-	default:
-		if err != nil {
-			p.Machine.To(StateCrashed)
-		} else {
-			p.Machine.To(StateStopped)
-		}
+	p.mu.Lock()
+	stopped := p.stopped
+	p.mu.Unlock()
+	if st, ok := ReapDecision(stopped, err); ok {
+		p.Machine.To(st)
 	}
 	p.teardown()
 }
@@ -522,6 +524,7 @@ func (p *Process) Stop() error {
 	p.mu.Lock()
 	cmd := p.cmd
 	pgid := p.pgid
+	p.stopped = true
 	p.mu.Unlock()
 
 	p.Machine.To(StateStopped)

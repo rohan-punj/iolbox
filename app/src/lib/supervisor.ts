@@ -39,7 +39,9 @@ export class SupervisorError extends Error {
 export class SupervisorClient {
   private pending = new Map<string, PendingEntry>();
   private eventHandlers = new Set<(evt: SupervisorEvent) => void>();
+  private reconnectHandlers = new Set<() => void>();
   private unsubscribe: (() => void) | null = null;
+  private unsubscribeReconnect: (() => void) | null = null;
 
   constructor(private transport: Transport) {}
 
@@ -49,6 +51,7 @@ export class SupervisorClient {
 
   async connect(): Promise<HelloResult> {
     this.unsubscribe = this.transport.onMessage((frame) => this.onFrame(frame));
+    this.unsubscribeReconnect = this.transport.onReconnect(() => this.handleTransportReconnect());
     await this.transport.connect();
     return this.call<HelloResult>("hello", { client: "iolbox-gui/0.1.0" });
   }
@@ -56,12 +59,39 @@ export class SupervisorClient {
   disconnect() {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.unsubscribeReconnect?.();
+    this.unsubscribeReconnect = null;
     this.transport.disconnect();
   }
 
   onEvent(handler: (evt: SupervisorEvent) => void): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
+  }
+
+  /** Subscribe to transport reconnects (see Transport.onReconnect): any push
+   *  event the server sent during the drop is gone for good, so a subscriber
+   *  must re-sync its view of server state from scratch (re-query status,
+   *  etc.) rather than assume it's still current. Runs AFTER stale pending
+   *  calls are rejected (see onReconnect below), so a resync handler that
+   *  itself calls back into this client never collides with a doomed
+   *  pre-drop request sharing state. */
+  onReconnect(handler: () => void): () => void {
+    this.reconnectHandlers.add(handler);
+    return () => this.reconnectHandlers.delete(handler);
+  }
+
+  private handleTransportReconnect() {
+    // Every RPC sent before the drop is answered by a connection that no
+    // longer exists — the response, if the server even finished computing
+    // it, was written to a socket nobody is reading anymore. Without this,
+    // those callers hang forever (call() never times out on its own).
+    const stale = [...this.pending.values()];
+    this.pending.clear();
+    for (const entry of stale) {
+      entry.reject(new SupervisorError("disconnected", "connection dropped and reconnected before this call completed"));
+    }
+    for (const h of this.reconnectHandlers) h();
   }
 
   private onFrame(frame: Parameters<Parameters<Transport["onMessage"]>[0]>[0]) {

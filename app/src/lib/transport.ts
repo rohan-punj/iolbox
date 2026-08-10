@@ -15,6 +15,13 @@ export interface Transport {
   /** Tear down. */
   disconnect(): void;
   readonly connected: boolean;
+  /** Subscribe to reconnects: fires when connectivity is re-established after
+   *  having been lost (never on the initial connect()). Any event the server
+   *  pushed while disconnected is gone for good — there is no replay — so a
+   *  subscriber must treat this as "assume our view is stale, re-sync from
+   *  scratch" rather than "resume where we left off". Implementations that
+   *  never disconnect on their own (MockTransport) may no-op. */
+  onReconnect(handler: () => void): () => void;
 }
 
 export function isResponse(frame: IncomingFrame): frame is Response {

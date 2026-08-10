@@ -1,6 +1,7 @@
 package node
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,35 @@ func TestMachineCallback(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[0] != StateStarting || seen[1] != StateRunning {
 		t.Fatalf("callbacks: %v", seen)
+	}
+}
+
+// TestReapDecisionSkipsExplicitlyStoppedProcess pins the fix for a race where
+// a fast stop-then-restart of the same node id (e.g. "Stop all" immediately
+// followed by "Start all") could clobber a freshly-running node back to
+// Crashed: the OLD process's kill is asynchronous, so its background reaper
+// can return well after a NEW process (sharing the same Machine) has already
+// advanced it to Starting/Running. Deciding off "was Stop() ever called on
+// THIS process" rather than the Machine's live state must ignore the reap
+// entirely whenever Stop() ran, regardless of the wait() error or the
+// Machine's current state.
+func TestReapDecisionSkipsExplicitlyStoppedProcess(t *testing.T) {
+	if _, ok := ReapDecision(true, errors.New("signal: killed")); ok {
+		t.Fatal("an explicitly-stopped process's reap must apply no transition")
+	}
+	if _, ok := ReapDecision(true, nil); ok {
+		t.Fatal("an explicitly-stopped process's clean reap must also apply no transition")
+	}
+}
+
+func TestReapDecisionMarksUnexpectedExit(t *testing.T) {
+	st, ok := ReapDecision(false, errors.New("exit status 1"))
+	if !ok || st != StateCrashed {
+		t.Fatalf("unexpected exit with error must decide Crashed, got %v ok=%v", st, ok)
+	}
+	st, ok = ReapDecision(false, nil)
+	if !ok || st != StateStopped {
+		t.Fatalf("unexpected clean exit must decide Stopped, got %v ok=%v", st, ok)
 	}
 }
 
@@ -169,6 +199,12 @@ func TestVPCSArgv(t *testing.T) {
 	}
 	if !contains(joined, "-i 1 ") {
 		t.Fatalf("VPCS argv must contain -i <count>: %v", argv)
+	}
+	// -m <NodeID>: every VPCS node is its own process defaulting to the SAME
+	// MAC (00:50:79:66:68:00) without this, which breaks L2 forwarding for any
+	// lab with more than one VPCS node on a segment.
+	if !contains(joined, "-m 1 ") {
+		t.Fatalf("VPCS argv must contain -m <NodeID> so nodes get distinct MACs: %v", argv)
 	}
 	for _, a := range argv {
 		if a == "-N" {

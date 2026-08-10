@@ -47,11 +47,9 @@
   }
 
   // Start a fresh empty lab through the same open/load path (image reconcile +
-  // runtime reset). Guard against discarding unsaved work.
+  // runtime reset). openLab warns via SwitchLabDialog since this always
+  // replaces the current lab with a different (freshly-uuid'd) one.
   async function newLab() {
-    if (labStore.lab.nodes.length > 0 && !labStore.currentLabSaved) {
-      if (!confirm("The current lab hasn't been saved. Discard it and start a new lab?")) return;
-    }
     await labStore.openLab(emptyLab("Untitled lab"));
   }
 
@@ -93,9 +91,8 @@
     if (!file) return;
     try {
       const text = await file.text();
-      if (labStore.lab.nodes.length > 0 && !labStore.currentLabSaved) {
-        if (!confirm("The current lab hasn't been saved. Discard it and import this file?")) return;
-      }
+      // openLab (below) warns via SwitchLabDialog when the imported doc
+      // (always a fresh uuid) replaces a different current lab.
       // A YAML file is either a containerlab topology (has a top-level
       // `topology:` key) or a native iolbox lab; JSON is a legacy iolbox lab.
       const isJson = text.trimStart().startsWith("{");

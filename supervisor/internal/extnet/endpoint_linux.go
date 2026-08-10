@@ -63,7 +63,13 @@ const cmdTimeout = 20 * time.Second
 // runCmds executes each command (bare if we're already root, else via
 // `sudo -n` — see sudoArgv), wrapping the first failure with its combined
 // stderr so the caller sees exactly which privileged step failed and why. It
-// stops at the first error. Each command is bounded by cmdTimeout.
+// stops at the first error — EXCEPT a "sysctl" command (the disable_ipv6
+// hardening step in natBridgeTapCmds), which is best-effort: it stops IPv6
+// background noise from leaking into the emulated fabric (see
+// fabric.tapCreateCmds's doc for the full mechanism) but isn't load-bearing
+// for the NAT tap actually working, and a runtime without IPv6 support at
+// all must not fail every NAT start over a purely cosmetic step. Each
+// command is bounded by cmdTimeout.
 func runCmds(cmds []cmd) error {
 	for _, c := range cmds {
 		ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
@@ -80,6 +86,9 @@ func runCmds(cmds []cmd) error {
 			tool.Registry.Remove(cmd.Process.Pid)
 		}
 		cancel()
+		if len(c.args) > 0 && c.args[0] == "sysctl" && (err != nil || ctx.Err() == context.DeadlineExceeded) {
+			continue
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("extnet: `%s` timed out after %s "+
 				"(is the runtime hostname in /etc/hosts?): %s", c.String(), cmdTimeout, strings.TrimSpace(out.String()))

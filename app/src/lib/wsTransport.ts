@@ -28,12 +28,16 @@ const DEFAULT_URL = "ws://127.0.0.1:4001/control";
 export class WsTransport implements Transport {
   connected = false;
   private handlers = new Set<(frame: IncomingFrame) => void>();
+  private reconnectHandlers = new Set<() => void>();
   private ws: WebSocket | null = null;
   private url: string;
   private reconnect: boolean;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalClose = false;
+  /** True once this transport has completed at least one connect(); a later
+   *  successful open is therefore a RECONNECT (see onopen). */
+  private everConnected = false;
   /** Frames queued while the socket is (re)connecting. */
   private outbox: string[] = [];
 
@@ -59,6 +63,16 @@ export class WsTransport implements Transport {
         // Flush anything queued while connecting.
         for (const line of this.outbox) this.ws?.send(line);
         this.outbox = [];
+        // A prior connect() already completed (see everConnected) => this open
+        // is a RECONNECT after a drop, not the app's initial connect. Nothing
+        // pushed by the server during the gap was buffered anywhere (the
+        // server has no per-client replay log — see broadcaster.publish), so
+        // a subscriber's cached view of server state (node run-states, etc.)
+        // can be silently stale relative to reality. Tell them to re-sync.
+        if (this.everConnected) {
+          for (const h of this.reconnectHandlers) h();
+        }
+        this.everConnected = true;
         if (!settled) {
           settled = true;
           resolve();
@@ -91,12 +105,22 @@ export class WsTransport implements Transport {
     this.ws?.close();
     this.ws = null;
     this.handlers.clear();
+    this.reconnectHandlers.clear();
     this.outbox = [];
+    // An intentional disconnect ends this transport's session; a later
+    // connect() (a fresh session, not a network drop) must not fire
+    // reconnect handlers no one has re-subscribed yet.
+    this.everConnected = false;
   }
 
   onMessage(handler: (frame: IncomingFrame) => void): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  onReconnect(handler: () => void): () => void {
+    this.reconnectHandlers.add(handler);
+    return () => this.reconnectHandlers.delete(handler);
   }
 
   send(req: Request): void {
