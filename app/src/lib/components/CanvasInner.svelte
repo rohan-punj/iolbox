@@ -456,7 +456,7 @@
       return {
         id,
         kind,
-        name: `R${id}`,
+        name: `${img?.class === "l2" ? "SW" : "R"}${id}`,
         x: pos.x,
         y: pos.y,
         ram: 1024,

@@ -290,7 +290,7 @@
         {@html iconSvg(img.class === "l2" ? "switch" : "router", 28)}
       </span>
       <div class="item-text">
-        <div class="item-name">{img.filename}</div>
+        <div class="item-name">{img.class === "l2" ? "Switch" : "Router"}</div>
         <div class="item-sub">
           <span class="class-badge" class:l2={img.class === "l2"}>{img.class.toUpperCase()}</span>
           <span class="arch">{img.arch}</span>
