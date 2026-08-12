@@ -1231,9 +1231,24 @@ func (s *Server) handleNodeMACs(raw json.RawMessage) (any, error) {
 					continue
 				}
 
+				// Read the PEER's bucket, not this node's own. A tap's "received"
+				// direction is whatever THAT SIDE'S process writes into it (see
+				// dirstat_linux.go's readLoop) — for this node's own static tap,
+				// that's everything IOL itself transmits out this port, which for
+				// an actively-switching node includes flooded/relayed traffic from
+				// its OTHER ports, not just the device wired to this one. The peer
+				// endpoint's bucket holds only what the peer itself originates
+				// (single MAC for a leaf, or legitimately ambiguous if the peer is
+				// itself relaying for further devices) — that's the answer to
+				// "what's attached to this port." Found live: every occupied IOL
+				// port read "this port relays for other devices" even with exactly
+				// one leaf device wired to it, because the switch's own control
+				// traffic + flooded broadcasts from its other ports were being
+				// attributed to the port instead of the connected device.
+				peerIndex := 1 - endpointIndex
 				var match *dirstat.EndpointAttrib
 				for i := range attrib {
-					if attrib[i].EndpointIndex == endpointIndex {
+					if attrib[i].EndpointIndex == peerIndex {
 						match = &attrib[i]
 						break
 					}
