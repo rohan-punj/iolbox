@@ -71,7 +71,10 @@ func TestLoadPackRejectsManifestRules(t *testing.T) {
 	}{
 		{name: "missing health", want: "gui.health is required", edit: func(m *Manifest) { m.GUI.Health = "" }},
 		{name: "health must be path", want: "gui.health", edit: func(m *Manifest) { m.GUI.Health = "healthz" }},
-		{name: "NET_ADMIN is rejected", want: "NET_ADMIN", edit: func(m *Manifest) { m.Caps = []string{"NET_ADMIN"} }},
+		// NET_ADMIN is now allowlisted (see tool.go's AllowedCaps comment —
+		// added for the "pc" pack's addressing commands); SYS_ADMIN stays
+		// outside it and is what this case now guards.
+		{name: "SYS_ADMIN is rejected", want: "SYS_ADMIN", edit: func(m *Manifest) { m.Caps = []string{"SYS_ADMIN"} }},
 		{name: "unknown manifest version", want: "manifestVersion", edit: func(m *Manifest) { m.ManifestVersion = 2 }},
 		{
 			name: "traversal script",

@@ -102,9 +102,14 @@ func DefaultLimits() Limits {
 // ManifestVersion is the supported major version of a tool pack manifest.
 const ManifestVersion = 1
 
-// AllowedCaps is the complete manifest capability allowlist. NET_ADMIN is
-// intentionally absent: tool packs receive only ambient CAP_NET_RAW.
-var AllowedCaps = []string{"NET_RAW"}
+// AllowedCaps is the complete manifest capability allowlist. Each pack's own
+// pack.json caps (validated against this list by manifestCheckCaps, always a
+// subset) drive its actual ambient set at launch — see endpointLaunchSpec.
+// NET_ADMIN was added for the "pc" (netprobe) pack's `ip addr replace`/route
+// commands; it is scoped to that pack's own private network namespace (see
+// tool.go's package doc), so it can only manage interfaces inside that
+// namespace, never the host's real networking.
+var AllowedCaps = []string{"NET_RAW", "NET_ADMIN"}
 
 // Manifest is the supervisor-side metadata shipped as pack.json. It validates
 // node configuration and drives palette display; the supervisor never

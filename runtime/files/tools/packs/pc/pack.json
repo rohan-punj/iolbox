@@ -11,7 +11,7 @@
     "health": "/healthz",
     "proxyRoutes": [{ "prefix": "/", "allowWS": false }]
   },
-  "caps": ["NET_RAW"],
+  "caps": ["NET_RAW", "NET_ADMIN"],
   "options": [],
   "groups": ["addressing", "diagnostics", "services", "config"],
   "modules": [],

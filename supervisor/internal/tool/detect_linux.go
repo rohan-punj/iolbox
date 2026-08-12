@@ -267,8 +267,15 @@ func detectProbeTransition(nodeID int, cagePath string, cageFD *os.File) error {
 		Args:       []string{"-c", detectProbeCapabilityScript},
 		Env:        []string{"PATH=/usr/bin:/bin"},
 		User:       "ioltool",
+		// Manifest-style name (uppercase, no cap_ prefix) — matches
+		// tool.go's AllowedCaps and endpointLaunchSpec's real callers.
+		// This was harmlessly wrong as "cap_net_raw" before launchSetprivArgv
+		// derived its flags from AmbientCaps (it used to ignore the field
+		// entirely and hardcode "cap_net_raw" regardless) — now that
+		// AmbientCaps is authoritative, the wrong casing/prefix produced a
+		// garbage "+cap_cap_net_raw" setpriv flag and broke this probe.
 		AmbientCaps: []string{
-			"cap_net_raw",
+			"NET_RAW",
 		},
 	})
 	if err != nil {

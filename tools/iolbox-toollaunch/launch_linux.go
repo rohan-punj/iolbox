@@ -17,6 +17,7 @@ const (
 	capSetGid           = 6
 	capSetUid           = 7
 	capSetPcap          = 8
+	capNetAdmin         = 12
 	capNetRaw           = 13
 	capProbeLast        = 63
 	prSetNoNewPrivs     = 38
@@ -62,6 +63,8 @@ func capabilityName(cap int) string {
 		return "CAP_SETPCAP"
 	case capNetRaw:
 		return "CAP_NET_RAW"
+	case capNetAdmin:
+		return "CAP_NET_ADMIN"
 	default:
 		return fmt.Sprintf("cap %d", cap)
 	}
@@ -104,19 +107,48 @@ func effectiveHas(sets capSets, cap int) bool {
 	return sets[1].Effective&(1<<uint(cap-32)) != 0
 }
 
+func capNumberContains(caps []int, cap int) bool {
+	for _, c := range caps {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveCapNumbers converts the validated cap_* names main.go already
+// checked against knownCapNumbers into their Linux capability numbers.
+// Malformed input here would be a programming error (main.go's
+// parseCapsList is the actual validation gate), not a runtime condition, so
+// an unresolvable name is a loud panic rather than a silent skip.
+func resolveCapNumbers(names []string) []int {
+	nums := make([]int, 0, len(names))
+	for _, name := range names {
+		n, ok := knownCapNumbers[name]
+		if !ok {
+			panic(fmt.Sprintf("iolbox-toollaunch: unresolvable capability %q reached launch_linux.go (should have been rejected by parseCapsList)", name))
+		}
+		nums = append(nums, n)
+	}
+	return nums
+}
+
 // requireStartingPrivilege fails loudly, and by name, when the launcher was
 // started without the authority its own transition needs. p0-launcher is
 // always spawned pre-uid-switch as root, so a miss here means something
 // upstream (a container's default capability mask, an inherited securebits
 // setting, or a bounding-set drop by a parent) already took the capability
 // away -- which is a very different failure from a malformed capset call.
-func requireStartingPrivilege() error {
+// reqCaps is this launch's requested ambient set (e.g. just CAP_NET_RAW, or
+// CAP_NET_RAW+CAP_NET_ADMIN for the netprobe pack) -- checked in addition to
+// the fixed set the transition itself always needs (SETPCAP/SETUID/SETGID).
+func requireStartingPrivilege(reqCaps []int) error {
 	sets, err := capGet()
 	if err != nil {
 		return newLaunchFailure(launchExitCapGet, "capget", err)
 	}
 	var missing []string
-	for _, cap := range []int{capSetPcap, capSetUid, capSetGid, capNetRaw} {
+	for _, cap := range append([]int{capSetPcap, capSetUid, capSetGid}, reqCaps...) {
 		if !effectiveHas(sets, cap) {
 			missing = append(missing, capabilityName(cap))
 		}
@@ -152,7 +184,8 @@ func requireStartingPrivilege() error {
 // The previous ordering ran capset() before the uid switch with an empty
 // effective set, which would have made setgroups/setgid/setuid fail EPERM even
 // if the capset call itself had been well-formed.
-func launchTransition(name, target string, args []string) error {
+func launchTransition(name, target string, args []string, capNames []string) error {
+	reqCaps := resolveCapNumbers(capNames)
 	account, err := user.Lookup(name)
 	if err != nil {
 		return newLaunchFailure(launchExitLookupUser, "lookup user", fmt.Errorf("lookup user %q: %w", name, err))
@@ -173,7 +206,7 @@ func launchTransition(name, target string, args []string) error {
 	// matching UnlockOSThread: this thread execve()s.
 	runtime.LockOSThread()
 
-	if err := requireStartingPrivilege(); err != nil {
+	if err := requireStartingPrivilege(reqCaps); err != nil {
 		return err
 	}
 
@@ -187,7 +220,7 @@ func launchTransition(name, target string, args []string) error {
 	}
 
 	for cap := 0; cap <= capProbeLast; cap++ {
-		if cap == capNetRaw {
+		if capNumberContains(reqCaps, cap) {
 			continue
 		}
 		// EINVAL just means this kernel has no such capability number.
@@ -206,12 +239,20 @@ func launchTransition(name, target string, args []string) error {
 		return newLaunchFailure(launchExitSetuid, "setuid", fmt.Errorf("setuid %d: %w", uid, errno))
 	}
 
-	raw := uint64(1) << capNetRaw
-	if err := capApply(raw, raw, raw); err != nil {
+	var mask uint64
+	for _, cap := range reqCaps {
+		mask |= uint64(1) << uint(cap)
+	}
+	if err := capApply(mask, mask, mask); err != nil {
 		return newLaunchFailure(launchExitCapset, "capset", err)
 	}
-	if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prCapAmbient, prCapAmbientRaise, capNetRaw, 0, 0, 0); errno != 0 {
-		return newLaunchFailure(launchExitAmbient, "PR_CAP_AMBIENT_RAISE", fmt.Errorf("PR_CAP_AMBIENT_RAISE %s: %w", capabilityName(capNetRaw), errno))
+	// PR_CAP_AMBIENT_RAISE takes exactly one capability per call (unlike the
+	// single combined-bitmask capset above), so this needs one call per
+	// requested capability.
+	for _, cap := range reqCaps {
+		if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prCapAmbient, prCapAmbientRaise, uintptr(cap), 0, 0, 0); errno != 0 {
+			return newLaunchFailure(launchExitAmbient, "PR_CAP_AMBIENT_RAISE", fmt.Errorf("PR_CAP_AMBIENT_RAISE %s: %w", capabilityName(cap), errno))
+		}
 	}
 
 	return newLaunchFailure(launchExitExec, "execve", fmt.Errorf("execve %q: %w", target,

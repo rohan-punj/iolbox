@@ -12,9 +12,38 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
-const usageText = "usage: iolbox-toollaunch [--cgroup PATH] --user USER --caps cap_net_raw -- TARGET [ARGS...]"
+const usageText = "usage: iolbox-toollaunch [--cgroup PATH] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
+
+// knownCapNumbers is the portable name->Linux-capability-number map (plain
+// integers, not syscalls, so this stays buildable on every platform even
+// though only launch_linux.go's capApply/PR_CAP_AMBIENT_RAISE calls actually
+// use the numbers). Keep this in sync with supervisor/internal/tool.AllowedCaps
+// (uppercase, no cap_ prefix there) — every name the supervisor can request
+// must resolve here or the native launcher rejects it outright.
+var knownCapNumbers = map[string]int{
+	"cap_net_raw":   13,
+	"cap_net_admin": 12,
+}
+
+// parseCapsList validates a comma-separated --caps value against
+// knownCapNumbers. An empty string is valid (zero capabilities — most tool
+// packs declare caps:[] and get none at all).
+func parseCapsList(value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var caps []string
+	for _, name := range strings.Split(value, ",") {
+		if _, ok := knownCapNumbers[name]; !ok {
+			return nil, fmt.Errorf("--caps: unknown capability %q", name)
+		}
+		caps = append(caps, name)
+	}
+	return caps, nil
+}
 
 const (
 	launchExitUsage       = 2
@@ -39,6 +68,7 @@ const (
 type launchOptions struct {
 	cgroup string
 	user   string
+	caps   []string
 	target string
 	args   []string
 }
@@ -70,7 +100,7 @@ func main() {
 		os.Exit(launchExitUsage)
 	}
 
-	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup); err != nil {
+	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.caps); err != nil {
 		code := launchExitExec
 		var failure *launchFailure
 		if errors.As(err, &failure) {
@@ -109,9 +139,14 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 			seenUser = true
 			i++
 		case "--caps":
-			if seenCaps || i+1 >= len(argv) || argv[i+1] != "cap_net_raw" {
-				return launchOptions{}, errors.New("--caps must be exactly cap_net_raw")
+			if seenCaps || i+1 >= len(argv) || argv[i+1] == "--" {
+				return launchOptions{}, errors.New("--caps requires a value before --")
 			}
+			caps, err := parseCapsList(argv[i+1])
+			if err != nil {
+				return launchOptions{}, err
+			}
+			opts.caps = caps
 			seenCaps = true
 			i++
 		default:
@@ -126,7 +161,7 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 		return launchOptions{}, errors.New("--user is required")
 	}
 	if !seenCaps {
-		return launchOptions{}, errors.New("--caps cap_net_raw is required")
+		return launchOptions{}, errors.New("--caps is required (comma-separated cap_* names, or empty)")
 	}
 	if separator+1 >= len(argv) || argv[separator+1] == "" {
 		return launchOptions{}, errors.New("target is required after --")
@@ -156,12 +191,12 @@ func writeCgroupMembership(cgroupPath string) error {
 	return nil
 }
 
-func launchAs(user, target string, args []string, cgroupPath string) error {
+func launchAs(user, target string, args []string, cgroupPath string, caps []string) error {
 	if user == "" || target == "" {
 		return newLaunchFailure(launchExitUsage, "arguments", errors.New("user and target are required"))
 	}
 	if err := writeCgroupMembership(cgroupPath); err != nil {
 		return err
 	}
-	return launchTransition(user, target, args)
+	return launchTransition(user, target, args, caps)
 }

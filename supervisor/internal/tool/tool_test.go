@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -333,11 +332,32 @@ func TestPIDRegistryStartAndAddExcludesReap(t *testing.T) {
 	r.ReapUnregistered(99, func(int) { t.Fatal("reaped a registered direct child") })
 }
 
+// TestAllowedCaps guards the actual security property — the allowlist stays
+// a short, explicit, network-scoped set (not a broad "give packs whatever
+// they ask for") — rather than pinning it to a single historical value.
+// NET_ADMIN was added deliberately for the "pc" pack's addressing commands
+// (scoped to that pack's own private netns; see tool.go's AllowedCaps
+// comment), so this must NOT regress back to asserting NET_ADMIN is absent.
 func TestAllowedCaps(t *testing.T) {
-	if !reflect.DeepEqual(AllowedCaps, []string{"NET_RAW"}) {
-		t.Fatalf("AllowedCaps = %#v", AllowedCaps)
+	want := map[string]bool{"NET_RAW": true, "NET_ADMIN": true}
+	if len(AllowedCaps) != len(want) {
+		t.Fatalf("AllowedCaps = %#v, want exactly %v", AllowedCaps, want)
 	}
-	if strings.Contains(strings.Join(AllowedCaps, ","), "NET_ADMIN") {
-		t.Fatal("NET_ADMIN is grantable")
+	for _, cap := range AllowedCaps {
+		if !want[cap] {
+			t.Fatalf("AllowedCaps contains unexpected capability %q — every addition here is a real privilege grant, widen deliberately", cap)
+		}
+	}
+}
+
+// TestAllowedCapsRejectsOutOfAllowlist confirms manifestCheckCaps still
+// rejects a manifest that asks for something outside AllowedCaps — the
+// actual enforcement point, not just the list's contents.
+func TestAllowedCapsRejectsOutOfAllowlist(t *testing.T) {
+	if err := manifestCheckCaps([]string{"SYS_ADMIN"}); err == nil {
+		t.Fatal("manifestCheckCaps accepted SYS_ADMIN, which is not in AllowedCaps")
+	}
+	if err := manifestCheckCaps([]string{"NET_RAW", "NET_ADMIN"}); err != nil {
+		t.Fatalf("manifestCheckCaps rejected an allowlisted pair: %v", err)
 	}
 }

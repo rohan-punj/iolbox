@@ -276,6 +276,10 @@ func (e *Endpoint) endpointLaunchSpec() LaunchSpec {
 	if e.endpointCfg.CLISocket {
 		env = append(env, "IOLBOX_PC_CLI_SOCK="+CLISocketFile(e.endpointCfg.RunDir, e.endpointCfg.NodeID))
 	}
+	// Ambient caps are exactly what this pack's manifest declared (already
+	// validated as a subset of AllowedCaps by manifestCheckCaps at load
+	// time), not a blanket "every pack gets NET_RAW" grant — most packs
+	// declare caps:[] and get none at all.
 	return LaunchSpec{
 		NodeID:      e.endpointCfg.NodeID,
 		Netns:       NetnsName(e.endpointCfg.NodeID),
@@ -284,7 +288,7 @@ func (e *Endpoint) endpointLaunchSpec() LaunchSpec {
 		Binary:      e.endpointCfg.Pack.GUIBin,
 		Env:         env,
 		User:        e.endpointCfg.User,
-		AmbientCaps: []string{"NET_RAW"},
+		AmbientCaps: e.endpointCfg.Pack.Manifest.Caps,
 		WorkDir:     e.endpointCfg.Pack.Root,
 	}
 }

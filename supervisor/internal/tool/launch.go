@@ -65,19 +65,45 @@ func ScrubEnv(extra map[string]string) []string {
 	return env
 }
 
+// capFlagValue turns a manifest-style ambient-cap list ("NET_RAW",
+// "NET_ADMIN", ...) into setpriv's "-all,+cap_x,+cap_y" flag value, lowercase
+// and cap_-prefixed as setpriv expects. Empty/nil caps produces "-all" (drop
+// everything, grant nothing) rather than silently keeping any capability.
+func capFlagValue(caps []string) string {
+	parts := make([]string, 0, len(caps)+1)
+	parts = append(parts, "-all")
+	for _, c := range caps {
+		parts = append(parts, "+cap_"+strings.ToLower(c))
+	}
+	return strings.Join(parts, ",")
+}
+
+// capListValue turns the same list into the native helper's comma-separated
+// "cap_x,cap_y" form (no leading -all — the helper's own bounding-set starts
+// empty by construction, see tools/iolbox-toollaunch). Empty/nil caps
+// produces "" (no capabilities).
+func capListValue(caps []string) string {
+	parts := make([]string, 0, len(caps))
+	for _, c := range caps {
+		parts = append(parts, "cap_"+strings.ToLower(c))
+	}
+	return strings.Join(parts, ",")
+}
+
 // launchSetprivArgv builds the pinned util-linux transition. Keeping this
 // builder free of Linux syscalls lets portable tests verify the security-
 // sensitive flag order even though process construction is Linux-only.
 func launchSetprivArgv(spec LaunchSpec) []string {
+	capFlag := capFlagValue(spec.AmbientCaps)
 	argv := []string{
 		"setpriv",
 		"--reuid", "ioltool",
 		"--regid", "ioltool",
 		"--clear-groups",
 		"--no-new-privs",
-		"--bounding-set", "-all,+cap_net_raw",
-		"--inh-caps", "-all,+cap_net_raw",
-		"--ambient-caps", "-all,+cap_net_raw",
+		"--bounding-set", capFlag,
+		"--inh-caps", capFlag,
+		"--ambient-caps", capFlag,
 		"--",
 		spec.Binary,
 	}
@@ -92,7 +118,7 @@ func launchNativeArgv(spec LaunchSpec, withCgroup bool) []string {
 	if withCgroup {
 		argv = append(argv, "--cgroup", spec.CgroupPath)
 	}
-	argv = append(argv, "--user", "ioltool", "--caps", "cap_net_raw", "--", spec.Binary)
+	argv = append(argv, "--user", "ioltool", "--caps", capListValue(spec.AmbientCaps), "--", spec.Binary)
 	return append(argv, spec.Args...)
 }
 

@@ -8,7 +8,7 @@ import (
 )
 
 func TestLaunchSetprivArgvOrder(t *testing.T) {
-	spec := LaunchSpec{Binary: "/opt/pack/tool", Args: []string{"--listen", "eth1"}}
+	spec := LaunchSpec{Binary: "/opt/pack/tool", Args: []string{"--listen", "eth1"}, AmbientCaps: []string{"NET_RAW"}}
 	want := []string{
 		"setpriv",
 		"--reuid", "ioltool",
@@ -25,8 +25,34 @@ func TestLaunchSetprivArgvOrder(t *testing.T) {
 	}
 }
 
+// TestLaunchSetprivArgvMultiCap covers the netprobe pack (NET_RAW + NET_ADMIN
+// — see tool.go's AllowedCaps comment) and confirms caps compose in
+// declaration order rather than being clamped to a single hardcoded value.
+func TestLaunchSetprivArgvMultiCap(t *testing.T) {
+	spec := LaunchSpec{Binary: "/opt/pack/pc-gui", AmbientCaps: []string{"NET_RAW", "NET_ADMIN"}}
+	got := launchSetprivArgv(spec)
+	want := "-all,+cap_net_raw,+cap_net_admin"
+	for _, flag := range []string{"--bounding-set", "--inh-caps", "--ambient-caps"} {
+		if !launchContainsInOrder(got, flag, want) {
+			t.Fatalf("argv %#v missing %q %q", got, flag, want)
+		}
+	}
+}
+
+// TestLaunchSetprivArgvNoCaps covers the common case (most packs declare
+// caps:[]) — must drop everything, not silently fall back to any capability.
+func TestLaunchSetprivArgvNoCaps(t *testing.T) {
+	spec := LaunchSpec{Binary: "/opt/pack/tool"}
+	got := launchSetprivArgv(spec)
+	for _, flag := range []string{"--bounding-set", "--inh-caps", "--ambient-caps"} {
+		if !launchContainsInOrder(got, flag, "-all") {
+			t.Fatalf("argv %#v missing %q %q", got, flag, "-all")
+		}
+	}
+}
+
 func TestLaunchArgvNamespaceTransitionTargetOrder(t *testing.T) {
-	spec := LaunchSpec{NodeID: 7, Binary: "/opt/pack/tool", Args: []string{"--serve"}}
+	spec := LaunchSpec{NodeID: 7, Binary: "/opt/pack/tool", Args: []string{"--serve"}, AmbientCaps: []string{"NET_RAW"}}
 	got := NetnsExecArgs(spec.NodeID, launchSetprivArgv(spec))
 	want := []string{
 		"ip", "netns", "exec", "iolt7",
@@ -47,9 +73,10 @@ func TestLaunchArgvNamespaceTransitionTargetOrder(t *testing.T) {
 
 func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 	spec := LaunchSpec{
-		CgroupPath: "/sys/fs/cgroup/tool-7",
-		Binary:     "/opt/pack/tool",
-		Args:       []string{"--serve"},
+		CgroupPath:  "/sys/fs/cgroup/tool-7",
+		Binary:      "/opt/pack/tool",
+		Args:        []string{"--serve"},
+		AmbientCaps: []string{"NET_RAW"},
 	}
 	want := []string{
 		"/opt/iolbox/iolbox-toollaunch",
@@ -59,6 +86,16 @@ func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 	}
 	if got := launchNativeArgv(spec, true); !reflect.DeepEqual(got, want) {
 		t.Fatalf("native argv = %#v, want %#v", got, want)
+	}
+}
+
+// TestLaunchNativeArgvMultiCap covers the native-launcher path with the same
+// two-capability pack as TestLaunchSetprivArgvMultiCap.
+func TestLaunchNativeArgvMultiCap(t *testing.T) {
+	spec := LaunchSpec{Binary: "/opt/pack/pc-gui", AmbientCaps: []string{"NET_RAW", "NET_ADMIN"}}
+	got := launchNativeArgv(spec, false)
+	if !launchContainsInOrder(got, "--caps", "cap_net_raw,cap_net_admin") {
+		t.Fatalf("native argv %#v missing --caps cap_net_raw,cap_net_admin", got)
 	}
 }
 
