@@ -445,6 +445,18 @@ chroot "$ROOTFS_DIR" systemctl enable systemd-networkd.service 2>/dev/null || \
 install -d -m 0755 "$ROOTFS_DIR/etc/sysctl.d"
 install -m 0644 "$SCRIPT_DIR/files/99-iolbox.conf" "$ROOTFS_DIR/etc/sysctl.d/99-iolbox.conf"
 
+# The tun module is NOT auto-loaded by this minbase image (no udev rule/
+# alias triggers it — that normally happens lazily on first /dev/net/tun
+# open, which requires the node ALREADY EXISTS, chicken-and-egg). Without
+# it, every `ip tuntap add` the bridge-fabric manager and extnet run at
+# lab/NAT start fails with "open: no such file or directory" on
+# /dev/net/tun, which never gets created — found live on a freshly booted
+# appliance (VPCS and IOL nodes alike refused to start; `modprobe tun` by
+# hand fixed it instantly). systemd-modules-load.service is enabled by
+# default in this image; it just needs something to load.
+install -d -m 0755 "$ROOTFS_DIR/etc/modules-load.d"
+printf 'tun\n' > "$ROOTFS_DIR/etc/modules-load.d/iolbox.conf"
+
 # Static hostname — deliberately boring/fixed, and LOAD-BEARING twice
 # over: (1) the firstboot iourc is keyed "iolbox = <key>" and IOL checks it
 # against the running hostname; (2) the "127.0.1.1 iolbox" /etc/hosts line
