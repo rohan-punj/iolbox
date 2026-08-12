@@ -92,8 +92,15 @@ func serveUDP(conn *net.UDPConn, echo bool) {
 	}
 }
 
+// tcpDialTimeout bounds "tcp connect" against a host that silently drops SYNs
+// instead of sending RST (e.g. VPCS's minimal stack on a closed port) — the
+// CLI connection handles one command at a time, so an unbounded net.Dial
+// here would hang the *entire* console (every other command too) for
+// however long the OS keeps retransmitting SYNs (~127s by default on Linux).
+const tcpDialTimeout = 5 * time.Second
+
 func (m *SocketManager) ConnectTCP(host string, port int) (int, error) {
-	conn, err := net.Dial("tcp4", net.JoinHostPort(host, strconv.Itoa(port)))
+	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(host, strconv.Itoa(port)), tcpDialTimeout)
 	if err != nil {
 		return 0, err
 	}

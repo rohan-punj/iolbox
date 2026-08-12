@@ -42,6 +42,10 @@ func handleCLIConnection(conn net.Conn, app *App) {
 	var hist []string
 	pos := -1
 	var pending []byte
+	// justDispatchedCR pairs a CRLF line ending across two ReadByte calls so
+	// pasted Windows-style text doesn't dispatch an extra empty line for the
+	// \n half — see the CRLF check in the main loop below.
+	justDispatchedCR := false
 
 	redraw := func(next []byte) {
 		for range line {
@@ -95,10 +99,20 @@ func handleCLIConnection(conn net.Conn, app *App) {
 			}
 			continue
 		}
+		if b == '\n' && justDispatchedCR {
+			// The other half of a CRLF line ending (paste of Windows-style
+			// text, or a client that sends both bytes for Enter) — \r just
+			// below already dispatched this line; treat this \n as inert
+			// instead of dispatching a second, empty line.
+			justDispatchedCR = false
+			continue
+		}
+		justDispatchedCR = false
 		switch {
 		case b == 0x1b: // ESC — start of a possible arrow-key sequence
 			esc = 1
 		case b == '\r' || b == '\n':
+			justDispatchedCR = b == '\r'
 			_, _ = io.WriteString(conn, "\r\n"+dispatchLine(app, string(line))+"\r\n"+cliPrompt)
 			line = line[:0]
 			hist, pos, pending = nil, -1, nil
@@ -220,11 +234,11 @@ func commandIP(app *App, args []string) string {
 }
 
 func commandPing(args []string) string {
-	host, count, interval, size, ttl, ok := parsePingArgs(args)
+	host, count, interval, size, ttl, df, ok := parsePingArgs(args)
 	if !ok {
-		return malformed("ping <host> [-c <n>] [-i <ms>] [-s <bytes>] [-t <ttl>]")
+		return malformed("ping <host> [-c <n>] [-i <ms>] [-s <bytes>] [-t <ttl>] [-D]")
 	}
-	return pingHost(host, count, interval, size, ttl)
+	return pingHost(host, count, interval, size, ttl, df)
 }
 
 func commandTrace(args []string) string {
@@ -269,19 +283,24 @@ func commandDNS(args []string) string {
 	return dnsQuery(args[0], typeName, server)
 }
 
-func parsePingArgs(args []string) (string, int, int, int, int, bool) {
+func parsePingArgs(args []string) (string, int, int, int, int, bool, bool) {
+	fail := func() (string, int, int, int, int, bool, bool) { return "", 0, 0, 0, 0, false, false }
 	if len(args) < 1 {
-		return "", 0, 0, 0, 0, false
+		return fail()
 	}
 	host := args[0]
-	count, interval, size, ttl := 5, 1000, 56, 64
-	for i := 1; i < len(args); i += 2 {
+	count, interval, size, ttl, df := 5, 1000, 56, 64, false
+	for i := 1; i < len(args); i++ {
+		if args[i] == "-D" {
+			df = true
+			continue
+		}
 		if i+1 >= len(args) || (args[i] != "-c" && args[i] != "-i" && args[i] != "-s" && args[i] != "-t") {
-			return "", 0, 0, 0, 0, false
+			return fail()
 		}
 		n, err := strconv.Atoi(args[i+1])
 		if err != nil || n < 1 || n > 65535 {
-			return "", 0, 0, 0, 0, false
+			return fail()
 		}
 		switch args[i] {
 		case "-c":
@@ -293,11 +312,12 @@ func parsePingArgs(args []string) (string, int, int, int, int, bool) {
 		case "-t":
 			ttl = n
 		}
+		i++
 	}
 	if count > 100 || size > 1500 || ttl > 255 {
-		return "", 0, 0, 0, 0, false
+		return fail()
 	}
-	return host, count, interval, size, ttl, true
+	return host, count, interval, size, ttl, df, true
 }
 
 func splitSavedCommands(value string) []string {

@@ -21,5 +21,6 @@ func (c *icmpConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 func (c *icmpConn) ReadFrom(b []byte) (int, net.Addr, error) { return c.conn.ReadFromIP(b) }
 func (c *icmpConn) SetTTL(_ int) error                       { return nil }
+func (c *icmpConn) SetDF(_ bool) error                       { return nil }
 func (c *icmpConn) SetReadDeadline(deadline time.Time) error { return c.conn.SetReadDeadline(deadline) }
 func (c *icmpConn) Close() error                             { return c.conn.Close() }

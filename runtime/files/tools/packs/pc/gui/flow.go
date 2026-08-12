@@ -100,7 +100,7 @@ func runFlow(spec FlowSpec, stop <-chan struct{}) {
 				_, _ = conn.Write(payload)
 				_ = conn.Close()
 			}
-		} else if conn, err := net.Dial("tcp4", net.JoinHostPort(spec.Host, strconv.Itoa(spec.Port))); err == nil {
+		} else if conn, err := net.DialTimeout("tcp4", net.JoinHostPort(spec.Host, strconv.Itoa(spec.Port)), tcpDialTimeout); err == nil {
 			_, _ = conn.Write(payload)
 			_ = conn.Close()
 		}

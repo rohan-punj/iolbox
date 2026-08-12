@@ -10,7 +10,7 @@ type cliCommand struct {
 var cliCommands = []cliCommand{
 	{Group: "Addressing", Name: "ip", Usage: "ip <addr>/<prefix> [<gateway>] | ip dhcp [-r]", Description: "Configure a static IPv4 address or request DHCP."},
 	{Group: "Addressing", Name: "show ip", Usage: "show ip", Description: "Show address, gateway, MAC, MTU, DHCP, and lease details."},
-	{Group: "Diagnostics", Name: "ping", Usage: "ping <host> [-c <n>] [-i <ms>] [-s <bytes>] [-t <ttl>]", Description: "Send ICMP echo requests."},
+	{Group: "Diagnostics", Name: "ping", Usage: "ping <host> [-c <n>] [-i <ms>] [-s <bytes>] [-t <ttl>] [-D]", Description: "Send ICMP echo requests. -s sets payload size in bytes, -D sets the don't-fragment bit."},
 	{Group: "Diagnostics", Name: "trace", Usage: "trace <host> [-m <maxttl>] [-q <probes>]", Description: "Trace using ICMP probes and report the probe method."},
 	{Group: "Diagnostics", Name: "arp", Usage: "arp show | arp clear", Description: "Inspect or clear the neighbour table."},
 	{Group: "Services", Name: "dns", Usage: "dns <name> [A|AAAA|CNAME|PTR] [@<server>]", Description: "Query a DNS record."},

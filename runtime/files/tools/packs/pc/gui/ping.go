@@ -22,7 +22,7 @@ func icmpChecksum(data []byte) uint16 {
 	return ^uint16(sum)
 }
 
-func pingHost(host string, count, intervalMS, size, ttl int) string {
+func pingHost(host string, count, intervalMS, size, ttl int, df bool) string {
 	ip, err := net.ResolveIPAddr("ip4", host)
 	if err != nil {
 		return "% ping: " + err.Error()
@@ -32,7 +32,14 @@ func pingHost(host string, count, intervalMS, size, ttl int) string {
 		return "% ping: " + err.Error()
 	}
 	defer conn.Close()
-	lines := []string{fmt.Sprintf("PING %s (%s)", host, ip.IP)}
+	if err := conn.SetDF(df); err != nil {
+		return "% ping: " + err.Error()
+	}
+	header := fmt.Sprintf("PING %s (%s)", host, ip.IP)
+	if df {
+		header += " (DF set)"
+	}
+	lines := []string{header}
 	received := 0
 	var min, max, total time.Duration
 	for seq := 0; seq < count; seq++ {

@@ -1,6 +1,81 @@
 # iolbox redesign — handoff status
 
-**Update (2026-08-12, latest): three UI polish fixes, all live-verified on the VM.**
+**Update (2026-08-12, latest): netprobe `ping` couldn't reach anything — root-caused and
+fixed, then every netprobe CLI feature live-tested end-to-end.**
+
+Reported symptom: `ping` on a netprobe (PC) node failed with `write udp
+0.0.0.0:0->10.0.0.2: invalid argument` on every packet, right after `ip <addr>/<prefix>
+<gw>` had reported success. It looked like an addressing/binding problem (and the `ip`
+command's reply hardcodes "Address configured on eth1", which added to that impression),
+but the address, route, and interface were all confirmed correct on the VM (`ip netns exec
+iolt0 ping` — the real `ping` binary — worked fine from the same netns). The bug was
+entirely inside `pc-gui`'s own ICMP implementation:
+
+1. **Root cause 1 — wrong `net.Addr` type for a ping socket.**
+   [icmp_linux.go](../runtime/files/tools/packs/pc/gui/icmp_linux.go) opens an unprivileged
+   ICMP "ping socket" (`SOCK_DGRAM` + `IPPROTO_ICMP`). Go's `net.FilePacketConn` wraps *any*
+   `SOCK_DGRAM` fd as a `*net.UDPConn` internally — its family classifier keys off socket
+   type, not the IP protocol number — and `*net.UDPConn.WriteTo`/`ReadFrom` require a
+   `*net.UDPAddr`, not the `*net.IPAddr` that [ping.go](../runtime/files/tools/packs/pc/gui/ping.go)
+   and [trace.go](../runtime/files/tools/packs/pc/gui/trace.go) construct via
+   `net.ResolveIPAddr`. The failed type assertion inside `UDPConn.WriteTo` returns a
+   zero-valued `OpError{Op:"write", Net:"udp", Err:EINVAL}` — exactly the "invalid argument"
+   text observed, with a fake `0.0.0.0:0` local address because nothing was ever actually
+   sent. Fixed by converting at the `icmpConn` boundary (`*net.IPAddr` ⇄ `*net.UDPAddr`) so
+   `ping.go`/`trace.go` never need to know the underlying socket's real type. The
+   non-Linux fallback ([icmp_other.go](../runtime/files/tools/packs/pc/gui/icmp_other.go),
+   dev-only, backed by `net.DialIP`) was already correct — this only ever broke the actual
+   deployed Linux build, which is presumably why it shipped unnoticed.
+2. **Root cause 2 (found while adding `-D`) — `SetTTL`/`SetDF` used a closed fd.**
+   `openICMP()` creates the raw fd, wraps it via `os.NewFile` + `net.FilePacketConn`, then
+   closes the original `file` — but `net.FilePacketConn` **dup()s** the fd for its own
+   runtime-managed descriptor, so that close invalidates the `int` fd the code was still
+   holding onto for `syscall.SetsockoptInt` calls. `SetTTL`'s error was silently discarded
+   (`_ = conn.SetTTL(ttl)`), so this was already broken before today and just failed
+   invisibly (TTL was never actually being set). Adding `SetDF` — whose error path ping.go
+   correctly checks — turned that into a hard `bad file descriptor` failure blocking ping
+   entirely, which is what surfaced it. Fixed by reaching the *live* fd via
+   `c.pc.SyscallConn().Control(...)` instead of the stale original int, for both `SetTTL`
+   and the new `SetDF`.
+3. **Requested additions**: `ping` already had `-s <bytes>` (payload size); added `-D`
+   (sets `IP_PMTUDISC_DO` via the same live-fd path, reports "(DF set)" in the PING header).
+   Both documented in the `?`/`help` legend (`cli_help.go`), which is a single table-driven
+   list — adding a flag there is a one-line change.
+4. **Bonus finds from live-testing every command** (not the reported bug, but genuine
+   defects the same session surfaced):
+   - `tcp connect` had no dial timeout — connecting to a host that silently drops SYNs
+     instead of sending RST (e.g. VPCS's minimal stack on a closed port) hung the *entire*
+     CLI console — every other command too, since one connection handles commands
+     serially — for however long the OS keeps retrying (~127s default on Linux). Fixed
+     with a 5s `net.DialTimeout` (`sockets.go`, also applied to `flow.go`'s TCP path).
+     Verified: a `tcp connect` to an unresponsive host now fails in ~5s instead of hanging.
+   - The CLI's per-byte reader (`cli.go`'s `handleCLIConnection`) dispatches on *either*
+     `\r` or `\n`, so a client sending a literal CRLF (e.g. pasted Windows-line-ending text
+     into the console) triggers a phantom second dispatch on an empty line. Real xterm.js
+     (`ConsoleTerm.svelte`) only ever sends bare `\r` for Enter, so this never fires through
+     the normal UI, but paste could hit it. Fixed with a one-line CRLF-pairing guard.
+5. **Full feature sweep, live against the VM** (direct AF_UNIX socket to PC0's
+   `IOLBOX_PC_CLI_SOCK`, bypassing the browser terminal so exhaustive scripted testing
+   didn't fight with xterm.js): `?`/help, `ip`/`show ip`, `ping` (base, `-s`, `-D`, `-t`,
+   bad-hostname error path), `trace`, `arp show`/`clear`, `dns` (fails cleanly — no DNS
+   server reachable in this closed lab, expected), `tcp listen`/`connect`/`close`, `udp
+   listen`/`send`/`close`, `flow start`/`show`/`stop`, `save`, `reset` — all confirmed
+   working with correct output.
+6. **Unrelated cleanup found along the way**: an orphaned `syslog-gui` process (netns
+   `iolt4`, node "Tool4") was running with no corresponding supervisor-tracked lifecycle —
+   predates this session, unrelated to the fixes above. Reconciled via the node's own Stop
+   action (not a raw `kill`, after an initial reflexive kill turned out to be the wrong
+   move) rather than deleted — "Tool4"'s lab-document entry is still there for you to
+   decide whether to keep. Everything else confirmed clean (only `iolt0`/PC0's netns
+   remains, node/process states matched).
+
+`go vet`/`gofmt`/`go test ./...` clean on the `pc-gui` package throughout. Rebuilt and
+pushed just the `pc-gui` binary (not the whole supervisor — this pack is a separate
+cross-compile per the redeploy pattern below), restarted only PC0's process via its own
+Start/Stop, never touched `iolbox-supervisor`. Nothing committed to git — ask before
+committing.
+
+**Update (2026-08-12, three UI polish fixes, all live-verified on the VM):**
 
 1. **Netprobe (PC) node icon was boxed while VPCS's identical default icon rendered
    full-bleed.** [VpcsNode.svelte](../app/src/lib/nodes/VpcsNode.svelte) has always had

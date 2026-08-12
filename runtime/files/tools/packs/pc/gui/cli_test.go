@@ -183,7 +183,7 @@ func TestCLIMalformedOutput(t *testing.T) {
 		"ip nope":           "% Usage: ip <addr>/<prefix> [<gateway>]",
 		"ip dhcp -x":        "% Usage: ip dhcp [-r]",
 		"show nope":         "% Usage: show ip",
-		"ping 127.0.0.1 -c": "% Usage: ping <host> [-c <n>] [-i <ms>] [-s <bytes>] [-t <ttl>]",
+		"ping 127.0.0.1 -c": "% Usage: ping <host> [-c <n>] [-i <ms>] [-s <bytes>] [-t <ttl>] [-D]",
 		"trace":             "% Usage: trace <host> [-m <maxttl>] [-q <probes>]",
 		"dns":               "% Usage: dns <name> [A|AAAA|CNAME|PTR] [@<server>]",
 		"tcp nope":          "% Usage: tcp connect <host> <port> [-m <msg>] | tcp listen <port> [-e] | tcp close <port>",
