@@ -7,10 +7,18 @@
 
   const RAIL_ITEMS = [
     { key: "nodes", label: "Add Nodes", icon: "plus", panel: "nodes" as RailPanel },
-    { key: "actions", label: "Node Actions", icon: "tasks", panel: "actions" as RailPanel },
+    // "Node Actions" opens Start all/Stop all/Save configs/Console all/
+    // Force clean/Wipe all — session-wide run controls, not a checklist.
+    { key: "actions", label: "Node Actions", icon: "play", panel: "actions" as RailPanel },
     { key: "text", label: "Add Text", icon: "edit" },
-    { key: "shapes", label: "Add Shapes", icon: "net", panel: "shapes" as RailPanel },
-    { key: "tools", label: "Tools", icon: "more", panel: "tools" as RailPanel },
+    // Was "net" (a fork/branch glyph meant for the network-watcher chrome)
+    // reused here by accident — this button opens shape-drawing tools, so
+    // it needs an actual shapes glyph.
+    { key: "shapes", label: "Add Shapes", icon: "shapes", panel: "shapes" as RailPanel },
+    // Was "more" (3-dot), which the top bar's own overflow button already
+    // uses for "more options" — reusing it here read as a second overflow
+    // menu rather than "Tools" (network watcher / topology painter).
+    { key: "tools", label: "Tools", icon: "wrench", panel: "tools" as RailPanel },
   ] as const;
 
   let activeIndex = $state(0);

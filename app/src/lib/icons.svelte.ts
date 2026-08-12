@@ -127,6 +127,18 @@ export const UI_GLYPHS: Record<string, string> = {
   rectShape: '<rect x="4" y="6" width="16" height="12" rx="1.5"/>',
   ellipseShape: '<ellipse cx="12" cy="12" rx="8" ry="6"/>',
   lineShape: '<path d="M5 19 19 5"/><circle cx="5" cy="19" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="5" r="1.5" fill="currentColor" stroke="none"/>',
+  // Rail icon for the "Add Shapes" flyout button — an overlapping
+  // square+circle pair reads as "shapes" at a glance, unlike the single
+  // rectShape/ellipseShape glyphs above (each of those IS one specific
+  // shape, right for their own flyout row, wrong as the flyout's own
+  // launcher icon).
+  shapes: '<rect x="4" y="10" width="10" height="10" rx="1.5"/><circle cx="16" cy="8" r="4"/>',
+  // Rail icon for the "Tools" flyout (network watcher / topology painter) —
+  // a wrench, not the 3-dot "more" glyph (which the top bar's own overflow
+  // menu button already uses, so reusing it here reads as "more options"
+  // rather than "tools").
+  wrench:
+    '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2Z"/>',
   // Floppy-disk "save config" glyph.
   savecfg:
     '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 21v-6h8v6"/>',
