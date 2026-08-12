@@ -207,13 +207,16 @@
       },
       {
         id: "view-learned-mac-display",
-        label: macUiStore.learnIol
-          ? "Learned IOL MAC display: on"
-          : "Learned IOL MAC display: off",
+        // Static label, checkmark conveys state — matches every other
+        // checkable item in this menu (Auto-hide chrome, Snap grid,
+        // Free/Structured). Was "Learned IOL MAC display: on/off", which
+        // both baked the state into the text AND had the on/off tooltips
+        // swapped (off's tooltip described what on actually does).
+        label: "Detect IOL MAC addresses",
         checked: macUiStore.learnIol,
         title: macUiStore.learnIol
-          ? "Learned IOL MAC display is on — IOL addresses come from observed frames"
-          : "Learned IOL MAC display is off — IOL addresses are inferred from live traffic",
+          ? "IOL MAC addresses are inferred from observed live traffic (VPCS/PC addresses are always shown directly)"
+          : "IOL MAC addresses are not shown — VPCS/PC addresses are always shown directly",
         action: () => macUiStore.toggleLearnIol(),
       },
       separator("group-canvas", "Canvas"),
