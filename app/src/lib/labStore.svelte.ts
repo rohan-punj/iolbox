@@ -1052,13 +1052,18 @@ class LabStore {
     );
   }
 
-  /** Bounces a link: administratively down for a few seconds, then the
-   *  supervisor's own forSec expiry clears it automatically — a one-click
-   *  "unplug and replug the cable" for testing STP convergence, DHCP
-   *  renewal, etc., without the caller having to schedule the follow-up
-   *  clear itself. */
+  /** Takes a link administratively down until explicitly resumed — a
+   *  one-click "unplug the cable" for testing STP convergence, DHCP
+   *  renewal, etc. Pair with resumeLink() to "replug" it. */
   async terminateLink(linkId: number) {
-    await this.setLinkFault(linkId, { down: true }, undefined, 3);
+    await this.setLinkFault(linkId, { down: true });
+  }
+
+  /** Clears an administrative-down fault set by terminateLink() (or the
+   *  "Administratively down" checkbox in the fault dialog) — the manual
+   *  "replug the cable" counterpart. */
+  async resumeLink(linkId: number) {
+    await this.setLinkFault(linkId, null);
   }
 
   /** True when any link touching this node currently has an active fault

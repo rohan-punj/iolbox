@@ -898,6 +898,7 @@
     const link = labStore.lab.links.find((l) => l.id === menu.linkId);
     const capturing = link?.capture?.enabled ?? false;
     const unsupportedReason = link ? linkFaultUnsupportedReason(link) : "unknown link";
+    const isDown = Boolean(labStore.linkFaults[menu.linkId]?.active && labStore.linkFaults[menu.linkId]?.fault?.down);
     return [
       {
         id: "link-faults",
@@ -908,13 +909,21 @@
           labStore.showLinkFault = { linkId: menu.linkId };
         },
       },
-      {
-        id: "link-terminate",
-        label: "Terminate link",
-        disabled: Boolean(unsupportedReason),
-        title: unsupportedReason || "Briefly takes the link down, then brings it back up automatically (unplug/replug)",
-        action: () => void labStore.terminateLink(menu.linkId),
-      },
+      isDown
+        ? {
+            id: "link-resume",
+            label: "Resume link",
+            disabled: Boolean(unsupportedReason),
+            title: unsupportedReason || "Brings the link back up (replug the cable)",
+            action: () => void labStore.resumeLink(menu.linkId),
+          }
+        : {
+            id: "link-terminate",
+            label: "Terminate link",
+            disabled: Boolean(unsupportedReason),
+            title: unsupportedReason || "Takes the link down until resumed (unplug the cable)",
+            action: () => void labStore.terminateLink(menu.linkId),
+          },
       { id: "link-separator-faults", separator: true, label: "fault-menu-sep", action: () => {} },
       {
         id: "link-live-capture",
