@@ -94,6 +94,16 @@ const BUILTIN: Record<string, { label: string; inner: string; viewBox?: string }
     inner:
       '<circle cx="10" cy="12" r="7"/><path d="M3 12h14M10 5c2 2 2 12 0 14M10 5c-2 2-2 12 0 14"/><path d="M17 6h4v4M21 6l-5 5"/>',
   },
+  services: {
+    label: "Network Services",
+    inner:
+      '<circle cx="12" cy="12" r="3"/><path d="M12 3v6m0 6v6M3 12h6m6 0h6M5.6 5.6l4.3 4.3m4.2 4.2 4.3 4.3M18.4 5.6l-4.3 4.3m-4.2 4.2-4.3 4.3"/>',
+  },
+  syslog: {
+    label: "Syslog Server",
+    inner:
+      '<rect x="4" y="3" width="16" height="18" rx="1.5"/><path d="M8 7h8M8 11h8M8 15h5M8 19h8"/>',
+  },
   tool: {
     label: "Learning Tool",
     inner:

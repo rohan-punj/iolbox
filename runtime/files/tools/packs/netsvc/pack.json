@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "netsvc",
   "name": "Network Services",
-  "icon": "server",
+  "icon": "services",
   "interpreter": "none",
   "gui": {
     "bin": "netsvc-gui",

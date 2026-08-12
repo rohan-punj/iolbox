@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "syslog",
   "name": "Syslog Server",
-  "icon": "tool",
+  "icon": "syslog",
   "interpreter": "none",
   "gui": {
     "bin": "syslog-gui",

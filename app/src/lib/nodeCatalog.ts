@@ -12,11 +12,45 @@ export interface CatalogEntry {
   disabled?: string;
 }
 
+// Pack manifests share a small icon vocabulary, so keep the catalog mapping
+// explicit where two packs would otherwise inherit the same generic glyph.
+const TOOL_PACK_ICONS: Record<string, string> = {
+  aaa: "firewall",
+  httpclient: "cloud",
+  netsvc: "services",
+  secbench: "l3-switch",
+  syslog: "syslog",
+  webserver: "server",
+};
+
+const TOOL_PACK_SUBS: Record<string, string> = {
+  aaa: "Authentication",
+  httpclient: "HTTP requests",
+  netsvc: "DHCP · DNS · NTP",
+  secbench: "Security testing",
+  syslog: "Log collector",
+  webserver: "HTTP service",
+};
+
+const TOOL_PACK_SEARCH_TERMS: Record<string, string> = {
+  aaa: "aaa server authentication authorization accounting radius tacacs",
+  httpclient: "http client requests web fetch curl",
+  netsvc: "network services dhcp dns ntp tftp",
+  secbench: "security bench reconnaissance arp spoof dhcp stp vlan fhrp",
+  syslog: "syslog server logging logs collector",
+  webserver: "web server http https service",
+};
+
+function groupLabel(group: string): string {
+  return group.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function toolPackIcon(pack: { id: string; icon: string }): string {
+  return TOOL_PACK_ICONS[pack.id] ?? (pack.icon || "tool");
+}
+
 export function nodeCatalog(): CatalogEntry[] {
   const toolPacks = labStore.toolPacks;
-  const defaultToolPack =
-    ["webserver", "aaa", "httpclient"].find((id) => toolPacks.some((p) => p.id === id)) ??
-    toolPacks[0]?.id;
   const hasNat = labStore.features.includes("natgw");
   const natSlirp = labStore.egress === "slirp";
   const natEgressNote =
@@ -44,15 +78,22 @@ export function nodeCatalog(): CatalogEntry[] {
     },
   ];
 
-  if (toolPacks.length > 0 && defaultToolPack) {
+  for (const pack of toolPacks) {
+    if (pack.id === "stub") continue; // Internal test fixture, not user-facing.
+    const sub =
+      TOOL_PACK_SUBS[pack.id] ??
+      (pack.groups.length > 0 ? groupLabel(pack.groups[0]) : "Learning tool");
+    const searchTerms =
+      TOOL_PACK_SEARCH_TERMS[pack.id] ??
+      (pack.groups.length > 0 ? pack.groups.join(" ") : "learning tool");
     entries.push({
-      id: "tool",
+      id: `tool:${pack.id}`,
       group: "Services",
-      name: "Network tools",
-      sub: "Learning tool",
-      icon: "tool",
-      search: "network tools learning tool".toLowerCase(),
-      drag: { kind: "tool", packId: defaultToolPack },
+      name: pack.name,
+      sub,
+      icon: toolPackIcon(pack),
+      search: `${pack.name} ${searchTerms}`.toLowerCase(),
+      drag: { kind: "tool", packId: pack.id },
     });
   }
 

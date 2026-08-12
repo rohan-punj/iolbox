@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "secbench",
   "name": "Security Bench",
-  "icon": "firewall",
+  "icon": "l3-switch",
   "interpreter": "none",
   "gui": {
     "bin": "secbench-gui",
