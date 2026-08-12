@@ -47,8 +47,8 @@
       <div class="row">
         <span class="row-label">Theme</span>
         <div class="segmented">
-          <button class:on={themeStore.current === "bench"} onclick={() => themeStore.set("bench")}>Bench</button>
-          <button class:on={themeStore.current === "glass"} onclick={() => themeStore.set("glass")}>Glass</button>
+          <button class:on={themeStore.current === "bench"} aria-pressed={themeStore.current === "bench"} onclick={() => themeStore.set("bench")}>Bench</button>
+          <button class:on={themeStore.current === "glass"} aria-pressed={themeStore.current === "glass"} onclick={() => themeStore.set("glass")}>Glass</button>
         </div>
       </div>
       <label class="row toggle-row">
@@ -65,8 +65,8 @@
       <div class="row">
         <span class="row-label">Link layout</span>
         <div class="segmented">
-          <button class:on={linkLayout === "free"} onclick={() => setLinkLayout("free")}>Free</button>
-          <button class:on={linkLayout === "structured"} onclick={() => setLinkLayout("structured")}>Structured</button>
+          <button class:on={linkLayout === "free"} aria-pressed={linkLayout === "free"} onclick={() => setLinkLayout("free")}>Free</button>
+          <button class:on={linkLayout === "structured"} aria-pressed={linkLayout === "structured"} onclick={() => setLinkLayout("structured")}>Structured</button>
         </div>
       </div>
       <label class="row toggle-row">
@@ -90,22 +90,22 @@
       <div class="row">
         <span class="row-label">Open mode</span>
         <div class="segmented">
-          <button class:on={consoleUiStore.consoleMode === "web"} onclick={() => consoleUiStore.setConsoleMode("web")}>Web</button>
-          <button class:on={consoleUiStore.consoleMode === "native"} onclick={() => consoleUiStore.setConsoleMode("native")}>Native</button>
+          <button class:on={consoleUiStore.consoleMode === "web"} aria-pressed={consoleUiStore.consoleMode === "web"} onclick={() => consoleUiStore.setConsoleMode("web")}>Web</button>
+          <button class:on={consoleUiStore.consoleMode === "native"} aria-pressed={consoleUiStore.consoleMode === "native"} onclick={() => consoleUiStore.setConsoleMode("native")}>Native</button>
         </div>
       </div>
       <div class="row">
         <span class="row-label">Default placement</span>
         <div class="segmented">
-          <button class:on={consoleUiStore.placement === "dock"} onclick={() => consoleUiStore.setPlacement("dock")}>Dock</button>
-          <button class:on={consoleUiStore.placement === "float"} onclick={() => consoleUiStore.setPlacement("float")}>Float</button>
+          <button class:on={consoleUiStore.placement === "dock"} aria-pressed={consoleUiStore.placement === "dock"} onclick={() => consoleUiStore.setPlacement("dock")}>Dock</button>
+          <button class:on={consoleUiStore.placement === "float"} aria-pressed={consoleUiStore.placement === "float"} onclick={() => consoleUiStore.setPlacement("float")}>Float</button>
         </div>
       </div>
       <div class="row">
         <span class="row-label">Dock side</span>
         <div class="segmented">
-          <button class:on={consoleUiStore.dockSide === "bottom"} onclick={() => consoleUiStore.setDockSide("bottom")}>Bottom</button>
-          <button class:on={consoleUiStore.dockSide === "right"} onclick={() => consoleUiStore.setDockSide("right")}>Right</button>
+          <button class:on={consoleUiStore.dockSide === "bottom"} aria-pressed={consoleUiStore.dockSide === "bottom"} onclick={() => consoleUiStore.setDockSide("bottom")}>Bottom</button>
+          <button class:on={consoleUiStore.dockSide === "right"} aria-pressed={consoleUiStore.dockSide === "right"} onclick={() => consoleUiStore.setDockSide("right")}>Right</button>
         </div>
       </div>
       <label class="row toggle-row">

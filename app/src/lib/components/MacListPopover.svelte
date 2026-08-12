@@ -45,7 +45,15 @@
 
 <svelte:window onmousedown={handleWindowClick} onkeydown={handleKey} />
 
-<div class="popover" use:portal bind:this={el} style:left={`${px}px`} style:top={`${py}px`}>
+<div
+  class="popover"
+  use:portal
+  bind:this={el}
+  style:left={`${px}px`}
+  style:top={`${py}px`}
+  role="dialog"
+  aria-label={`MAC addresses — ${nodeName}`}
+>
   <div class="title">MAC addresses — <span class="mono">{nodeName}</span></div>
   {#if error}
     <div class="empty">Unable to read MAC addresses: {error}</div>
