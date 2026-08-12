@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
@@ -93,6 +94,31 @@ func TestToolpacksLoadKeepsValidPackWithMalformedPack(t *testing.T) {
 	}
 	if _, ok := s.toolPack("valid"); !ok {
 		t.Fatal("valid pack was not available after partial load")
+	}
+}
+
+func TestToolpacksLoadSeparatesBuiltInPC(t *testing.T) {
+	dir := t.TempDir()
+	toolpacksTestWritePack(t, filepath.Join(dir, "pc"), "pc", "Virtual PC")
+	s := newTestServer()
+	s.toolpacksLoad(dir)
+	if _, ok := s.toolPack("pc"); ok {
+		t.Fatal("built-in pc leaked into ordinary tool registry")
+	}
+	result, err := s.handleToolListPacks(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pack := range result.(protocol.ToolListPacksResult).Packs {
+		if pack.ID == "pc" {
+			t.Fatal("tool.listPacks exposed built-in pc")
+		}
+	}
+	if !s.pcPackOK || s.pcPack.ID != "pc" {
+		t.Fatalf("pc pack = %#v, ok=%t", s.pcPack, s.pcPackOK)
+	}
+	if !filepath.IsAbs(s.pcPack.GUIBin) || !strings.HasPrefix(s.pcPack.GUIBin, filepath.Join(dir, "pc")) {
+		t.Fatalf("GUIBin = %q, want absolute path under pack root", s.pcPack.GUIBin)
 	}
 }
 

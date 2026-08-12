@@ -174,7 +174,7 @@ rm -rf "$SECBENCH_BIN_STAGE"; mkdir -p "$SECBENCH_BIN_STAGE"
 # service (RADIUS listener / HTTP server / outbound HTTP client) — no
 # separate attack-style binaries, unlike secbench.
 # The syslog receiver follows the same standalone pack layout.
-for pack in aaa webserver httpclient syslog; do
+for pack in aaa webserver httpclient syslog netsvc pc; do
     echo "== build-rootfs: building $pack pack GUI (linux/amd64) =="
     (
         cd "$SCRIPT_DIR/files/tools/packs/$pack/gui"
@@ -236,7 +236,15 @@ echo "== build-rootfs: bootstrapping $SUITE (amd64) into $ROOTFS_DIR =="
 # button — without it a hypervisor-initiated shutdown (qemu QMP
 # system_powerdown, vmrun soft stop, OVA guest shutdown) is never acted
 # on in-guest and hosts fall back to hard-kill after their grace period.
-BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,sudo,procps,iptables,tcpdump,util-linux,libcap2-bin,passwd"
+# dropbear-bin: binaries only (dropbear + dropbearkey), no upstream
+# init-script/config package — we own the systemd wiring ourselves (see
+# files/iolbox-dropbear.service) exactly like every other unit here. This
+# is the appliance's ONLY remote-shell path: guest automation (vmrun
+# runProgramInGuest) has proven unreliable against this minimal image
+# (guestOps process-exec fails even though guest auth + file ops work),
+# so maintainers and deploy tooling need a real SSH login. ~200 KB vs
+# openssh-server's ~5 MB — "light" is the point, not just the name.
+BASE_INCLUDE="systemd,systemd-sysv,udev,dbus,iproute2,iputils-ping,libssl3,openssh-client,dropbear-bin,sudo,procps,iptables,tcpdump,util-linux,libcap2-bin,passwd"
 # openssh-client (not -server): the `remote` provider (docs/providers.md)
 # is SSH-based but connects INTO an existing user-supplied Linux box, not
 # into this appliance — this runtime is reached via the control protocol
@@ -327,7 +335,7 @@ install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench"
 install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/secbench/bin"
-for pack in aaa webserver httpclient syslog; do
+for pack in aaa webserver httpclient syslog netsvc pc; do
     install -d -m 0755 -o root -g root "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack"
 done
 # /run/iolbox/tool is traversable by ioltool but not writable; Endpoint.Start
@@ -358,7 +366,7 @@ for bin in "$SECBENCH_BIN_STAGE"/*; do
 done
 
 # P3 network-tool packs: manifest + single-binary GUI/service each.
-for pack in aaa webserver httpclient syslog; do
+for pack in aaa webserver httpclient syslog netsvc pc; do
     install -m 0644 -o root -g root \
         "$SCRIPT_DIR/files/tools/packs/$pack/pack.json" \
         "$ROOTFS_DIR/opt/iolbox/tools/packs/$pack/pack.json"
@@ -389,6 +397,9 @@ install -m 0644 "$SCRIPT_DIR/files/console/iolbox-issue.service" \
     "$ROOTFS_DIR/etc/systemd/system/iolbox-issue.service"
 install -m 0644 "$SCRIPT_DIR/files/console/iolbox-issue.timer" \
     "$ROOTFS_DIR/etc/systemd/system/iolbox-issue.timer"
+install -m 0644 "$SCRIPT_DIR/files/iolbox-dropbear.service" \
+    "$ROOTFS_DIR/etc/systemd/system/iolbox-dropbear.service"
+install -m 0755 "$SCRIPT_DIR/files/dropbear-keygen.sh" "$ROOTFS_DIR/opt/iolbox/dropbear-keygen.sh"
 
 # Enable both units the "offline" way (symlink into multi-user.target.wants)
 # rather than `systemctl enable` inside a chroot, which needs a running
@@ -401,6 +412,8 @@ ln -sf ../iolbox-supervisor.service \
     "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-supervisor.service"
 ln -sf ../iolbox-firstboot-iourc.service \
     "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-firstboot-iourc.service"
+ln -sf ../iolbox-dropbear.service \
+    "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/iolbox-dropbear.service"
 # The console-banner refresh is timer-driven (WantedBy=timers.target); enable
 # the timer the same offline way. The .service it triggers needs no enable.
 install -d -m 0755 "$ROOTFS_DIR/etc/systemd/system/timers.target.wants"
@@ -463,11 +476,11 @@ install -m 0644 "$SCRIPT_DIR/files/wsl.conf" "$ROOTFS_DIR/etc/wsl.conf"
 # Stage 8: root console login for support/debugging
 # ---------------------------------------------------------------------------
 # root password = "iolbox": fixed, documented, deliberately non-secret.
-# There is NO sshd in this image, so the only way to use it is the VM
-# console (VMware window / `wsl -d iolbox`) — acceptable for a single-
-# tenant lab appliance, and it turns "the appliance won't come up" from a
-# black box into a normal login-and-look debugging session. (The scaffold
-# originally locked root entirely; that made the first real boot failure
+# Used for both the VM console (VMware window / `wsl -d iolbox`) and the
+# dropbear SSH login enabled above — acceptable for a single-tenant lab
+# appliance, and it turns "the appliance won't come up" from a black box
+# into a normal login-and-look debugging session. (The scaffold originally
+# locked root entirely; that made the first real boot failure
 # undiagnosable without rebuilding the image.)
 echo 'root:iolbox' | chroot "$ROOTFS_DIR" chpasswd
 

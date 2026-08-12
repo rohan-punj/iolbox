@@ -3,11 +3,12 @@
 
 import { uuid } from "./uid";
 
-export type NodeKind = "iol" | "vpcs" | "nat" | "tool";
+export type NodeKind = "iol" | "vpcs" | "nat" | "tool" | "pc";
 export type ImageClass = "l2" | "l3" | "unknown";
 export type LinkType = "p2p" | "segment";
 export type CaptureMode = "live" | "file";
 export type CanvasBackground = "grid" | "dots" | "blank";
+export type LinkLayout = "free" | "structured";
 
 /** Runtime node lifecycle state, per docs/protocol.md state machine. */
 export type NodeState = "stopped" | "starting" | "running" | "crashed";
@@ -24,7 +25,7 @@ export interface ImageRef {
 export interface LabNode {
   /** Unique within lab. Also the NETMAP node index basis. */
   id: number;
-  /** iol = Cisco IOL (L2 or L3). vpcs = virtual PC. */
+  /** iol = Cisco IOL (L2 or L3). vpcs = simulator PC. pc = netprobe PC. */
   kind: NodeKind;
   name: string;
   x: number;
@@ -41,8 +42,13 @@ export interface LabNode {
   serial?: number;
   /** Embedded day-0 config text (IOS CLI). Injected into NVRAM at boot. */
   startupConfig?: string;
-  /** Reserved for kind-specific extras (e.g. vpcs canned commands). */
+  /** Reserved for kind-specific extras (e.g. vpcs canned commands or pc state). */
   config?: Record<string, unknown>;
+}
+
+export interface PCState {
+  dhcp: boolean;
+  savedCommands: string[];
 }
 
 export interface LabEndpoint {
@@ -61,12 +67,32 @@ export interface LabLink {
     enabled?: boolean;
     mode?: CaptureMode;
   };
+  /** Per-link administrative state or egress netem definition. */
+  fault?: LinkFault;
+}
+
+/** Runtime-configurable per-link fault definition. Omitted targetEndpoint
+ * means every endpoint; explicit 0 is the first endpoint. */
+export interface LinkFault {
+  down?: boolean;
+  delayMs?: number;
+  jitterMs?: number;
+  lossPct?: number;
+  rateKbit?: number;
+  duplicatePct?: number;
+  reorderPct?: number;
+  targetEndpoint?: number;
+  initial?: boolean;
 }
 
 export interface LabCanvas {
   zoom?: number;
   pan?: { x?: number; y?: number };
   background?: CanvasBackground;
+  /** Presentation-only edge routing mode. Missing means Free Flow. */
+  linkLayout?: LinkLayout;
+  /** Node drag snap-to-grid preference. Independent of linkLayout. */
+  snapGrid?: boolean;
 }
 
 /** Excalidraw-style canvas annotation. Persisted in lab.annotations; the Go

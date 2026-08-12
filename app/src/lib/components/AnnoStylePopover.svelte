@@ -7,6 +7,7 @@
   // Every control writes through labStore.updateAnnotation (autosaved). A Delete
   // button removes the annotation. Escape / outside-click closes.
   import { tick } from "svelte";
+  import { chromeStore } from "../chromeStore.svelte";
   import { labStore } from "../labStore.svelte";
   import { ANNO_COLORS } from "../annoTool.svelte";
   import type {
@@ -28,6 +29,7 @@
     focusText?: boolean;
     onClose: () => void;
   } = $props();
+  $effect(() => chromeStore.hold());
 
   let el: HTMLDivElement | undefined = $state();
   let textEl: HTMLTextAreaElement | undefined = $state();

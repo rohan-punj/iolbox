@@ -149,6 +149,12 @@ func TestOptionsFile(t *testing.T) {
 	}
 }
 
+func TestCLISocketFile(t *testing.T) {
+	if got, want := CLISocketFile("/run", 12), filepath.Join("/run", "tool", "12", "cli.sock"); got != want {
+		t.Fatalf("CLISocketFile = %q, want %q", got, want)
+	}
+}
+
 func TestScrubbedEnvAllowlist(t *testing.T) {
 	hasOptions := false
 	hasOldName := false

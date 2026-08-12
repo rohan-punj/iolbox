@@ -254,8 +254,14 @@ func (e *Endpoint) HostVeth() string { return HostVethName(e.endpointCfg.NodeID)
 // SocketPath returns the AF_UNIX socket path used by the tool GUI.
 func (e *Endpoint) SocketPath() string { return e.endpointSocketPath }
 
+// CLISocketPath returns the deterministic private PC CLI socket path. The
+// launcher only exposes it to a child when Config.CLISocket is true.
+func (e *Endpoint) CLISocketPath() string {
+	return CLISocketFile(e.endpointCfg.RunDir, e.endpointCfg.NodeID)
+}
+
 func (e *Endpoint) endpointLaunchSpec() LaunchSpec {
-	env := make([]string, 0, 9)
+	env := make([]string, 0, 10)
 	for _, name := range []string{"PATH", "HOME", "LANG", "PYTHONHOME", "PYTHONPATH"} {
 		if value, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+value)
@@ -267,6 +273,9 @@ func (e *Endpoint) endpointLaunchSpec() LaunchSpec {
 		"IOLBOX_PACK_DIR="+e.endpointCfg.Pack.Root,
 		"IOLBOX_NODE_ID="+strconv.Itoa(e.endpointCfg.NodeID),
 	)
+	if e.endpointCfg.CLISocket {
+		env = append(env, "IOLBOX_PC_CLI_SOCK="+CLISocketFile(e.endpointCfg.RunDir, e.endpointCfg.NodeID))
+	}
 	return LaunchSpec{
 		NodeID:      e.endpointCfg.NodeID,
 		Netns:       NetnsName(e.endpointCfg.NodeID),

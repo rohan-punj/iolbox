@@ -62,11 +62,13 @@ const (
 const (
 	EventNodeState      = "node.state"
 	EventNodeConsole    = "node.console"
+	EventNodePCState    = "node.pcState"
 	EventLinkUp         = "link.up"
 	EventLinkDown       = "link.down"
 	EventCaptureStarted = "capture.started"
 	EventCaptureStopped = "capture.stopped"
 	EventLinkStats      = "link.stats"
+	EventLinkFault      = "link.fault"
 	EventHostStats      = "host.stats"
 	EventLog            = "log"
 )

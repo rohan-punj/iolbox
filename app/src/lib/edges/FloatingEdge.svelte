@@ -15,10 +15,18 @@
     useInternalNode,
     type EdgeProps,
   } from "@xyflow/svelte";
+  import { onDestroy } from "svelte";
   import { getEdgeParams } from "./floating";
+  import {
+    freeGeometry,
+    structuredGeometry,
+    type LinkGeometry,
+    type RouteInput,
+  } from "./routing";
   import { labStore } from "../labStore.svelte";
   import { watcherStore, LABELS } from "../watcherStore.svelte";
   import { painterStore } from "../painterStore.svelte";
+  import type { LinkFault, LinkLayout } from "../labTypes";
 
   let { id, source, target, selected, data }: EdgeProps = $props();
 
@@ -38,8 +46,77 @@
       source?: EndpointInfo;
       target?: EndpointInfo;
       capture?: boolean;
+      fault?: { fault: LinkFault | null; active: boolean; reason?: string };
     } | undefined) ?? {}
   );
+
+  const faultState = $derived(info.fault);
+  const activeFault = $derived(
+    faultState?.active && faultState.fault ? faultState.fault : null
+  );
+  const isAdminDown = $derived(Boolean(activeFault?.down));
+  const isImpaired = $derived(
+    Boolean(
+      activeFault &&
+        !activeFault.down &&
+        (activeFault.delayMs !== undefined ||
+          activeFault.jitterMs !== undefined ||
+          activeFault.lossPct !== undefined ||
+          activeFault.rateKbit !== undefined ||
+          activeFault.duplicatePct !== undefined ||
+          activeFault.reorderPct !== undefined)
+    )
+  );
+  const unexpectedlyDown = $derived.by(() => {
+    if (isAdminDown || isImpaired) return false;
+    const link = info.linkId === undefined
+      ? undefined
+      : labStore.lab.links.find((l) => l.id === info.linkId);
+    if (link?.fault && !faultState) return false;
+    return Boolean(
+      info.linkId !== undefined &&
+        link &&
+        link.endpoints.some((ep) => labStore.nodeStates[ep.node] === "crashed")
+    );
+  });
+  const faultBadge = $derived.by(() => {
+    if (!activeFault || activeFault.down) return "";
+    const bits: string[] = [];
+    if (activeFault.delayMs !== undefined) bits.push(`${activeFault.delayMs}ms`);
+    if (activeFault.lossPct !== undefined) bits.push(`${activeFault.lossPct}%`);
+    if (activeFault.rateKbit !== undefined) {
+      bits.push(`${activeFault.rateKbit >= 1000 ? activeFault.rateKbit / 1000 + "mbit" : activeFault.rateKbit + "kbit"}`);
+    }
+    if (activeFault.duplicatePct !== undefined) bits.push(`dup ${activeFault.duplicatePct}%`);
+    if (activeFault.reorderPct !== undefined) bits.push(`reorder ${activeFault.reorderPct}%`);
+    if (activeFault.targetEndpoint !== undefined) {
+      const link = info.linkId === undefined ? undefined : labStore.lab.links.find((l) => l.id === info.linkId);
+      const ep = link?.endpoints[activeFault.targetEndpoint];
+      return `→ ${ep ? (labStore.lab.nodes.find((n) => n.id === ep.node)?.name ?? `#${ep.node}`) : `ep${activeFault.targetEndpoint}`} · ${bits.join(" · ")}`;
+    }
+    return `${bits.join(" · ")} · both ends`;
+  });
+  const faultTitle = $derived.by(() => {
+    if (!activeFault) return "";
+    const parts = [
+      activeFault.down ? "administratively down" : "egress impairment",
+      activeFault.delayMs === undefined ? "" : `delay ${activeFault.delayMs}ms one-way`,
+      activeFault.jitterMs === undefined ? "" : `jitter ${activeFault.jitterMs}ms`,
+      activeFault.lossPct === undefined ? "" : `loss ${activeFault.lossPct}%`,
+      activeFault.rateKbit === undefined ? "" : `rate ${activeFault.rateKbit}kbit`,
+      activeFault.duplicatePct === undefined ? "" : `duplicate ${activeFault.duplicatePct}%`,
+      activeFault.reorderPct === undefined ? "" : `reorder ${activeFault.reorderPct}%`,
+    ].filter(Boolean);
+    if (activeFault.targetEndpoint !== undefined) {
+      const link = info.linkId === undefined ? undefined : labStore.lab.links.find((l) => l.id === info.linkId);
+      const ep = link?.endpoints[activeFault.targetEndpoint];
+      const node = ep ? labStore.lab.nodes.find((n) => n.id === ep.node) : undefined;
+      parts.push(`target ${node?.name ?? `endpoint ${activeFault.targetEndpoint}`} ${ep?.interface ?? ""}`);
+    } else {
+      parts.push("target both ends");
+    }
+    return parts.join(" · ");
+  });
 
   // Feature 2 — traffic-driven glow. Read this link's most recent throughput
   // sample; treat it as live only when it arrived within STALE_MS (link.stats
@@ -55,7 +132,7 @@
     if (age > STALE_MS) return null;
     return s;
   });
-  const glowing = $derived(traffic !== null);
+  const glowing = $derived(traffic !== null && !isAdminDown);
 
   // Network Watcher — directional animated protocol overlays (PNetLab-style).
   // Gated on the watcher actually running AND a FRESH traffic sample (same
@@ -77,8 +154,58 @@
   });
 
   // R2.3 — hovering either chip glows the whole cable (same as hovering the
-  // edge). `hot` mirrors the edge path's hover state to the chips and vice-versa.
-  let hot = $state(false);
+  // edge). Keep local hover separate so selection can persist the same emphasis
+  // after the pointer leaves.
+  let hovered = $state(false);
+  const hot = $derived(hovered || selected);
+
+  // Endpoint chips clamp in screen space, then translate back into flow units
+  // for EdgeLabel. This nominal width comes from the 11px chip token, a short
+  // interface name, the existing horizontal padding and borders; it is not a
+  // DOM measurement.
+  const CHIP_NOMINAL_WIDTH = 48;
+  const CHIP_MARGIN = CHIP_NOMINAL_WIDTH / 2 + 8;
+  let canvasOffset = $state<{ x: number; y: number } | null>(null);
+  let canvasOffsetRead = false;
+  let viewportWidth = $state(typeof window !== "undefined" ? window.innerWidth : 1280);
+  let viewportHeight = $state(typeof window !== "undefined" ? window.innerHeight : 800);
+
+  // Read the canvas client origin once after CanvasInner publishes its projector.
+  // Viewport changes thereafter are arithmetic over the mirrored pan/zoom only.
+  $effect(() => {
+    const projector = labStore.flowToScreen;
+    if (canvasOffsetRead || !projector) return;
+    const origin = projector(0, 0);
+    const pan = labStore.canvasPan;
+    canvasOffset = {
+      x: origin.x - pan.x,
+      y: origin.y - pan.y,
+    };
+    canvasOffsetRead = true;
+  });
+
+  const clampState = $derived.by(() => ({
+    offset: canvasOffset,
+    width: viewportWidth,
+    height: viewportHeight,
+    zoom: Math.max(labStore.canvasZoom, 0.0001),
+    pan: labStore.canvasPan,
+  }));
+
+  function clampScreen(value: number, min: number, max: number): number {
+    if (max < min) return (min + max) / 2;
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function clampedChip(point: { x: number; y: number }): { x: number; y: number } {
+    const { offset, width, height, zoom, pan } = clampState;
+    if (!offset || width <= CHIP_MARGIN * 2 || height <= CHIP_MARGIN * 2) return point;
+    const screenX = point.x * zoom + pan.x + offset.x;
+    const screenY = point.y * zoom + pan.y + offset.y;
+    const dx = clampScreen(screenX, offset.x + CHIP_MARGIN, width - CHIP_MARGIN) - screenX;
+    const dy = clampScreen(screenY, offset.y + CHIP_MARGIN, height - CHIP_MARGIN) - screenY;
+    return { x: point.x + dx / zoom, y: point.y + dy / zoom };
+  }
 
   // WS5b — Topology Painter overlays. A snapshot (painterStore.result) drives
   // per-endpoint STP badges (role/state) at the two link ends, red-dashed
@@ -132,7 +259,6 @@
   // is (index - (count-1)/2) * spacing: a lone link → 0 (straight), two links →
   // ±spacing/2, three → -spacing/0/+spacing, etc. Sign is anchored to the
   // source→target vector so A↔B and B↔A parallels don't collapse onto each other.
-  const PARALLEL_SPACING = 26;
   // Item 1 — endpoint fan spacing. Parallel edges no longer share one anchor
   // point at the node border (which pinched them to a wedge); each edge's start
   // AND end anchor slides along the node border, perpendicular to the link axis,
@@ -169,13 +295,9 @@
     if (count <= 1) return 0;
     return index - (count - 1) / 2;
   });
-  const parallelOffset = $derived(parallelSign * PARALLEL_SPACING);
 
-  // Quadratic-bezier path + label anchor points, recomputed whenever either node
-  // moves. The control point sits at the segment midpoint pushed perpendicular to
-  // the source→target line by parallelOffset, so parallel links bow apart. Chips
-  // ride the curve (evaluated near each endpoint) so they fan out with the cable.
-  const geom = $derived.by(() => {
+  // Endpoint assembly remains in flow coordinates for both routing modes.
+  const routeInput = $derived.by((): RouteInput | null => {
     const s = sourceNode.current;
     const t = targetNode.current;
     if (!s || !t) return null;
@@ -184,18 +306,12 @@
     const dx0 = raw.tx - raw.sx;
     const dy0 = raw.ty - raw.sy;
     const len0 = Math.hypot(dx0, dy0) || 1;
-    // Unit perpendicular to the endpoint line.
     const px = -dy0 / len0;
     const py = dx0 / len0;
 
-    // Item 1 — FAN THE ENDPOINTS. Slide each parallel edge's source AND target
-    // anchor along the node border, perpendicular to the link axis, by
-    // sign * ENDPOINT_SPACING. Clamp the slide to the node's half-extent so the
-    // anchor stays on the node face (never past the corner). Single links keep
-    // the exact intersection point (endShift 0) → unchanged.
-    const nodeRadius = (s: typeof sourceNode.current) => {
-      const w = s?.measured?.width ?? s?.width ?? 64;
-      const h = s?.measured?.height ?? s?.height ?? 64;
+    const nodeRadius = (node: typeof sourceNode.current) => {
+      const w = node?.measured?.width ?? node?.width ?? 64;
+      const h = node?.measured?.height ?? node?.height ?? 64;
       return Math.min(w, h) / 2;
     };
     const rad = Math.min(nodeRadius(s), nodeRadius(t));
@@ -205,81 +321,81 @@
     const tx = raw.tx + px * endShift;
     const ty = raw.ty + py * endShift;
 
-    const dx = tx - sx;
-    const dy = ty - sy;
-
-    // Control point: midpoint pushed out. Doubling the offset makes the curve
-    // *pass* near ±offset at its apex (a quadratic reaches half its control
-    // displacement at t=0.5), matching the intended fan spacing.
-    const off = parallelOffset;
-    const cx = (sx + tx) / 2 + px * off * 2;
-    const cy = (sy + ty) / 2 + py * off * 2;
-
-    const path = `M ${sx} ${sy} Q ${cx} ${cy} ${tx} ${ty}`;
-
-    // Evaluate the quadratic B(u) so each chip follows ITS end of the curve.
-    const at = (u: number) => {
-      const m = 1 - u;
-      return {
-        x: m * m * sx + 2 * m * u * cx + u * u * tx,
-        y: m * m * sy + 2 * m * u * cy + u * u * ty,
-      };
-    };
-
-    // Item 2 — labels sit ON the link line. The chip anchor is placed EXACTLY on
-    // this edge's own curve (perpendicular offset 0); the chip's own opaque
-    // background masks the line passing behind it. Parallel chips no longer need
-    // an extra perpendicular nudge to separate — each chip rides ITS OWN curve
-    // (the endpoint fan + bow already put the curves at different places), so
-    // on-curve placement separates them for free. A tiny per-index t-shift keeps
-    // chips of adjacent parallels from landing at the same distance-along, so
-    // they don't collide where curves happen to cross near the node.
-    const count = parallel.count;
-    const single = count <= 1;
-    const idx = parallel.index;
-    // Base chip t at 0.22 / 0.78; nudge by a small signed per-index amount.
-    const tShift = single ? 0 : (idx - (count - 1) / 2) * 0.03;
-    const su = 0.22 + tShift;
-    const tu = 0.78 + tShift;
-    const sPt = at(su);
-    const tPt = at(tu);
-    // Watcher chip rides the curve midpoint (t=0.5), same on-curve idiom as the
-    // port chips — its own curve already separates it from parallel siblings,
-    // so no extra perpendicular nudge is needed here either.
-    const wPt = at(0.5);
-
-    // Watcher flow paths — the same quadratic shifted perpendicular by d px so
-    // the flow rides BESIDE the cable instead of on top of it (on-path dashes
-    // were unreadable over the stroke). Positive d = one side, negative = the
-    // other, so the two directions of one link never overlap each other.
-    // reversed=true swaps start/end: marching "forward" along the reversed
-    // path (and animateMotion with rotate="auto") then reads target→source,
-    // which is how the endpoints[1]-sourced direction is rendered — one
-    // animation direction serves both.
-    const offsetPath = (d: number, reversed: boolean) => {
-      const osx = sx + px * d, osy = sy + py * d;
-      const ocx = cx + px * d, ocy = cy + py * d;
-      const otx = tx + px * d, oty = ty + py * d;
-      return reversed
-        ? `M ${otx} ${oty} Q ${ocx} ${ocy} ${osx} ${osy}`
-        : `M ${osx} ${osy} Q ${ocx} ${ocy} ${otx} ${oty}`;
-    };
-
     return {
-      path,
-      offsetPath,
-      // Perpendicular offset 0 → chip centered over the path.
-      sChip: { x: sPt.x, y: sPt.y },
-      tChip: { x: tPt.x, y: tPt.y },
-      watcherChip: { x: wPt.x, y: wPt.y },
-      // origin inside each chip pointing back at its own node
-      sOrigin: dx >= 0 ? "left" : "right",
-      tOrigin: dx >= 0 ? "right" : "left",
+      sx,
+      sy,
+      tx,
+      ty,
+      sourcePos: raw.sourcePos,
+      targetPos: raw.targetPos,
+      parallelSign,
+      parallelCount: parallel.count,
+      parallelIndex: parallel.index,
+      px,
+      py,
     };
+  });
+
+  const freeGeom = $derived(routeInput ? freeGeometry(routeInput) : null);
+  const structuredGeom = $derived(routeInput ? structuredGeometry(routeInput) : null);
+  const mode = $derived((labStore.lab.canvas?.linkLayout ?? "free") as LinkLayout);
+  const activeGeom = $derived(mode === "structured" ? structuredGeom : freeGeom);
+
+  let previousMode: LinkLayout | null = null;
+  let outgoingMode: LinkLayout | null = null;
+  let outgoingGeom = $state<LinkGeometry | null>(null);
+  let crossfading = $state(false);
+  let transitionTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $effect(() => {
+    const nextMode = mode;
+    const nextGeom = activeGeom;
+    if (previousMode === null) {
+      previousMode = nextMode;
+      return;
+    }
+    if (nextMode !== previousMode) {
+      outgoingMode = previousMode;
+      outgoingGeom = previousMode === "structured" ? structuredGeom : freeGeom;
+      previousMode = nextMode;
+      crossfading = true;
+      if (transitionTimer !== null) clearTimeout(transitionTimer);
+      transitionTimer = setTimeout(() => {
+        outgoingGeom = null;
+        outgoingMode = null;
+        crossfading = false;
+        transitionTimer = null;
+      }, 150);
+    } else if (outgoingMode !== null) {
+      outgoingGeom = outgoingMode === "structured" ? structuredGeom : freeGeom;
+    }
+    void nextGeom;
+  });
+
+  const geometryLayers = $derived.by(() => {
+    const layers: { key: string; geometry: LinkGeometry | null; outgoing: boolean }[] = [];
+    if (outgoingGeom) layers.push({ key: "outgoing", geometry: outgoingGeom, outgoing: true });
+    layers.push({ key: "incoming", geometry: activeGeom, outgoing: false });
+    return layers;
+  });
+
+  onDestroy(() => {
+    if (transitionTimer !== null) clearTimeout(transitionTimer);
   });
 </script>
 
+<svelte:window bind:innerWidth={viewportWidth} bind:innerHeight={viewportHeight} />
+
+{#each geometryLayers as layer (layer.key)}
+  {@const geom = layer.geometry}
+  <g
+    class:link-geometry-layer={crossfading}
+    class:link-geometry-incoming={crossfading && !layer.outgoing}
+    class:link-geometry-outgoing={crossfading && layer.outgoing}
+  >
 {#if geom}
+  {@const sourceChip = clampedChip(geom.sChip)}
+  {@const targetChip = clampedChip(geom.tChip)}
   {#if glowing}
     <!-- Traffic glow: a wide, soft accent underlay beneath the cable. Opacity +
          width scale with log(fps) so a busy link reads hotter. -->
@@ -296,10 +412,25 @@
       (selected ? " is-selected" : "") +
       (info.capture ? " is-capture" : "") +
       (glowing ? " is-traffic" : "") +
+      (isAdminDown ? " is-admin-down" : "") +
+      (isImpaired ? " is-impaired" : "") +
+      (unexpectedlyDown ? " is-unexpectedly-down" : "") +
       (hot ? " is-hot" : "") +
       (routingWinner ? " is-bestpath" : "") +
       (routingDimmed ? " is-dimmed" : "")}
   />
+
+  {#if isAdminDown || isImpaired || unexpectedlyDown}
+    <EdgeLabel x={geom.watcherChip.x} y={geom.watcherChip.y} class="fault-pill-slot">
+      <span
+        class="fault-pill"
+        class:adminDown={isAdminDown}
+        class:impaired={isImpaired}
+        class:unexpected={unexpectedlyDown}
+        title={isAdminDown ? "Administratively down" : isImpaired ? faultTitle : "Unexpectedly down: an endpoint node crashed"}
+      >{isAdminDown ? "⦸" : isImpaired ? faultBadge : "! down"}</span>
+    </EdgeLabel>
+  {/if}
 
   <!-- WS5b — STP blocked link: a red dashed overlay tracing this edge's own
        curve. Rendered above the cable; non-interactive (the badge below owns
@@ -330,15 +461,15 @@
     {/each}
   {/if}
   <!-- R2 — a wide invisible hover-catcher over THIS edge's own curve. Hovering
-       it sets `hot`, which (a) glows this cable and (b) raises this edge's
+       it sets `hovered`, which (a) glows this cable and (b) raises this edge's
        labels above sibling parallel edges (.slot-hot z-index). Because `hot`
-       is per-edge-instance, only the hovered edge's hover-label appears — a
+       is per-edge-instance, only the hovered/selected edge's hover-label appears — a
        background sibling's chip can no longer render on top of it. -->
   <path
     class="edge-hover-catch"
     d={geom.path}
-    onpointerenter={() => (hot = true)}
-    onpointerleave={() => (hot = false)}
+    onpointerenter={() => (hovered = true)}
+    onpointerleave={() => (hovered = false)}
     role="presentation"
   />
 
@@ -378,13 +509,13 @@
   {/each}
 
   {#if info.source}
-    <EdgeLabel x={geom.sChip.x} y={geom.sChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
+    <EdgeLabel x={sourceChip.x} y={sourceChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
       <span
         class="port-chip"
         class:chip-hot={hot}
         style={`transform-origin:${geom.sOrigin} center`}
-        onpointerenter={() => (hot = true)}
-        onpointerleave={() => (hot = false)}
+        onpointerenter={() => (hovered = true)}
+        onpointerleave={() => (hovered = false)}
         role="presentation"
       >
         <span class="chip-detail">{info.source.name}</span><span class="chip-sep">&nbsp;</span>{info.source.iface}
@@ -406,13 +537,13 @@
   {/if}
 
   {#if info.target}
-    <EdgeLabel x={geom.tChip.x} y={geom.tChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
+    <EdgeLabel x={targetChip.x} y={targetChip.y} class={"port-chip-slot" + (hot ? " slot-hot" : "")}>
       <span
         class="port-chip"
         class:chip-hot={hot}
         style={`transform-origin:${geom.tOrigin} center`}
-        onpointerenter={() => (hot = true)}
-        onpointerleave={() => (hot = false)}
+        onpointerenter={() => (hovered = true)}
+        onpointerleave={() => (hovered = false)}
         role="presentation"
       >
         <span class="chip-detail">{info.target.name}</span><span class="chip-sep">&nbsp;</span>{info.target.iface}
@@ -465,8 +596,40 @@
     </EdgeLabel>
   {/each}
 {/if}
+  </g>
+{/each}
 
 <style>
+  .link-geometry-incoming,
+  .link-geometry-outgoing {
+    animation-duration: 150ms;
+    animation-timing-function: ease;
+    animation-fill-mode: both;
+    transform-box: fill-box;
+  }
+  .link-geometry-incoming {
+    animation-name: link-geometry-in;
+  }
+  .link-geometry-outgoing {
+    animation-name: link-geometry-out;
+  }
+  @keyframes link-geometry-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes link-geometry-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .link-geometry-incoming,
+    .link-geometry-outgoing {
+      animation: none;
+    }
+    .link-geometry-incoming { opacity: 1; }
+    .link-geometry-outgoing { opacity: 0; }
+  }
+
   /* Edge path tints (cable / selected / capture-active). */
   :global(.svelte-flow__edge .floating-edge) {
     stroke: var(--cable);
@@ -482,6 +645,29 @@
     stroke: var(--state-starting);
     stroke-width: 2.5;
     filter: drop-shadow(0 0 5px color-mix(in oklab, var(--state-starting) 60%, transparent));
+  }
+
+  /* Batch C — three mutually exclusive link-fault states. Admin-down is
+     grey and suppresses the traffic class; impairment keeps the traffic glow
+     but marks the cable amber; unexpected node failure is derived locally and
+     is red. */
+  :global(.svelte-flow__edge .floating-edge.is-admin-down) {
+    stroke: var(--text-disabled, #7a7f87);
+    stroke-dasharray: 7 6;
+    filter: none;
+  }
+  :global(.svelte-flow__edge .floating-edge.is-impaired) {
+    stroke: #f5a623;
+    stroke-dasharray: 5 4;
+  }
+  :global(.svelte-flow__edge .floating-edge.is-unexpectedly-down) {
+    stroke: #e5484d;
+    stroke-dasharray: 7 6;
+    filter: drop-shadow(0 0 4px color-mix(in oklab, #e5484d 60%, transparent));
+  }
+  :global(.svelte-flow__edge .floating-edge.is-admin-down.is-hot),
+  :global(.svelte-flow__edge .floating-edge.is-unexpectedly-down.is-hot) {
+    stroke-width: 3.25;
   }
 
   /* Feature 2 — traffic glow underlay. A soft, wide accent halo drawn beneath
@@ -650,6 +836,10 @@
   .port-chip:hover .chip-sep {
     display: inline;
   }
+  .port-chip.chip-hot .chip-detail,
+  .port-chip.chip-hot .chip-sep {
+    display: inline;
+  }
   /* When the edge (or its sibling chip) is hovered, signal both chips. */
   :global(.svelte-flow__edge:hover) .port-chip,
   .port-chip.chip-hot {
@@ -722,6 +912,43 @@
     opacity: 0.22;
     pointer-events: none;
     filter: blur(2px);
+  }
+
+  :global(.svelte-flow__edge-label.fault-pill-slot) {
+    background: transparent;
+    padding: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .fault-pill {
+    display: inline-block;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid;
+    border-radius: 999px;
+    padding: 3px 7px;
+    background: color-mix(in oklab, var(--ground) 88%, transparent);
+  }
+  .fault-pill.adminDown {
+    color: var(--text-disabled, #7a7f87);
+    border-color: var(--text-disabled, #7a7f87);
+    font-size: 13px;
+  }
+  .fault-pill.impaired {
+    color: #9a5a00;
+    border-color: #f5a623;
+    background: color-mix(in oklab, #f5a623 18%, var(--ground));
+  }
+  .fault-pill.unexpected {
+    color: #fff;
+    border-color: #e5484d;
+    background: #e5484d;
   }
   .bestpath-arrow {
     fill: var(--accent);

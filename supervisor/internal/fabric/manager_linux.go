@@ -19,19 +19,6 @@ import (
 // extnet's cmdTimeout.
 const cmdTimeout = 20 * time.Second
 
-// op identifies which operation is running, so isBenign can apply the right
-// idempotency rule for the error text it sees.
-type op int
-
-const (
-	opCreateTap op = iota
-	opDeleteTap
-	opCreateBridge
-	opDeleteBridge
-	opAttach
-	opDetach
-)
-
 // Manager creates/destroys Linux taps and bridges and attaches/detaches taps,
 // via privileged `ip` commands run as `sudo -n`. It tracks nothing global;
 // the caller (the server) owns lifecycle bookkeeping of which taps/bridges
@@ -76,6 +63,19 @@ func (m *Manager) Attach(ctx context.Context, bridge, tap string) error {
 // Detach detaches tap from whatever bridge it is currently a member of.
 func (m *Manager) Detach(ctx context.Context, tap string) error {
 	return m.runIdempotent(ctx, opDetach, detachCmds(tap))
+}
+
+// SetNetem atomically replaces the one flat netem qdisc on dev. Unlike clear,
+// failure is never treated as an idempotent no-op: a missing device or qdisc
+// indicates a caller bug or an unavailable runtime dependency.
+func (m *Manager) SetNetem(ctx context.Context, dev string, n Netem) error {
+	return m.runIdempotent(ctx, opNetemSet, netemCmds(dev, n))
+}
+
+// ClearNetem removes dev's root qdisc. An absent qdisc or absent device is a
+// successful, idempotent no-op because teardown can race endpoint deletion.
+func (m *Manager) ClearNetem(ctx context.Context, dev string) error {
+	return m.runIdempotent(ctx, opNetemClear, netemClearCmds(dev))
 }
 
 // runIdempotent runs each argv in cmds (via runOne — bare if we're already
@@ -132,26 +132,4 @@ func runOne(ctx context.Context, argv []string) (string, error) {
 		return out.String(), fmt.Errorf("timed out after %s", cmdTimeout)
 	}
 	return out.String(), err
-}
-
-// isBenign reports whether outputLower (already lowercased) from the given
-// operation's first command represents an idempotent no-op rather than a real
-// failure: the device/bridge already existing for a create, or already being
-// gone for a delete/detach.
-func isBenign(o op, outputLower string) bool {
-	switch o {
-	case opCreateTap, opCreateBridge:
-		return strings.Contains(outputLower, "file exists") ||
-			strings.Contains(outputLower, "device or resource busy")
-	case opDeleteTap, opDeleteBridge, opDetach:
-		return strings.Contains(outputLower, "cannot find device") ||
-			strings.Contains(outputLower, "does not exist") ||
-			strings.Contains(outputLower, "no such device")
-	case opAttach:
-		// Re-attaching to the same bridge it's already a member of is a
-		// no-op in practice; treat "file exists" defensively the same way.
-		return strings.Contains(outputLower, "file exists")
-	default:
-		return false
-	}
 }

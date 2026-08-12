@@ -11,11 +11,12 @@
   import { labStore } from "../labStore.svelte";
   import type { NodeState } from "../labTypes";
   import { uiSvg } from "../icons.svelte";
+  import MacListPopover from "../components/MacListPopover.svelte";
 
-  let { nodeId, state }: { nodeId: number; state: NodeState } = $props();
+  let { nodeId, state: nodeState }: { nodeId: number; state: NodeState } = $props();
 
-  const isRunning = $derived(state === "running");
-  const isBusy = $derived(state === "running" || state === "starting");
+  const isRunning = $derived(nodeState === "running");
+  const isBusy = $derived(nodeState === "running" || nodeState === "starting");
   // WS1: while a per-node action is in flight, hide the action buttons and show
   // a spinner + the pending action name so sibling actions aren't re-issued.
   const lock = $derived(labStore.nodeLocks[nodeId]);
@@ -24,6 +25,12 @@
   const isIol = $derived(
     labStore.lab.nodes.find((n) => n.id === nodeId)?.kind === "iol"
   );
+  const isMacNode = $derived(
+    ["iol", "vpcs", "pc", "tool"].includes(
+      labStore.lab.nodes.find((n) => n.id === nodeId)?.kind ?? ""
+    )
+  );
+  let macPopover = $state<{ x: number; y: number } | null>(null);
 
   function start() {
     void labStore.startNode(nodeId);
@@ -34,8 +41,14 @@
   function console_() {
     labStore.openConsoleByMode(nodeId);
   }
+  function restart() {
+    void labStore.restartNode(nodeId);
+  }
   function saveConfig() {
     void labStore.saveNodeConfig(nodeId);
+  }
+  function openMacs(e: MouseEvent) {
+    macPopover = { x: e.clientX, y: e.clientY };
   }
   function wipe() {
     const node = labStore.lab.nodes.find((n) => n.id === nodeId);
@@ -44,7 +57,7 @@
   }
 </script>
 
-<div class="node-actions nodrag" role="toolbar" aria-label="Node quick actions">
+<div class="node-actions nodrag" class:selected={labStore.selectedNodeId === nodeId} role="toolbar" aria-label="Node quick actions">
   {#if isLocked}
     <span class="na-lock" aria-live="polite">
       <span class="na-spinner" aria-hidden="true"></span>
@@ -63,6 +76,14 @@
     <button class="na-btn" title="Console" aria-label="Console" onpointerdown={(e) => e.stopPropagation()} onclick={console_}
       >{@html uiSvg("console", 12)}</button>
   {/if}
+  {#if isMacNode}
+    <button class="na-btn" title="MAC addresses" aria-label="MAC addresses" onpointerdown={(e) => e.stopPropagation()} onclick={openMacs}
+      >{@html uiSvg("net", 12)}</button>
+  {/if}
+  {#if isRunning}
+    <button class="na-btn" title="Restart" aria-label="Restart" onpointerdown={(e) => e.stopPropagation()} onclick={restart}
+      >{@html uiSvg("reset", 12)}</button>
+  {/if}
   {#if isRunning && isIol}
     <button
       class="na-btn"
@@ -78,6 +99,15 @@
   {/if}
   {/if}
 </div>
+
+{#if macPopover}
+  <MacListPopover
+    x={macPopover.x}
+    y={macPopover.y}
+    {nodeId}
+    onClose={() => (macPopover = null)}
+  />
+{/if}
 
 <style>
   /* Floats above the node face; hidden until the node is hovered (the parent
@@ -121,6 +151,7 @@
   /* Reveal on node hover (or keyboard focus within the bar). Show is instant;
      the hide delay lives on the base rule above. */
   :global(.face-node:hover) .node-actions,
+  .node-actions.selected,
   .node-actions:hover,
   .node-actions:focus-within {
     opacity: 1;
@@ -178,6 +209,11 @@
   @keyframes na-spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .na-spinner {
+      animation: none;
     }
   }
 </style>

@@ -2,6 +2,7 @@
   // Minimal resizable-pane primitive: drag a divider to resize either a
   // "left" panel (horizontal split) or a "top" panel (vertical split).
   import type { Snippet } from "svelte";
+  import { chromeStore } from "../chromeStore.svelte";
 
   let {
     direction = "horizontal",
@@ -39,6 +40,9 @@
 
   let dragging = $state(false);
   let dividerEl: HTMLElement | undefined = $state();
+  $effect(() => {
+    if (dragging) return chromeStore.hold();
+  });
 
   // Item 4 — the divider is the resize handle. The prior version measured the
   // pane against `e.currentTarget.parentElement` (the divider's parent = the

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
@@ -25,11 +26,17 @@ func (s *Server) ToolProxyTarget(nodeID int) (socket string, routes []tool.Proxy
 	if n == nil {
 		return "", nil, false
 	}
-	var packID string
-	if err := json.Unmarshal(n.Config["pack"], &packID); err != nil {
-		return "", nil, false
+	var pack tool.Pack
+	var found bool
+	if n.Kind == lab.KindPC {
+		pack, found = s.pcPack, s.pcPackOK
+	} else {
+		var packID string
+		if err := json.Unmarshal(n.Config["pack"], &packID); err != nil {
+			return "", nil, false
+		}
+		pack, found = s.toolPack(packID)
 	}
-	pack, found := s.toolPack(packID)
 	if !found {
 		return "", nil, false
 	}

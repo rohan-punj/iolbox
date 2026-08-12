@@ -129,6 +129,18 @@ components:
     typography: "{typography.chip-mono}"
     rounded: "{rounded.sm}"
     padding: "2px 5px"
+  rail-button:
+    typography: "{typography.label}"
+    rounded: "{rounded.md}"
+    size: "40px"
+    iconOnly: true
+    usage: "Left icon rail hit area; deliberate exception to the 28px icon-button convention."
+  floating-window:
+    backgroundColor: "--panel"
+    backdropFilter: "--blur"
+    border: "1px hairline --border"
+    rounded: "--radius-md"
+    shadow: "--shadow-md"
 ---
 
 # Design System: iolbox

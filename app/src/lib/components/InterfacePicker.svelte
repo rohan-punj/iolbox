@@ -4,6 +4,7 @@
   // FREE interfaces, pre-selecting the next free one. VPCS collapses to eth0.
   // Confirm creates the link via labStore + client.linkAdd; Cancel aborts.
   import { onMount } from "svelte";
+  import { chromeStore } from "../chromeStore.svelte";
   import { labStore } from "../labStore.svelte";
   import { allInterfaces, usedInterfaces, freeInterfaces, nextFreeInterface } from "../interfaces";
   import type { LabNode, LabLink } from "../labTypes";
@@ -21,18 +22,26 @@
     targetId: number;
     onClose: () => void;
   } = $props();
+  $effect(() => chromeStore.hold());
 
   const nodeA = $derived(labStore.lab.nodes.find((n) => n.id === sourceId) as LabNode | undefined);
   const nodeB = $derived(labStore.lab.nodes.find((n) => n.id === targetId) as LabNode | undefined);
 
-  // Per-node interface option lists: all interfaces, with used ones flagged.
+  // Per-node interface option lists, partitioned once so the template preserves
+  // interface order without filtering the full list during every render.
   function options(node: LabNode | undefined) {
-    if (!node) return [] as { iface: string; used: boolean }[];
+    if (!node) return { free: [], used: [] };
     const used = usedInterfaces(node.id);
-    return allInterfaces(node).map((iface) => ({ iface, used: used.has(iface) }));
+    const result: { free: string[]; used: string[] } = { free: [], used: [] };
+    for (const iface of allInterfaces(node)) {
+      (used.has(iface) ? result.used : result.free).push(iface);
+    }
+    return result;
   }
   const optsA = $derived(options(nodeA));
   const optsB = $derived(options(nodeB));
+  const suggestA = $derived(nodeA ? nextFreeInterface(nodeA) : "");
+  const suggestB = $derived(nodeB ? nextFreeInterface(nodeB) : "");
 
   let ifA = $state("");
   let ifB = $state("");
@@ -87,31 +96,59 @@
   <div class="two">
     <div class="col">
       <span class="lab">{nodeA?.name ?? ""} — local</span>
-      {#if nodeA?.kind === "vpcs" || nodeA?.kind === "nat" || nodeA?.kind === "tool"}
-        <div class="fixed mono">{nodeA.kind === "tool" ? "eth1" : "eth0"}</div>
+      {#if nodeA?.kind === "vpcs" || nodeA?.kind === "nat" || nodeA?.kind === "tool" || nodeA?.kind === "pc"}
+        <div class="fixed mono">{nodeA.kind === "tool" || nodeA.kind === "pc" ? "eth1" : "eth0"}</div>
       {:else if noFreeA}
         <div class="fixed mono none">no free ports</div>
       {:else}
         <select class="mono" bind:value={ifA} aria-label="Local interface">
-          {#each optsA as o (o.iface)}
-            <option value={o.iface} disabled={o.used}>{o.iface}{o.used ? " (used)" : ""}</option>
-          {/each}
+          {#if optsA.free.length}
+            <optgroup label="Free">
+              {#each optsA.free as iface (iface)}
+                <option value={iface}>{iface}{iface === suggestA ? " · next free" : ""}</option>
+              {/each}
+            </optgroup>
+          {/if}
+          {#if optsA.used.length}
+            <optgroup label="In use">
+              {#each optsA.used as iface (iface)}
+                <option value={iface} disabled>{iface}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
+        <div class="hint">
+          {#if ifA === suggestA}<span class="mono">{suggestA}</span> — first port with no link{:else}Suggested next free: <span class="mono">{suggestA}</span>{/if}
+        </div>
       {/if}
     </div>
     <span class="arrow mono">&harr;</span>
     <div class="col">
       <span class="lab">{nodeB?.name ?? ""} — remote</span>
-      {#if nodeB?.kind === "vpcs" || nodeB?.kind === "nat" || nodeB?.kind === "tool"}
-        <div class="fixed mono">{nodeB.kind === "tool" ? "eth1" : "eth0"}</div>
+      {#if nodeB?.kind === "vpcs" || nodeB?.kind === "nat" || nodeB?.kind === "tool" || nodeB?.kind === "pc"}
+        <div class="fixed mono">{nodeB.kind === "tool" || nodeB.kind === "pc" ? "eth1" : "eth0"}</div>
       {:else if noFreeB}
         <div class="fixed mono none">no free ports</div>
       {:else}
         <select class="mono" bind:value={ifB} aria-label="Remote interface">
-          {#each optsB as o (o.iface)}
-            <option value={o.iface} disabled={o.used}>{o.iface}{o.used ? " (used)" : ""}</option>
-          {/each}
+          {#if optsB.free.length}
+            <optgroup label="Free">
+              {#each optsB.free as iface (iface)}
+                <option value={iface}>{iface}{iface === suggestB ? " · next free" : ""}</option>
+              {/each}
+            </optgroup>
+          {/if}
+          {#if optsB.used.length}
+            <optgroup label="In use">
+              {#each optsB.used as iface (iface)}
+                <option value={iface} disabled>{iface}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
+        <div class="hint">
+          {#if ifB === suggestB}<span class="mono">{suggestB}</span> — first port with no link{:else}Suggested next free: <span class="mono">{suggestB}</span>{/if}
+        </div>
       {/if}
     </div>
   </div>
@@ -144,6 +181,11 @@
     font-size: var(--fs-xs);
     color: var(--ink-3);
     margin-bottom: 10px;
+  }
+  .hint {
+    font-size: var(--fs-xs);
+    color: var(--ink-3);
+    line-height: 1.3;
   }
   .two {
     display: grid;

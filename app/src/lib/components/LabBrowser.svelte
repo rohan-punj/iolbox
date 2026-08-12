@@ -66,6 +66,8 @@
         return "var(--accent)";
       case "tool":
         return "var(--accent)";
+      case "pc":
+        return "var(--node-vpcs)";
       default:
         return "var(--node-iol-l3)";
     }

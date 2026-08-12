@@ -336,7 +336,7 @@ func TestBuildRootfsSyslogStagingShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(script), "for pack in aaa webserver httpclient syslog;"); got != 3 {
+	if got := strings.Count(string(script), "for pack in aaa webserver httpclient syslog netsvc pc;"); got != 3 {
 		t.Fatalf("syslog build-rootfs loops = %d, want 3", got)
 	}
 

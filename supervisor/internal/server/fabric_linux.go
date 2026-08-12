@@ -122,6 +122,11 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	uid := currentUID()
+	// Persisted faults are definitions until the lab is started. Activate the
+	// explicitly initial ones here, before any link decision is made, so an
+	// initially-down link still gets its bridge and an initially-impaired link
+	// is applied during the same start transaction.
+	ll.activateInitialFaults()
 
 	// /tmp/netio<uid> must exist before iouyap binds a socket in it (and before
 	// IOL binds its own <instance> socket there). startBridges also ensures this;
@@ -219,15 +224,19 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 		if len(idSet) > 0 && everAttached && !linkTouchesAny(l, idSet) {
 			continue
 		}
-		// Skip the attach itself (and the dirstat reopen it triggers) when the
-		// link is ALREADY fully wired at the kernel level: gate on the actual
-		// devices, not just the bookkeeping map, so a link whose bridge or
-		// tap-membership was torn out from under a lingering map entry still
-		// self-heals via the normal attachFabricLink path below.
-		if !s.fabricLinkFullyAttached(ll, l) {
+		// Check persisted fault state BEFORE the pure kernel predicate. An
+		// admin-down link is intentionally missing bridge membership, but must
+		// not be silently healed by a later node.start.
+		if f, ok := ll.faultForLink(l.ID); ok && f.Active && f.Fault != nil && f.Fault.Down {
+			if err := s.reconcileFabricLinkDown(ll, l, f); err != nil {
+				return err
+			}
+		} else if !s.fabricLinkFullyAttached(ll, l) {
 			if err := s.attachFabricLink(ll, l); err != nil {
 				return err
 			}
+		} else if err := s.reconcileLinkFault(ll, l); err != nil {
+			return err
 		}
 		// Always run the armed-capture check, even for a skipped (already
 		// fully-attached) link: a supervisor restart can lose the in-memory
@@ -396,7 +405,7 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 			if err := mgr.Attach(ctx, br, nr.vtapName); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric vpcs attach %s->%s: %v", nr.vtapName, br, err)
 			}
-		case node != nil && node.Kind == lab.KindTool:
+		case node != nil && (node.Kind == lab.KindTool || node.Kind == lab.KindPC):
 			// Tool: hand the bridge to its netns endpoint. A tool not yet started
 			// is skipped; startToolNode attaches it when it comes up.
 			nr := ll.get(ep.Node)
@@ -423,7 +432,154 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 	ll.mu.Unlock()
 	s.openLinkDirstat(ll, l)
 	s.openLinkSlowTee(ll, l)
+	return s.reconcileLinkFault(ll, l)
+}
+
+func netemProtocolError(linkID int, dev string, err error) error {
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "unknown qdisc") || strings.Contains(msg, "qdisc kind is unknown") {
+		return protocol.Errorf(protocol.CodeUnsupported,
+			"link %d: impairment unavailable because the sch_netem kernel module is not available", linkID)
+	}
+	return protocol.Errorf(protocol.CodeNodeSpawnFailed, "link %d: netem on %s: %v", linkID, dev, err)
+}
+
+// clearLinkNetem clears every mapped endpoint device, including devices that
+// have disappeared since the fault was applied. ClearNetem deliberately treats
+// both missing qdiscs and missing devices as successful no-ops.
+func (s *Server) clearLinkNetem(ll *loadedLab, l *lab.Link) error {
+	mgr := fabric.NewManager()
+	ctx := context.Background()
+	for _, e := range s.fabricLinkEndpointDevs(ll, l) {
+		if err := mgr.ClearNetem(ctx, e.Dev); err != nil {
+			return netemProtocolError(l.ID, e.Dev, err)
+		}
+	}
 	return nil
+}
+
+// reconcileLinkFault is the only function that applies an impairment. It
+// existence-filters devices, selects by endpoint index, and clears every
+// present non-target so edits and late endpoint starts cannot leave stale
+// asymmetric qdiscs behind.
+func (s *Server) reconcileLinkFault(ll *loadedLab, l *lab.Link) error {
+	f, ok := ll.faultForLink(l.ID)
+	if !ok || f.Fault == nil || !f.Active || f.Fault.Down {
+		return s.clearLinkNetem(ll, l)
+	}
+	mgr := fabric.NewManager()
+	ctx := context.Background()
+	netem := faultNetem(f.Fault)
+	for _, e := range s.fabricLinkFaultTargets(ll, l) {
+		var err error
+		if faultTargetsEndpoint(f.Fault, e.EndpointIndex) {
+			err = mgr.SetNetem(ctx, e.Dev, netem)
+		} else {
+			err = mgr.ClearNetem(ctx, e.Dev)
+		}
+		if err != nil {
+			return netemProtocolError(l.ID, e.Dev, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) attachFabricEndpoint(ll *loadedLab, l *lab.Link, epIndex int, br string) error {
+	if epIndex < 0 || epIndex >= len(l.Endpoints) {
+		return nil
+	}
+	ep := l.Endpoints[epIndex]
+	n := ll.findNode(ep.Node)
+	mgr := fabric.NewManager()
+	ctx := context.Background()
+	switch {
+	case n != nil && n.Kind == lab.KindNAT:
+		if nr := ll.get(ep.Node); nr != nil && nr.extnet != nil {
+			if err := nr.extnet.AttachBridge(br); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric nat %d attach %s: %v", ep.Node, br, err)
+			}
+		}
+	case n != nil && n.Kind == lab.KindVPCS:
+		if nr := ll.get(ep.Node); nr != nil && nr.vtap != nil && nr.vtapName != "" {
+			if err := mgr.Attach(ctx, br, nr.vtapName); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric vpcs attach %s->%s: %v", nr.vtapName, br, err)
+			}
+		}
+	case n != nil && (n.Kind == lab.KindTool || n.Kind == lab.KindPC):
+		if nr := ll.get(ep.Node); nr != nil && nr.tool != nil {
+			if err := nr.tool.AttachBridge(br); err != nil {
+				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tool %d attach %s: %v", ep.Node, br, err)
+			}
+		}
+	default:
+		t, ok := tapForEndpoint(ll.staticTaps, ep)
+		if !ok {
+			return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric link %d: no static tap for node %d %s", l.ID, ep.Node, ep.Interface)
+		}
+		if err := mgr.Attach(ctx, br, t.tapName); err != nil {
+			return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric attach %s->%s: %v", t.tapName, br, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) detachFabricEndpoint(ll *loadedLab, l *lab.Link, epIndex int) {
+	if epIndex < 0 || epIndex >= len(l.Endpoints) {
+		return
+	}
+	ep := l.Endpoints[epIndex]
+	n := ll.findNode(ep.Node)
+	mgr := fabric.NewManager()
+	ctx := context.Background()
+	switch {
+	case n != nil && n.Kind == lab.KindNAT:
+		if nr := ll.get(ep.Node); nr != nil && nr.extnet != nil {
+			nr.extnet.DetachBridge()
+		}
+	case n != nil && n.Kind == lab.KindVPCS:
+		if nr := ll.get(ep.Node); nr != nil && nr.vtapName != "" {
+			_ = mgr.Detach(ctx, nr.vtapName)
+		}
+	case n != nil && (n.Kind == lab.KindTool || n.Kind == lab.KindPC):
+		if nr := ll.get(ep.Node); nr != nil && nr.tool != nil {
+			nr.tool.DetachBridge()
+		}
+	default:
+		if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+			_ = mgr.Detach(ctx, t.tapName)
+		}
+	}
+}
+
+// reconcileFabricLinkDown realizes an admin-down link without making the
+// kernel-state predicate lie: the bridge exists, non-target members remain
+// attached, and targeted members are detached. This also leaves the link in
+// fabricLinks so dirstat/capture bookkeeping remains coherent.
+func (s *Server) reconcileFabricLinkDown(ll *loadedLab, l *lab.Link, f activeFault) error {
+	br, err := fabric.BridgeName(l.ID)
+	if err != nil {
+		return protocol.Errorf(protocol.CodeBadRequest, "fabric bridge name link %d: %v", l.ID, err)
+	}
+	mgr := fabric.NewManager()
+	if err := mgr.EnsureBridge(context.Background(), br); err != nil {
+		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric bridge %s: %v", br, err)
+	}
+	if err := s.clearLinkNetem(ll, l); err != nil {
+		return err
+	}
+	for _, e := range s.fabricLinkFaultTargets(ll, l) {
+		if faultTargetsEndpoint(f.Fault, e.EndpointIndex) {
+			s.detachFabricEndpoint(ll, l, e.EndpointIndex)
+		} else if err := s.attachFabricEndpoint(ll, l, e.EndpointIndex, br); err != nil {
+			return err
+		}
+	}
+	ll.mu.Lock()
+	ll.fabricLinks[l.ID] = true
+	ll.mu.Unlock()
+	s.openLinkDirstat(ll, l)
+	s.openLinkSlowTee(ll, l)
+	return s.reconcileLinkFault(ll, l)
 }
 
 // openLinkDirstat (re)opens the always-on per-endpoint-tap directional
@@ -436,7 +592,11 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 // a nil classifier and simply no directional data — the aggregate fps/bps glow
 // is unaffected.
 func (s *Server) openLinkDirstat(ll *loadedLab, l *lab.Link) {
-	devs := s.fabricLinkTapDevs(ll, l)
+	indexed := s.fabricLinkEndpointDevs(ll, l)
+	devs := make([]dirstat.EndpointDev, 0, len(indexed))
+	for _, e := range indexed {
+		devs = append(devs, dirstat.EndpointDev{Index: e.EndpointIndex, Dev: e.Dev})
+	}
 	ll.mu.Lock()
 	old := ll.dirstats[l.ID]
 	delete(ll.dirstats, l.ID)
@@ -543,7 +703,18 @@ func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error {
 		}
 		for _, ep := range l.Endpoints {
 			if ep.Node == nodeID {
-				return s.attachFabricLink(ll, l)
+				if f, ok := ll.faultForLink(l.ID); ok && f.Active && f.Fault != nil && f.Fault.Down {
+					if err := s.reconcileFabricLinkDown(ll, l, f); err != nil {
+						return err
+					}
+				} else if !s.fabricLinkFullyAttached(ll, l) {
+					if err := s.attachFabricLink(ll, l); err != nil {
+						return err
+					}
+				} else if err := s.reconcileLinkFault(ll, l); err != nil {
+					return err
+				}
+				break
 			}
 		}
 	}
@@ -554,6 +725,10 @@ func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error {
 // taps themselves persist — the interfaces are simply unconnected again, still
 // fabric-eligible and ready to be reattached to a new link with no restart.
 func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
+	s.cancelFaultTimer(ll, l.ID)
+	if err := s.clearLinkNetem(ll, l); err != nil {
+		log.Printf("fabric: link %d: clear netem during detach: %v", l.ID, err)
+	}
 	// Stop any bridge capture first (the bridge is about to go away).
 	s.stopBridgeCapture(ll, l.ID)
 	// Stop the directional classifier: its taps are about to be detached/removed.
@@ -575,7 +750,7 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 			if nr := ll.get(ep.Node); nr != nil && nr.vtapName != "" {
 				_ = mgr.Detach(ctx, nr.vtapName)
 			}
-		case node != nil && node.Kind == lab.KindTool:
+		case node != nil && (node.Kind == lab.KindTool || node.Kind == lab.KindPC):
 			if nr := ll.get(ep.Node); nr != nil && nr.tool != nil {
 				nr.tool.DetachBridge()
 			}
@@ -651,6 +826,8 @@ type fabStat struct {
 	// directional classifier (nil when the link has no classifier). The stats
 	// loop diffs two consecutive snapshots into per-direction per-protocol rates.
 	dir dirstat.Counters
+	// attrib is the slowly-changing source-MAC hint sent with link.stats.
+	attrib []dirstat.EndpointAttrib
 }
 
 // fabricStats snapshots every fabric link's cumulative counters (see fabStat).
@@ -692,6 +869,7 @@ func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat {
 		}
 		if dc := dcs[id]; dc != nil {
 			fs.dir = dc.Snapshot()
+			fs.attrib = dc.Attribution()
 		}
 		out[id] = fs
 	}
@@ -702,27 +880,54 @@ func (s *Server) fabricStats(ll *loadedLab) map[int]fabStat {
 // an IOL interface's static tap, a VPCS node's shim tap, a NAT node's tap, or
 // a running tool's root-side veth.
 func (s *Server) fabricLinkTapDevs(ll *loadedLab, l *lab.Link) []string {
-	var devs []string
-	for _, ep := range l.Endpoints {
+	indexed := s.fabricLinkEndpointDevs(ll, l)
+	devs := make([]string, 0, len(indexed))
+	for _, e := range indexed {
+		devs = append(devs, e.Dev)
+	}
+	return devs
+}
+
+// fabricLinkEndpointDevs is the endpoint-indexed form of the existing compact
+// device lookup. It intentionally preserves the old skip rules so stats,
+// dirstat and slowtee consumers see byte-identical slices through the wrapper.
+func (s *Server) fabricLinkEndpointDevs(ll *loadedLab, l *lab.Link) []endpointDev {
+	var devs []endpointDev
+	for endpointIndex, ep := range l.Endpoints {
 		node := ll.findNode(ep.Node)
 		switch {
 		case node != nil && node.Kind == lab.KindVPCS:
 			if nr := ll.get(ep.Node); nr != nil && nr.vtapName != "" {
-				devs = append(devs, nr.vtapName)
+				devs = append(devs, endpointDev{EndpointIndex: endpointIndex, Dev: nr.vtapName})
 			}
 		case node != nil && node.Kind == lab.KindNAT:
-			devs = append(devs, "iolnat"+strconv.Itoa(ep.Node)) // matches extnet tapName
-		case node != nil && node.Kind == lab.KindTool:
+			devs = append(devs, endpointDev{EndpointIndex: endpointIndex, Dev: "iolnat" + strconv.Itoa(ep.Node)}) // matches extnet tapName
+		case node != nil && (node.Kind == lab.KindTool || node.Kind == lab.KindPC):
 			if nr := ll.get(ep.Node); nr != nil && nr.tool != nil {
-				devs = append(devs, tool.HostVethName(ep.Node))
+				devs = append(devs, endpointDev{EndpointIndex: endpointIndex, Dev: tool.HostVethName(ep.Node)})
 			}
 		default:
 			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
-				devs = append(devs, t.tapName)
+				devs = append(devs, endpointDev{EndpointIndex: endpointIndex, Dev: t.tapName})
 			}
 		}
 	}
 	return devs
+}
+
+// fabricLinkFaultTargets filters the endpoint-indexed mapping by actual
+// kernel device existence. NAT contributes a name even while stopped for the
+// existing stats semantics, but a fault must never send that phantom name to
+// tc; it is picked up when the endpoint starts.
+func (s *Server) fabricLinkFaultTargets(ll *loadedLab, l *lab.Link) []endpointDev {
+	all := s.fabricLinkEndpointDevs(ll, l)
+	out := make([]endpointDev, 0, len(all))
+	for _, e := range all {
+		if tapDeviceExists(e.Dev) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // readTapCounters reads a netdev's cumulative rx packet + byte counters from
@@ -780,6 +985,14 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	ll.dirstats = make(map[int]*dirstat.Classifier)
 	tees := ll.slowtees
 	ll.slowtees = make(map[int]*slowtee.Tee)
+	for id, f := range ll.linkFaults {
+		if f.Timer != nil {
+			f.Timer.Stop()
+			f.Timer = nil
+		}
+		f.Active = false
+		ll.linkFaults[id] = f
+	}
 	nodes := make([]*nodeRuntime, 0, len(ll.nodes))
 	for _, nr := range ll.nodes {
 		nodes = append(nodes, nr)
@@ -800,6 +1013,15 @@ func (s *Server) teardownFabric(ll *loadedLab) {
 	}
 	mgr := fabric.NewManager()
 	ctx := context.Background()
+	// Clear qdiscs before endpoint teardown removes veths/taps. Missing-device
+	// errors are intentionally benign inside Manager.ClearNetem, so this is
+	// safe after a partial startup or crash and safe to repeat.
+	for i := range ll.doc.Links {
+		s.cancelFaultTimer(ll, ll.doc.Links[i].ID)
+		if err := s.clearLinkNetem(ll, &ll.doc.Links[i]); err != nil {
+			log.Printf("fabric: teardown: clear link %d netem: %v", ll.doc.Links[i].ID, err)
+		}
+	}
 	for id := range links {
 		if br, err := fabric.BridgeName(id); err == nil {
 			deleteBridgeVerified(mgr, ctx, br)

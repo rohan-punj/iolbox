@@ -227,6 +227,7 @@ var ScrubbedEnvAllowlist = []string{
 	"IOLBOX_TOOL_OPTIONS",
 	"IOLBOX_PACK_DIR",
 	"IOLBOX_NODE_ID",
+	"IOLBOX_PC_CLI_SOCK",
 }
 
 // Capabilities reports the six runtime capabilities needed to support tool
@@ -280,6 +281,9 @@ type Config struct {
 	// before launch. Nil or empty Options means the endpoint writes {}, never
 	// leaves the file absent, because the GUI hard-exits when it cannot read it.
 	Options []byte
+	// CLISocket asks the endpoint launcher to expose the private PC CLI socket
+	// path to the pack. Ordinary tool packs never receive this variable.
+	CLISocket bool
 }
 
 // OptionsFile returns the exact per-node options path under the tool socket
@@ -288,6 +292,11 @@ type Config struct {
 // this file at startup.
 func OptionsFile(runRoot string, nodeID int) string {
 	return filepath.Join(SocketDir(runRoot, nodeID), "options.json")
+}
+
+// CLISocketFile returns the private AF_UNIX CLI socket path for a PC endpoint.
+func CLISocketFile(runRoot string, nodeID int) string {
+	return filepath.Join(SocketDir(runRoot, nodeID), "cli.sock")
 }
 
 // CgroupRoot describes the supervisor's delegated cgroup and its process leaf.

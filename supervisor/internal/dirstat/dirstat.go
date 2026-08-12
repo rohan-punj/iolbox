@@ -7,10 +7,12 @@
 // (Linux only) and, in a per-socket goroutine, reads just the leading bytes of
 // every frame — enough for relay.ClassifyDetailed — and increments a counter
 // keyed by (endpoint index, protocol label, subtype). A frame RECEIVED on a tap
-// (sll_pkttype != PACKET_OUTGOING) was sent by the node behind that tap, so it
-// is attributed as sourced from that endpoint; a frame the host sent OUT the tap
-// (PACKET_OUTGOING) is the mirror of the peer's ingress and is not double
-// counted.
+// (sll_pkttype != PACKET_OUTGOING) is counted for that tap's direction; it is
+// not, by itself, proof that the endpoint originated the source MAC because a
+// bridge or switch may have forwarded it. The separate Attribution channel
+// learns one source MAC, flips to ambiguous on a second, and never licenses a
+// node name from an unproven frame. PACKET_OUTGOING is the peer's mirror and is
+// not double counted.
 //
 // The counters are cumulative uint64s; the stats loop diffs two Snapshot()s the
 // same way it diffs the netdev fps/bps counters, so this never drives emission
@@ -19,7 +21,65 @@
 // them on lab.stop / link.remove / teardownFabric.
 package dirstat
 
-import "sync"
+import (
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+)
+
+// EndpointDev binds a tap device to the LAB DOCUMENT endpoint index it
+// belongs to. The device list is sparse: a stopped or not-yet-attached
+// endpoint contributes no device, so callers must not reconstruct the index
+// from slice position.
+type EndpointDev struct {
+	Index int
+	Dev   string
+}
+
+type attribState string
+
+const (
+	attribNone      attribState = "none"
+	attribSingle    attribState = "single"
+	attribAmbiguous attribState = "ambiguous"
+)
+
+const (
+	macTTL      = 5 * time.Minute
+	maxConflict = 32
+)
+
+var monotonicOrigin = time.Now()
+
+func monotonicNow() int64 { return time.Since(monotonicOrigin).Nanoseconds() }
+
+// attribCandidate is one endpoint's source-MAC attribution state. An endpoint
+// is attributable ONLY in state single: a second distinct source MAC is
+// evidence that the endpoint is forwarding for another device, so the first
+// MAC is discarded rather than retained as a guess.
+type attribCandidate struct {
+	mac       [6]byte
+	state     attribState
+	firstSeen int64 // monotonic nanos
+	lastSeen  int64 // monotonic nanos
+}
+
+type conflictMAC struct {
+	mac      [6]byte
+	lastSeen int64
+}
+
+// EndpointAttrib is a per-endpoint source-MAC attribution hint for one fabric
+// link endpoint. EndpointIndex is explicit because the slice is sparse.
+// State is the only thing that licenses naming a node: single has one MAC,
+// ambiguous means the endpoint forwards for other devices, and none means no
+// usable observation is currently available.
+type EndpointAttrib struct {
+	EndpointIndex int    `json:"endpointIndex"`
+	State         string `json:"state"`
+	MAC           string `json:"mac,omitempty"`
+}
 
 // key identifies one accumulator bucket: which endpoint sourced the frame (0 or
 // 1), its primary protocol label, and its packet-type subtype ("" when the
@@ -55,6 +115,7 @@ func (c *Classifier) Snapshot() Counters {
 // (linux) and kept here so the field layout and locking live in one place.
 func (c *Classifier) count(ep int, label, subtype string) {
 	c.mu.Lock()
+	c.ensureEndpointLocked(ep)
 	c.counts[key{ep: ep, label: label, subtype: subtype}]++
 	c.mu.Unlock()
 }
@@ -65,11 +126,230 @@ func (c *Classifier) count(ep int, label, subtype string) {
 type Classifier struct {
 	mu     sync.Mutex
 	counts Counters
+	// endpoints records the document indexes that had a usable tap when this
+	// classifier was opened. It is separate from candidates so an endpoint
+	// with no observations can still be reported as state "none".
+	endpoints  map[int]struct{}
+	candidates map[int]attribCandidate
+	conflicts  []conflictMAC
 
 	// closer/wg are populated only by the linux implementation; the stub never
 	// sets them so its Close is a no-op.
 	closer func()
 	wg     *sync.WaitGroup
+}
+
+func newClassifier(devs []EndpointDev) *Classifier {
+	c := &Classifier{
+		counts:     make(Counters),
+		endpoints:  make(map[int]struct{}),
+		candidates: make(map[int]attribCandidate),
+		wg:         &sync.WaitGroup{},
+	}
+	for _, d := range devs {
+		if d.Index < 0 || d.Index > 1 || d.Dev == "" {
+			continue
+		}
+		c.endpoints[d.Index] = struct{}{}
+		c.candidates[d.Index] = attribCandidate{state: attribNone}
+	}
+	return c
+}
+
+func (c *Classifier) ensureMapsLocked() {
+	if c.counts == nil {
+		c.counts = make(Counters)
+	}
+	if c.endpoints == nil {
+		c.endpoints = make(map[int]struct{})
+	}
+	if c.candidates == nil {
+		c.candidates = make(map[int]attribCandidate)
+	}
+}
+
+func (c *Classifier) ensureEndpointLocked(ep int) {
+	c.ensureMapsLocked()
+	if ep < 0 || ep > 1 {
+		return
+	}
+	c.endpoints[ep] = struct{}{}
+	if _, ok := c.candidates[ep]; !ok {
+		c.candidates[ep] = attribCandidate{state: attribNone}
+	}
+}
+
+func validSourceMAC(mac [6]byte) bool {
+	if mac[0]&1 != 0 { // group/multicast source is not an endpoint identity
+		return false
+	}
+	for _, b := range mac {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Classifier) conflictIndexLocked(mac [6]byte) int {
+	for i := range c.conflicts {
+		if c.conflicts[i].mac == mac {
+			return i
+		}
+	}
+	return -1
+}
+
+func (c *Classifier) addConflictLocked(mac [6]byte, now int64) {
+	if i := c.conflictIndexLocked(mac); i >= 0 {
+		c.conflicts[i].lastSeen = now
+		return
+	}
+	c.conflicts = append(c.conflicts, conflictMAC{mac: mac, lastSeen: now})
+	if len(c.conflicts) > maxConflict {
+		oldest := 0
+		for i := 1; i < len(c.conflicts); i++ {
+			if c.conflicts[i].lastSeen < c.conflicts[oldest].lastSeen {
+				oldest = i
+			}
+		}
+		copy(c.conflicts[oldest:], c.conflicts[oldest+1:])
+		c.conflicts = c.conflicts[:len(c.conflicts)-1]
+	}
+}
+
+func (c *Classifier) expireLocked(now int64) {
+	for ep, candidate := range c.candidates {
+		if candidate.state != attribNone && now-candidate.lastSeen > macTTL.Nanoseconds() {
+			c.candidates[ep] = attribCandidate{state: attribNone}
+		}
+	}
+	kept := c.conflicts[:0]
+	for _, conflict := range c.conflicts {
+		if now-conflict.lastSeen <= macTTL.Nanoseconds() {
+			kept = append(kept, conflict)
+		}
+	}
+	c.conflicts = kept
+}
+
+func (c *Classifier) clearCandidateLocked(ep int) {
+	c.ensureEndpointLocked(ep)
+	c.candidates[ep] = attribCandidate{state: attribNone}
+}
+
+// observeSource records one source MAC from an endpoint tap. Keeping this
+// operation in the platform-independent file makes the learning lifecycle
+// testable without requiring AF_PACKET privileges; Linux readLoop supplies
+// the same bytes and a monotonic timestamp.
+func (c *Classifier) observeSource(ep int, mac [6]byte, now int64) {
+	if c == nil || !validSourceMAC(mac) || ep < 0 || ep > 1 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureEndpointLocked(ep)
+
+	// A MAC currently attributed to the other endpoint is a conflict, not a
+	// reason to choose one side. Drop the old owner and suppress the source on
+	// this side while the bounded conflict entry is alive.
+	other := 1 - ep
+	otherCandidate, otherOK := c.candidates[other]
+	if otherOK && otherCandidate.state == attribSingle && otherCandidate.mac == mac {
+		c.addConflictLocked(mac, now)
+		c.clearCandidateLocked(other)
+		current := c.candidates[ep]
+		switch current.state {
+		case attribSingle:
+			if current.mac == mac {
+				c.clearCandidateLocked(ep)
+			} else {
+				current.state = attribAmbiguous
+				current.mac = [6]byte{}
+				current.lastSeen = now
+				c.candidates[ep] = current
+			}
+		case attribAmbiguous:
+			current.lastSeen = now
+			c.candidates[ep] = current
+		}
+		return
+	}
+
+	// A conflicted MAC is never relearned while the conflict is alive. If it
+	// was already this endpoint's candidate, remove it from attribution.
+	if c.conflictIndexLocked(mac) >= 0 {
+		current := c.candidates[ep]
+		switch current.state {
+		case attribSingle:
+			if current.mac == mac {
+				c.clearCandidateLocked(ep)
+			}
+		case attribAmbiguous:
+			current.lastSeen = now
+			c.candidates[ep] = current
+		}
+		return
+	}
+
+	current := c.candidates[ep]
+	switch current.state {
+	case attribNone:
+		c.candidates[ep] = attribCandidate{
+			mac: mac, state: attribSingle, firstSeen: now, lastSeen: now,
+		}
+	case attribSingle:
+		if current.mac == mac {
+			current.lastSeen = now
+			c.candidates[ep] = current
+		} else {
+			// The first source may itself have been forwarded. Never retain it
+			// once a second distinct source proves the endpoint is ambiguous.
+			current.mac = [6]byte{}
+			current.state = attribAmbiguous
+			current.lastSeen = now
+			c.candidates[ep] = current
+		}
+	case attribAmbiguous:
+		current.lastSeen = now
+		c.candidates[ep] = current
+	}
+}
+
+// Attribution copies the current endpoint hints under the lock. Expiry is
+// lazy: no timer goroutine is needed for a quiet link.
+func (c *Classifier) Attribution() []EndpointAttrib {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureMapsLocked()
+	c.expireLocked(monotonicNow())
+	indexes := make([]int, 0, len(c.endpoints))
+	for ep := range c.endpoints {
+		indexes = append(indexes, ep)
+	}
+	sort.Ints(indexes)
+	out := make([]EndpointAttrib, 0, len(indexes))
+	for _, ep := range indexes {
+		candidate := c.candidates[ep]
+		entry := EndpointAttrib{EndpointIndex: ep, State: string(candidate.state)}
+		if candidate.state == attribSingle && c.conflictIndexLocked(candidate.mac) < 0 {
+			entry.MAC = formatMAC(candidate.mac)
+		} else if candidate.state == attribSingle {
+			entry.State = string(attribNone)
+		}
+		if entry.State == "" {
+			entry.State = string(attribNone)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func formatMAC(mac [6]byte) string {
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
 }
 
 // Direction sums a Counters diff over an interval into a per-(label,subtype)

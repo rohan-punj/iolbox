@@ -45,7 +45,8 @@ func (s *Server) toolPack(id string) (tool.Pack, bool) {
 			return pack, true
 		}
 	}
-	return tool.Pack{}, false
+	var emptyPack tool.Pack
+	return emptyPack, false
 }
 
 // toolpacksLoad preserves successful packs when one manifest is malformed;
@@ -53,7 +54,22 @@ func (s *Server) toolPack(id string) (tool.Pack, bool) {
 // the rejected entry.
 func (s *Server) toolpacksLoad(dir string) {
 	packs, err := tool.LoadPacks(dir)
-	s.toolPacks = packs
+	s.toolPacks = make([]tool.Pack, 0, len(packs))
+	var emptyPack tool.Pack
+	s.pcPack = emptyPack
+	s.pcPackOK = false
+	for _, pack := range packs {
+		if pack.ID == "pc" {
+			if s.pcPackOK {
+				log.Printf("supervisor: warning: duplicate built-in pc pack ignored: %s", pack.Root)
+				continue
+			}
+			s.pcPack = pack
+			s.pcPackOK = true
+			continue
+		}
+		s.toolPacks = append(s.toolPacks, pack)
+	}
 	if err != nil {
 		log.Printf("supervisor: warning: tool pack load: %v", err)
 	}

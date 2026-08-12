@@ -1,5 +1,5 @@
 // Types for docs/protocol.md — the NDJSON control protocol spoken to the supervisor.
-import type { ImageClass, LabDocument, LabLink, LibraryImage, NodeState } from "./labTypes";
+import type { ImageClass, LabDocument, LabLink, LibraryImage, NodeState, LinkFault, PCState } from "./labTypes";
 
 export interface Request<A = unknown> {
   id: string;
@@ -41,6 +41,10 @@ export interface NodeStateEvent {
 export interface NodeConsoleEvent {
   event: "node.console";
   data: { node: number; consolePort: number };
+}
+export interface PCStateEvent {
+  event: "node.pcState";
+  data: { node: number; state: PCState; stale: boolean };
 }
 export interface LinkUpEvent {
   event: "link.up";
@@ -84,6 +88,10 @@ export interface LinkStatsEvent {
     protosSubtypeDir?: Record<string, Record<string, [number, number]>>;
   };
 }
+export interface LinkFaultEvent {
+  event: "link.fault";
+  data: { link: number; fault: LinkFault | null; active: boolean; reason?: string };
+}
 /** Runtime VM resource utilisation, pushed every ~2s for the host monitor. */
 export interface HostStatsEvent {
   event: "host.stats";
@@ -100,11 +108,13 @@ export interface HostStatsEvent {
 export type SupervisorEvent =
   | NodeStateEvent
   | NodeConsoleEvent
+  | PCStateEvent
   | LinkUpEvent
   | LinkDownEvent
   | CaptureStartedEvent
   | CaptureStoppedEvent
   | LinkStatsEvent
+  | LinkFaultEvent
   | HostStatsEvent
   | LogEvent;
 
@@ -157,6 +167,10 @@ export interface ToolModuleInfo {
   group: string;
 }
 
+export interface PCStateSyncResult {
+  states: { node: number; state: PCState; stale: boolean }[];
+}
+
 export interface LabLoadResult {
   labId: string;
   nodes: { id: number; consolePort: number }[];
@@ -191,6 +205,19 @@ export interface NodeSetImageResult {
   class: ImageClass;
 }
 
+export interface NodeMAC {
+  interface: string;
+  mac?: string;
+  source?: "derived" | "read" | "learned";
+  state: "known" | "unknown" | "ambiguous" | "disabled";
+  reason?: string;
+}
+
+export interface NodeMACsResult {
+  node: number;
+  macs: NodeMAC[];
+}
+
 export interface CaptureStartResult {
   link: number;
   capturePort: number;
@@ -217,6 +244,13 @@ export interface StatusResult {
 export interface LinkAddArgs {
   labId: string;
   link: LabLink;
+}
+
+export interface LinkFaultResult {
+  link: number;
+  fault: LinkFault | null;
+  active: boolean;
+  reason?: string;
 }
 
 // ---- Durable lab-document store (lab.saveDoc / listDocs / getDoc / deleteDoc) ----

@@ -174,7 +174,7 @@ function clabNodeName(n: LabNode): string {
 }
 
 function clabIface(kind: NodeKind, iface: string): string {
-  if (kind === "vpcs") return "eth1"; // clab linux data ifaces start at eth1 (eth0 = mgmt)
+  if (kind === "vpcs" || kind === "pc") return "eth1"; // clab linux data ifaces start at eth1 (eth0 = mgmt)
   const m = iface.match(/(\d+)\/(\d+)/);
   return m ? `Ethernet${m[1]}/${m[2]}` : "Ethernet0/0";
 }

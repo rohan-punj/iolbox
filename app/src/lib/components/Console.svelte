@@ -1,14 +1,16 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
-  import { consoleUiStore, FONT_MIN, FONT_MAX } from "../consoleUiStore.svelte";
-  import ConsoleTerm from "./ConsoleTerm.svelte";
-  import CaptureTerm from "./CaptureTerm.svelte";
+  import {
+    consoleUiStore,
+    FONT_MIN,
+    FONT_MAX,
+    samePane,
+    type ConsoleLayout,
+    type PaneRef,
+  } from "../consoleUiStore.svelte";
+  import PaneBody from "./PaneBody.svelte";
 
   let collapsed = $state(false);
-  // The dock's active tab is either a node console (activeConsoleTab) or a
-  // capture view. We track a capture selection separately and prefer whichever
-  // was most recently activated.
-  let activeCapture = $state<number | null>(null);
 
   // Console tabs are always the in-app web terminal now. Native telnet is a
   // global mode chosen in the left palette (consoleUiStore.consoleMode) which
@@ -18,7 +20,7 @@
   // Capture tabs: flipped shows the native Wireshark attach command as an
   // overlay ON TOP of the live summary, which keeps running underneath (the
   // stream is cheap and keeping it hot means flipping back shows no gap).
-  let nativeCapture = $state<Record<number, boolean>>({});
+
 
   // Live-capture tab title: "R1 e0/0 ⇄ e0/0 SW1" from the link's endpoints.
   function captureTitle(linkId: number): string {
@@ -31,28 +33,105 @@
   }
 
   function selectCapture(linkId: number) {
-    activeCapture = linkId;
-    labStore.activeConsoleTab = null;
+    consoleUiStore.setSearchOpenFor(null);
+    consoleUiStore.setFocused({ kind: "capture", link: linkId });
   }
   function selectConsole(nodeId: number) {
-    labStore.activeConsoleTab = nodeId;
-    activeCapture = null;
+    if (consoleUiStore.searchOpenFor !== nodeId) consoleUiStore.setSearchOpenFor(null);
+    consoleUiStore.setFocused({ kind: "console", node: nodeId });
   }
   function closeCapture(linkId: number) {
-    labStore.closeCapture(linkId);
-    nativeCapture = { ...nativeCapture, [linkId]: false };
-    if (activeCapture === linkId) {
-      activeCapture = labStore.openCaptureTabs[0] ?? null;
-      if (activeCapture === null) labStore.activeConsoleTab = labStore.openConsoleTabs[0] ?? null;
-    }
+    consoleUiStore.closePane(paneForCapture(linkId));
   }
 
   function closeConsole(nodeId: number) {
-    labStore.closeConsole(nodeId);
+    consoleUiStore.closePane(paneForConsole(nodeId));
+  }
+
+  function closeLens(linkId: number) {
+    consoleUiStore.closePane(paneForLens(linkId));
   }
 
   function flipCapture(linkId: number) {
-    nativeCapture = { ...nativeCapture, [linkId]: !nativeCapture[linkId] };
+    consoleUiStore.toggleNativeCapture(linkId);
+  }
+
+  function paneForConsole(nodeId: number): PaneRef {
+    return { kind: "console", node: nodeId };
+  }
+
+  function paneForCapture(linkId: number): PaneRef {
+    return { kind: "capture", link: linkId };
+  }
+
+  function paneForLens(linkId: number): PaneRef {
+    return { kind: "lens", link: linkId };
+  }
+
+  function isFocused(ref: PaneRef): boolean {
+    return samePane(consoleUiStore.focused, ref);
+  }
+
+  function isTiled(ref: PaneRef): boolean {
+    return consoleUiStore.layout !== "tabs" && consoleUiStore.tiles.some((tile) => samePane(tile, ref));
+  }
+
+  function isVisible(ref: PaneRef): boolean {
+    return consoleUiStore.layout === "tabs" ? isFocused(ref) : isTiled(ref);
+  }
+
+  function layoutLabel(layout: ConsoleLayout): string {
+    return layout === "tabs" ? "Tabs" : `${layout.slice(4)}-up`;
+  }
+
+  function nextLayout(): ConsoleLayout {
+    const layouts: ConsoleLayout[] = ["tabs", "tile2", "tile3", "tile4"];
+    return layouts[(layouts.indexOf(consoleUiStore.layout) + 1) % layouts.length];
+  }
+
+  function allPanes(): PaneRef[] {
+    return [
+      ...labStore.openConsoleTabs.map((node) => paneForConsole(node)),
+      ...labStore.openCaptureTabs.map((link) => paneForCapture(link)),
+      ...labStore.openLensTabs.map((link) => paneForLens(link)),
+    ];
+  }
+
+  function cycleLayout() {
+    const next = nextLayout();
+    consoleUiStore.setLayout(next);
+    if (next !== "tabs") {
+      if (consoleUiStore.focused) consoleUiStore.ensureTiled(consoleUiStore.focused);
+      for (const ref of allPanes()) {
+        if (consoleUiStore.tiles.length >= Number(next.slice(4))) break;
+        consoleUiStore.ensureTiled(ref);
+      }
+    }
+  }
+
+  function toggleSearch() {
+    const focused = consoleUiStore.focused;
+    if (!focused || focused.kind !== "console") return;
+    consoleUiStore.toggleSearchOpenFor(focused.node);
+  }
+
+  function openSearch(nodeId: number) {
+    if (isFocused(paneForConsole(nodeId))) consoleUiStore.setSearchOpenFor(nodeId);
+  }
+
+  function closeSearch() {
+    consoleUiStore.setSearchOpenFor(null);
+  }
+
+  function markNow() {
+    const capturePos: Record<number, number> = {};
+    for (const linkId of labStore.openCaptureTabs) {
+      // Every open capture has one store-owned session. Snapshot zero too: a
+      // mark taken before the first packet is still an exact stream boundary,
+      // not an unknown position.
+      capturePos[linkId] = consoleUiStore.captureDelivered[linkId] ?? 0;
+    }
+    consoleUiStore.addMark(capturePos);
   }
 
   // Link-menu "Capture in Wireshark…" fired labStore.openCapture() then set
@@ -60,43 +139,6 @@
   // instead of leaving the user on the plain live-summary view. Reset the
   // signal immediately so it doesn't re-fire (e.g. if the tab is later closed
   // and reopened by hand).
-  $effect(() => {
-    const linkId = labStore.wiresharkOverlayFor;
-    if (linkId === null) return;
-    selectCapture(linkId);
-    nativeCapture = { ...nativeCapture, [linkId]: true };
-    labStore.wiresharkOverlayFor = null;
-  });
-
-  /** host:port of a link's live pcapng tee, or null until the capture port is
-   *  known (no capture.started seen yet). */
-  function captureAddr(linkId: number): { host: string; port: number } | null {
-    const port = labStore.capturePorts[linkId];
-    if (!port) return null;
-    return { host: location.hostname || "localhost", port };
-  }
-
-  /** The native Wireshark live-attach command for a capturing link, or null
-   *  while the capture port is not known yet. Wireshark's TCP@ interface reads
-   *  the live pcapng stream directly. */
-  function wiresharkCmd(linkId: number): string | null {
-    const a = captureAddr(linkId);
-    return a ? `wireshark -k -i TCP@${a.host}:${a.port}` : null;
-  }
-
-  /** Full-path Windows fallback for when wireshark isn't on PATH. */
-  function wiresharkCmdFull(linkId: number): string | null {
-    const a = captureAddr(linkId);
-    return a
-      ? `"C:\\Program Files\\Wireshark\\Wireshark.exe" -k -i TCP@${a.host}:${a.port}`
-      : null;
-  }
-
-  function fmtBytes(bytes: number): string {
-    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-    return `${Math.max(1, Math.round(bytes / 1024))} KiB`;
-  }
-
   // Inline icon glyphs (kept local per turf rules — no shared icons.svelte.ts).
   const DOCK_BOTTOM =
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><rect x="1.5" y="9.5" width="13" height="4" rx="1" fill="currentColor" stroke="none" opacity="0.85"/></svg>';
@@ -107,9 +149,16 @@
   // Small "waveform" glyph marking a live-capture tab.
   const CAPTURE =
     '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h2l1.5-4 2 8 2-6 1.5 4h2"/></svg>';
-  // Shark-fin glyph for the native-Wireshark flip on capture tabs.
   const SHARK =
     '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5c3.5 0 4-7 8.5-8.5-.5 2 0 3.5 1 4.5s2 1.5 2.5 4z"/><path d="M1.5 14.5h13"/></svg>';
+  const PIN =
+    '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="m5 2 6 6"/><path d="m4 5 7 7"/><path d="m3 13 4-4"/><path d="M8 2h5l-2 3 1 3-3 1-3-3 1-3z"/></svg>';
+  const LAYOUT =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="1.5" y="2" width="13" height="12" rx="1.5"/><path d="M8 2v12M1.5 8h13"/></svg>';
+  const FIND =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg>';
+  const MARK =
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10v11l-5-2.5-5 2.5z"/><path d="M5.5 5.5h5"/></svg>';
 
   function nodeName(id: number): string {
     return labStore.lab.nodes.find((n) => n.id === id)?.name ?? `#${id}`;
@@ -153,22 +202,34 @@
     <button class="collapse-btn" onclick={() => (collapsed = !collapsed)} aria-expanded={!collapsed}>
       <span class="chevron" class:flipped={collapsed}>▾</span>
       Consoles
-      {#if labStore.openConsoleTabs.length + labStore.openCaptureTabs.length > 0}
-        <span class="count">{labStore.openConsoleTabs.length + labStore.openCaptureTabs.length}</span>
+      {#if labStore.openConsoleTabs.length + labStore.openCaptureTabs.length + labStore.openLensTabs.length > 0}
+        <span class="count">{labStore.openConsoleTabs.length + labStore.openCaptureTabs.length + labStore.openLensTabs.length}</span>
       {/if}
     </button>
 
     {#if !collapsed}
       <div class="tabs" role="tablist">
         {#each labStore.openConsoleTabs as nodeId (nodeId)}
-          <div class="tab" class:tab-tool={isToolNode(nodeId)} class:active={labStore.activeConsoleTab === nodeId}>
+          {@const ref = paneForConsole(nodeId)}
+          <div class="tab" class:tab-tool={isToolNode(nodeId)} class:active={isFocused(ref)}>
             <button
               class="tab-label"
               role="tab"
-              aria-selected={labStore.activeConsoleTab === nodeId}
+              aria-selected={isFocused(ref)}
               onclick={() => selectConsole(nodeId)}
             >
               {nodeName(nodeId)}
+            </button>
+            {#if isTiled(ref)}<span class="tile-state" title="Tiled pane">tile</span>{/if}
+            <button
+              class="tab-pin"
+              class:on={samePane(consoleUiStore.pinned, ref)}
+              title={samePane(consoleUiStore.pinned, ref) ? "Unpin pane" : "Pin pane to tile 1"}
+              aria-label={samePane(consoleUiStore.pinned, ref) ? "Unpin pane" : "Pin pane"}
+              aria-pressed={samePane(consoleUiStore.pinned, ref)}
+              onclick={(event) => { event.stopPropagation(); consoleUiStore.togglePinned(ref); }}
+            >
+              {@html PIN}
             </button>
             <button class="tab-close" title="Close" onclick={() => closeConsole(nodeId)}>
               ✕
@@ -176,31 +237,74 @@
           </div>
         {/each}
         {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
-          <div class="tab tab-capture" class:active={activeCapture === linkId}>
+          {@const ref = paneForCapture(linkId)}
+          <div class="tab tab-capture" class:active={isFocused(ref)}>
             <button
               class="tab-label"
               role="tab"
-              aria-selected={activeCapture === linkId}
+              aria-selected={isFocused(ref)}
               title={captureTitle(linkId)}
               onclick={() => selectCapture(linkId)}
             >
               {@html CAPTURE}
               {captureTitle(linkId)}
             </button>
+            {#if isTiled(ref)}<span class="tile-state" title="Tiled pane">tile</span>{/if}
+            <button
+              class="tab-pin"
+              class:on={samePane(consoleUiStore.pinned, ref)}
+              title={samePane(consoleUiStore.pinned, ref) ? "Unpin pane" : "Pin pane to tile 1"}
+              aria-label={samePane(consoleUiStore.pinned, ref) ? "Unpin pane" : "Pin pane"}
+              aria-pressed={samePane(consoleUiStore.pinned, ref)}
+              onclick={(event) => { event.stopPropagation(); consoleUiStore.togglePinned(ref); }}
+            >
+              {@html PIN}
+            </button>
             <button
               class="tab-ext"
-              class:on={nativeCapture[linkId]}
-              title={nativeCapture[linkId]
+              class:on={consoleUiStore.nativeCapture[linkId]}
+              title={consoleUiStore.nativeCapture[linkId]
                 ? "Hide native Wireshark command"
                 : "Flip to native Wireshark (shows the attach command)"}
-              aria-pressed={!!nativeCapture[linkId]}
+              aria-pressed={!!consoleUiStore.nativeCapture[linkId]}
               onclick={() => flipCapture(linkId)}
             >
               {@html SHARK}
             </button>
+            <button
+              class="tab-lens"
+              title="Open Protocol Lens"
+              onclick={() => labStore.openLens(linkId)}
+            >Lens</button>
             <button class="tab-close" title="Close capture" onclick={() => closeCapture(linkId)}>
               ✕
             </button>
+          </div>
+        {/each}
+        {#each labStore.openLensTabs as linkId (`lens-${linkId}`)}
+          {@const ref = paneForLens(linkId)}
+          <div class="tab tab-lens-tab" class:active={isFocused(ref)}>
+            <button
+              class="tab-label"
+              role="tab"
+              aria-selected={isFocused(ref)}
+              title={`Protocol Lens · ${captureTitle(linkId)}`}
+              onclick={() => consoleUiStore.setFocused(ref)}
+            >
+              Lens · {captureTitle(linkId)}
+            </button>
+            {#if isTiled(ref)}<span class="tile-state" title="Tiled pane">tile</span>{/if}
+            <button
+              class="tab-pin"
+              class:on={samePane(consoleUiStore.pinned, ref)}
+              title={samePane(consoleUiStore.pinned, ref) ? "Unpin pane" : "Pin pane to tile 1"}
+              aria-label={samePane(consoleUiStore.pinned, ref) ? "Unpin pane" : "Pin pane"}
+              aria-pressed={samePane(consoleUiStore.pinned, ref)}
+              onclick={(event) => { event.stopPropagation(); consoleUiStore.togglePinned(ref); }}
+            >
+              {@html PIN}
+            </button>
+            <button class="tab-close" title="Close Lens" onclick={() => closeLens(linkId)}>×</button>
           </div>
         {/each}
       </div>
@@ -250,6 +354,29 @@
           {@html consoleUiStore.dockSide === "bottom" ? DOCK_RIGHT : DOCK_BOTTOM}
         </button>
         <button
+          class="dock-icon layout-control"
+          title={`Console layout: ${layoutLabel(consoleUiStore.layout)} — click to use ${layoutLabel(nextLayout())}`}
+          aria-label={`Console layout ${layoutLabel(consoleUiStore.layout)}`}
+          onclick={cycleLayout}
+        >
+          {@html LAYOUT}
+          <span>{layoutLabel(consoleUiStore.layout)}</span>
+        </button>
+        <button
+          class="dock-icon"
+          class:on={consoleUiStore.searchOpenFor !== null}
+          title={consoleUiStore.focused?.kind === "console" ? "Find in this console" : "Focus a console to search"}
+          aria-label="Find in this console"
+          disabled={consoleUiStore.focused?.kind !== "console"}
+          aria-pressed={consoleUiStore.searchOpenFor !== null}
+          onclick={toggleSearch}
+        >
+          {@html FIND}
+        </button>
+        <button class="dock-icon mark-control" title="Mark capture now" aria-label="Mark capture now" onclick={markNow}>
+          {@html MARK}
+        </button>
+        <button
           class="dock-icon"
           title="Close console — closes every console and capture tab"
           aria-label="Close console window"
@@ -260,86 +387,45 @@
   </div>
 
   {#if !collapsed}
-    <div class="term-area">
+    <div
+      class="term-area"
+      class:tiled={consoleUiStore.layout !== "tabs"}
+      class:layout-tile2={consoleUiStore.layout === "tile2"}
+      class:layout-tile3={consoleUiStore.layout === "tile3"}
+      class:layout-tile4={consoleUiStore.layout === "tile4"}
+      class:single-tile={consoleUiStore.tiles.length <= 1}
+    >
       {#each labStore.openConsoleTabs as nodeId (nodeId)}
-        <div class="term-slot" class:hidden={labStore.activeConsoleTab !== nodeId}>
-          {#if isToolNode(nodeId)}
-            <iframe
-              class="tool-frame"
-              src={`/tool/${nodeId}/`}
-              sandbox="allow-scripts allow-forms allow-same-origin"
-              title={`${nodeName(nodeId)} proxied GUI`}
-            ></iframe>
-          {:else}
-            <ConsoleTerm {nodeId} active={labStore.activeConsoleTab === nodeId} />
-          {/if}
+        {@const ref = paneForConsole(nodeId)}
+        <div
+          class="term-slot"
+          class:tiled={consoleUiStore.layout !== "tabs" && isTiled(ref)}
+          class:untiled={consoleUiStore.layout !== "tabs" && !isTiled(ref)}
+          class:hidden={consoleUiStore.layout === "tabs" && !isFocused(ref)}
+        >
+          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} />
         </div>
       {/each}
       {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
-        <div class="term-slot" class:hidden={activeCapture !== linkId}>
-          <!-- The live summary keeps running under the native overlay: the
-               stream is cheap, and flipping back shows no gap. -->
-          <CaptureTerm {linkId} active={activeCapture === linkId} />
-          {#if nativeCapture[linkId]}
-            {@const recorded = labStore.captureRecorded[linkId] ?? 0}
-            <div class="native-hold overlay">
-              <div class="native-card">
-                <div class="native-title">Open in Wireshark</div>
-
-                <!-- Reliable path: download a .pcapng and open it by double-click.
-                     No Wireshark-on-PATH, no command to run. -->
-                <div class="native-sub">
-                  Save the capture as a file and open it in Wireshark — no setup needed:
-                </div>
-                <button
-                  class="native-primary"
-                  disabled={recorded === 0}
-                  title={recorded === 0 ? "Waiting for packets on this link" : "Download .pcapng"}
-                  onclick={() => labStore.downloadCapture(linkId)}
-                >
-                  {@html SHARK}
-                  Save .pcapng{recorded > 0 ? ` · ${fmtBytes(recorded)}` : ""}
-                </button>
-                {#if recorded === 0}
-                  <div class="native-hint">
-                    Waiting for packets — generate traffic on the link, then save.
-                  </div>
-                {/if}
-
-                <div class="native-div">or attach a live session</div>
-                {#if wiresharkCmd(linkId)}
-                  <div class="native-sub">
-                    Run in a terminal where Wireshark is on your PATH:
-                  </div>
-                  <button
-                    class="addr-chip mono"
-                    title="Click to copy"
-                    onclick={() => copyText(wiresharkCmd(linkId)!, "Copy Wireshark command:")}
-                  >
-                    {wiresharkCmd(linkId)}
-                  </button>
-                  <div class="native-hint">
-                    Not on PATH? Use the full path (click to copy):
-                  </div>
-                  <button
-                    class="addr-chip mono"
-                    title="Click to copy"
-                    onclick={() => copyText(wiresharkCmdFull(linkId)!, "Copy Wireshark command:")}
-                  >
-                    {wiresharkCmdFull(linkId)}
-                  </button>
-                {:else}
-                  <div class="native-sub">
-                    Live attach unlocks once the capture port is assigned (start the lab or the capture first).
-                  </div>
-                {/if}
-
-                <button class="native-back" onclick={() => flipCapture(linkId)}>
-                  Back to live summary
-                </button>
-              </div>
-            </div>
-          {/if}
+        {@const ref = paneForCapture(linkId)}
+        <div
+          class="term-slot"
+          class:tiled={consoleUiStore.layout !== "tabs" && isTiled(ref)}
+          class:untiled={consoleUiStore.layout !== "tabs" && !isTiled(ref)}
+          class:hidden={consoleUiStore.layout === "tabs" && !isFocused(ref)}
+        >
+          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} />
+        </div>
+      {/each}
+      {#each labStore.openLensTabs as linkId (`lens-${linkId}`)}
+        {@const ref = paneForLens(linkId)}
+        <div
+          class="term-slot"
+          class:tiled={consoleUiStore.layout !== "tabs" && isTiled(ref)}
+          class:untiled={consoleUiStore.layout !== "tabs" && !isTiled(ref)}
+          class:hidden={consoleUiStore.layout === "tabs" && !isFocused(ref)}
+        >
+          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} />
         </div>
       {/each}
     </div>
@@ -429,6 +515,17 @@
     cursor: pointer;
     padding: 2px 4px;
   }
+  .tab-label:focus-visible,
+  .tab-pin:focus-visible,
+  .tab-ext:focus-visible,
+  .tab-lens:focus-visible,
+  .tab-close:focus-visible,
+  .dock-icon:focus-visible,
+  .collapse-btn:focus-visible,
+  .addr-chip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
   .tab-capture .tab-label {
     display: inline-flex;
     align-items: center;
@@ -449,7 +546,9 @@
     border-bottom-color: var(--accent);
   }
   .tab-ext,
-  .tab-close {
+  .tab-lens,
+  .tab-close,
+  .tab-pin {
     all: unset;
     display: inline-flex;
     align-items: center;
@@ -459,7 +558,24 @@
     padding: 2px 4px;
     border-radius: var(--radius-sm);
   }
+  .tab-pin {
+    padding: 3px;
+  }
+  .tab-pin.on {
+    color: var(--accent);
+  }
+  .tab-pin :global(svg) {
+    display: block;
+  }
+  .tile-state {
+    padding: 2px 3px;
+    color: var(--text-tertiary);
+    font: 600 9px/1 var(--font-ui);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
   .tab-ext:hover,
+  .tab-lens:hover,
   .tab-close:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
@@ -500,6 +616,18 @@
     background: var(--bg-hover);
     color: var(--text-primary);
   }
+  .dock-icon:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .dock-icon.layout-control {
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .dock-icon.layout-control span {
+    font-family: var(--font-ui);
+  }
   /* A-/A+ console font-size control: a tight pair of text buttons. */
   .font-ctl {
     display: inline-flex;
@@ -529,12 +657,35 @@
     position: absolute;
     inset: 0;
   }
-  .tool-frame {
-    display: block;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: white;
+  .term-area.tiled {
+    display: grid;
+    gap: 1px;
+    background: var(--border);
+  }
+  .term-area.layout-tile2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .term-area.layout-tile4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  .term-area.layout-tile3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .term-area.single-tile {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .term-slot.tiled {
+    position: static;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .term-slot.untiled {
+    display: none;
   }
   .term-slot.hidden {
     visibility: hidden;
@@ -543,97 +694,5 @@
   /* Active (flipped-to-native) state of a tab's flip button. */
   .tab-ext.on {
     color: var(--accent);
-  }
-  /* Placeholder (console flip) / overlay (capture flip) panel. */
-  .native-hold {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--term-bg);
-  }
-  .native-hold.overlay {
-    background: color-mix(in oklab, var(--term-bg) 82%, transparent);
-    backdrop-filter: blur(2px);
-  }
-  .native-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--sp-3);
-    padding: var(--sp-5) var(--sp-6);
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    max-width: min(90%, 560px);
-  }
-  .native-title {
-    font-size: var(--fs-sm);
-    font-weight: 650;
-    color: var(--text-primary);
-  }
-  .native-sub {
-    font-size: var(--fs-xs);
-    color: var(--text-secondary);
-    text-align: center;
-  }
-  .native-card .addr-chip {
-    font-family: var(--font-mono);
-    max-width: 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    text-align: center;
-  }
-  .native-back {
-    all: unset;
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    color: var(--accent);
-    cursor: pointer;
-    padding: 4px 10px;
-    border: 1px solid var(--accent-muted);
-    border-radius: var(--radius-sm);
-  }
-  .native-back:hover {
-    background: var(--bg-hover);
-  }
-  .native-primary {
-    all: unset;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: var(--fs-sm);
-    font-weight: 650;
-    color: var(--accent-ink, #04120c);
-    background: var(--accent);
-    cursor: pointer;
-    padding: 8px 16px;
-    border-radius: var(--radius-sm);
-  }
-  .native-primary:hover {
-    filter: brightness(1.08);
-  }
-  .native-primary[disabled] {
-    opacity: 0.5;
-    cursor: not-allowed;
-    filter: none;
-  }
-  .native-primary :global(svg) {
-    color: currentColor;
-  }
-  .native-hint {
-    font-size: 11px;
-    color: var(--text-tertiary);
-    text-align: center;
-    max-width: 100%;
-    overflow-wrap: anywhere;
-  }
-  .native-div {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-tertiary);
-    margin-top: 4px;
   }
 </style>

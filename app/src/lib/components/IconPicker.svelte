@@ -4,6 +4,7 @@
   // ("Change icon…") and from the Inspector. Writing the chosen key onto the
   // node is delegated to the caller via onPick.
   import { onMount } from "svelte";
+  import { chromeStore } from "../chromeStore.svelte";
   import { listIcons, iconSvg, importIconFromFile, iconRegistryVersion } from "../icons.svelte";
 
   let {
@@ -19,6 +20,7 @@
     onPick: (key: string) => void;
     onClose: () => void;
   } = $props();
+  $effect(() => chromeStore.hold());
 
   let el: HTMLDivElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();

@@ -1,12 +1,19 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
 	"github.com/rohanpunj/iolbox/supervisor/internal/egress"
 	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolbox/supervisor/internal/image"
@@ -377,7 +384,18 @@ func (s *Server) handleLabStart(raw json.RawMessage) (any, error) {
 			ids = append(ids, n.ID)
 		}
 	}
-	return s.startNodes(ll, ids)
+	out, err := s.startNodes(ll, ids)
+	if err != nil {
+		return nil, err
+	}
+	// Fault state is separate from link.stats and must be replayed even for an
+	// idle/admin-down link that will never generate a stats tick.
+	for _, l := range ll.doc.Links {
+		if l.Fault != nil {
+			s.emitLinkFault(ll, l.ID, "lab start")
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
@@ -409,6 +427,16 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 	if all {
 		s.teardownFabric(ll)
 		s.releaseCaptures(ll, true)
+		// Full stop deactivates runtime faults during fabric teardown. Replay the
+		// resulting inactive state so the canvas does not retain an admin-down or
+		// impairment badge while the lab is stopped; the persisted definition is
+		// still present and will be replayed/applied again only when appropriate at
+		// the next lab.start.
+		for _, l := range ll.doc.Links {
+			if l.Fault != nil {
+				s.emitLinkFault(ll, l.ID, "lab stop")
+			}
+		}
 	}
 	return protocol.StartResult{Started: []protocol.StartedNode{}}, nil
 }
@@ -570,6 +598,15 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 
 		if docNode.Kind == lab.KindTool {
 			started, err := s.startToolNode(ll, docNode, nr)
+			if err != nil {
+				return nil, err
+			}
+			out.Started = append(out.Started, started)
+			continue
+		}
+
+		if docNode.Kind == lab.KindPC {
+			started, err := s.startPCNode(ll, docNode, nr)
 			if err != nil {
 				return nil, err
 			}
@@ -772,6 +809,115 @@ func (s *Server) startToolNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (pro
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
 }
 
+// startPCNode starts the built-in netprobe pack with the same data-plane cage
+// as a tool, then bridges its private AF_UNIX CLI into the supervisor console
+// port. PC nodes never select config.pack and never enter node.Spawn.
+func (s *Server) startPCNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (protocol.StartedNode, error) {
+	if !s.toolCaps.Supports(tool.KindTool) {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeUnsupported,
+			"pc: runtime does not support PC nodes: %v", s.toolCaps.Reasons)
+	}
+	if !s.pcPackOK {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeUnsupported,
+			"pc: built-in netprobe pack is not installed")
+	}
+	if nr.tool != nil {
+		return protocol.StartedNode{Node: n.ID, ConsolePort: nr.consolePort, State: string(nr.machine.State())}, nil
+	}
+	if !nr.machine.To(node.StateStarting) {
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed,
+			"node %d: not in a startable state", n.ID)
+	}
+
+	state := lab.PCState{SavedCommands: []string{}}
+	if raw := n.Config["pc"]; len(raw) != 0 {
+		if err := json.Unmarshal(raw, &state); err != nil {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+				"pc: node %d has invalid pc state: %v", n.ID, err)
+		}
+	}
+	options, _ := json.Marshal(pcStateEnvelope{PC: clonePCState(state)})
+
+	var netCfg *tool.NetAddrConfig
+	if raw := n.Config["net"]; len(raw) != 0 {
+		var addr struct {
+			IP        string `json:"ip"`
+			PrefixLen int    `json:"prefixLen"`
+			Gateway   string `json:"gateway"`
+		}
+		if err := json.Unmarshal(raw, &addr); err != nil {
+			nr.machine.To(node.StateCrashed)
+			return protocol.StartedNode{}, protocol.Errorf(protocol.CodeBadRequest,
+				"pc: node %d has invalid net config: %v", n.ID, err)
+		}
+		if addr.IP != "" {
+			if addr.PrefixLen <= 0 || addr.PrefixLen > 32 {
+				addr.PrefixLen = 24
+			}
+			netCfg = &tool.NetAddrConfig{IP: addr.IP, PrefixLen: addr.PrefixLen, Gateway: addr.Gateway}
+		}
+	}
+
+	cfg := tool.Config{
+		NodeID: n.ID, Pack: s.pcPack, Root: s.toolRoot,
+		StateDir: s.cfg.StateDir, RunDir: s.cfg.RunDir,
+		Options: options, Net: netCfg, CLISocket: true,
+	}
+	ep, err := tool.Start(cfg)
+	if err != nil {
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed,
+			"pc: node %d: %v", n.ID, err)
+	}
+	conn, err := dialPCConsole(ep.CLISocketPath())
+	if err != nil {
+		_ = ep.Stop()
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodeNodeSpawnFailed,
+			"pc: node %d CLI socket: %v", n.ID, err)
+	}
+	bind := s.cfg.ConsoleBind
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(bind, strconv.Itoa(nr.consolePort)))
+	if err != nil {
+		_ = conn.Close()
+		_ = ep.Stop()
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, protocol.Errorf(protocol.CodePortUnavailable,
+			"pc: node %d console :%d: %v", n.ID, nr.consolePort, err)
+	}
+	nr.tool = ep
+	nr.proc = node.NewConsoleBridge(conn, n.Name, ln)
+	nr.machine.To(node.StateRunning)
+	if err := s.attachFabricForNode(ll, n.ID); err != nil {
+		_ = nr.proc.Stop()
+		_ = nr.tool.Stop()
+		nr.proc, nr.tool = nil, nil
+		nr.machine.To(node.StateCrashed)
+		return protocol.StartedNode{}, err
+	}
+	s.emit(protocol.EventNodeConsole, protocol.NodeConsoleData{Node: n.ID, ConsolePort: nr.consolePort})
+	return protocol.StartedNode{Node: n.ID, ConsolePort: nr.consolePort,
+		PID: ep.PID(), State: string(nr.machine.State())}, nil
+}
+
+func dialPCConsole(socket string) (net.Conn, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("unix", socket, 200*time.Millisecond)
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, last
+}
+
 // buildSpec assembles a node.Spec from the lab node + runtime state.
 func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Spec, error) {
 	spec := node.Spec{
@@ -815,6 +961,9 @@ func (s *Server) stopNode(ll *loadedLab, id int) {
 	if nr == nil {
 		return
 	}
+	// Scheduled fault intents are runtime-only and must not fire after the
+	// endpoint they target has been stopped.
+	s.cancelFaultTimersForNode(ll, id)
 	if nr.extnet != nil {
 		// nat: Close deletes the tap and removes the iptables rules by exact -D
 		// spec, then release the subnet index back to the pool.
@@ -830,6 +979,15 @@ func (s *Server) stopNode(ll *loadedLab, id int) {
 	if nr.tool != nil {
 		// handleLabReap (the GUI's "Force clean") already loops stopNode and
 		// teardownFabric, so tool endpoints are covered by that path as well.
+		if n := ll.findNode(id); n != nil && n.Kind == lab.KindPC {
+			// Pull before closing the GUI socket. A failed pull leaves the previous
+			// document state intact and is intentionally non-fatal to teardown.
+			_ = s.syncPCNode(ll, id)
+		}
+		if nr.proc != nil {
+			_ = nr.proc.Stop()
+			nr.proc = nil
+		}
 		_ = nr.tool.Stop()
 		nr.tool = nil
 		nr.machine.To(node.StateStopped)
@@ -975,6 +1133,167 @@ func (s *Server) handleNodeSetImage(raw json.RawMessage) (any, error) {
 	}, nil
 }
 
+func (s *Server) handleNodeMACs(raw json.RawMessage) (any, error) {
+	var args protocol.NodeMACsArgs
+	if err := decode(raw, &args); err != nil {
+		return nil, err
+	}
+	ll, err := s.currentLab("")
+	if err != nil {
+		return nil, err
+	}
+	n := ll.findNode(args.Node)
+	nr := ll.get(args.Node)
+	if n == nil || nr == nil {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", args.Node)
+	}
+
+	interfaces := lab.Interfaces(*n)
+	macs := make([]protocol.NodeMAC, 0, len(interfaces))
+	switch n.Kind {
+	case lab.KindVPCS:
+		macs = append(macs, protocol.NodeMAC{
+			Interface: interfaces[0],
+			MAC:       node.VPCSMAC(args.Node, 0),
+			Source:    "derived",
+			State:     "known",
+		})
+	case lab.KindPC, lab.KindTool:
+		for _, iface := range interfaces {
+			mac := protocol.NodeMAC{Interface: iface, State: "unknown"}
+			if nr.machine.State() != node.StateRunning {
+				mac.Reason = "node not running"
+			} else if address, readErr := readNetnsMAC(args.Node); readErr != nil {
+				mac.Reason = "MAC unavailable"
+			} else {
+				mac.MAC = address
+				mac.Source = "read"
+				mac.State = "known"
+			}
+			macs = append(macs, mac)
+		}
+	case lab.KindIOL:
+		// Learned attribution is an opt-in display path. The dirstat classifiers
+		// continue learning unconditionally for the Protocol Lens regardless of
+		// this request flag; with display disabled, do not even read their tables.
+		for _, iface := range interfaces {
+			macs = append(macs, protocol.NodeMAC{
+				Interface: iface,
+				State:     "disabled",
+				Reason:    "turn on learned-MAC display to see this",
+			})
+		}
+		if !args.Learned {
+			break
+		}
+
+		// Copy the classifier pointers under the same short lock used by the
+		// link-stats sampler. Attribution() owns the classifier lock and may
+		// expire entries, so never hold ll.mu while calling it.
+		ll.mu.Lock()
+		dcs := make(map[int]*dirstat.Classifier, len(ll.dirstats))
+		for linkID, dc := range ll.dirstats {
+			dcs[linkID] = dc
+		}
+		ll.mu.Unlock()
+
+		rowForInterface := make(map[string]int, len(interfaces))
+		for i, iface := range interfaces {
+			rowForInterface[iface] = i
+			macs[i].State = "unknown"
+			macs[i].Reason = "no link on this interface"
+		}
+
+		for _, link := range ll.doc.Links {
+			var attrib []dirstat.EndpointAttrib
+			attributionLoaded := false
+			for endpointIndex, endpoint := range link.Endpoints {
+				if endpoint.Node != args.Node {
+					continue
+				}
+				row, ok := rowForInterface[endpoint.Interface]
+				if !ok {
+					continue
+				}
+				macs[row] = protocol.NodeMAC{Interface: endpoint.Interface, State: "unknown"}
+				if endpointIndex > 1 {
+					macs[row].Reason = "attribution covers two endpoints per link"
+					continue
+				}
+				if !attributionLoaded {
+					if dc := dcs[link.ID]; dc != nil {
+						attrib = dc.Attribution()
+					}
+					attributionLoaded = true
+				}
+				if attrib == nil {
+					macs[row].Reason = "per-endpoint attribution unavailable"
+					continue
+				}
+
+				var match *dirstat.EndpointAttrib
+				for i := range attrib {
+					if attrib[i].EndpointIndex == endpointIndex {
+						match = &attrib[i]
+						break
+					}
+				}
+				if match == nil {
+					macs[row].Reason = "per-endpoint attribution unavailable"
+					continue
+				}
+				switch match.State {
+				case "single":
+					if match.MAC == "" {
+						macs[row].Reason = "per-endpoint attribution unavailable"
+						continue
+					}
+					macs[row].MAC = match.MAC
+					macs[row].Source = "learned"
+					macs[row].State = "known"
+				case "ambiguous":
+					macs[row].State = "ambiguous"
+					macs[row].Reason = "this port relays for other devices"
+				case "none":
+					macs[row].Reason = "no traffic seen yet"
+				default:
+					macs[row].Reason = "per-endpoint attribution unavailable"
+				}
+			}
+		}
+	case lab.KindNAT:
+		for _, iface := range interfaces {
+			macs = append(macs, protocol.NodeMAC{
+				Interface: iface,
+				State:     "unknown",
+				Reason:    "not tracked for the NAT gateway",
+			})
+		}
+	}
+	return protocol.NodeMACsResult{Node: args.Node, MACs: macs}, nil
+}
+
+func readNetnsMAC(nodeID int) (string, error) {
+	argv := tool.NetnsExecArgs(nodeID, []string{"cat", "/sys/class/net/" + tool.GuestIface + "/address"})
+	cmd := exec.Command(argv[0], argv[1:]...)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := tool.Registry.StartAndAdd(cmd.Start, func() int { return cmd.Process.Pid })
+	if err == nil {
+		err = cmd.Wait()
+		tool.Registry.Remove(cmd.Process.Pid)
+	}
+	if err != nil {
+		return "", fmt.Errorf("read guest MAC: %w: %s", err, strings.TrimSpace(output.String()))
+	}
+	address := strings.ToLower(strings.TrimSpace(output.String()))
+	if address == "" {
+		return "", fmt.Errorf("read guest MAC: empty address")
+	}
+	return address, nil
+}
+
 func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	var args protocol.LinkArgs
 	if err := decode(raw, &args); err != nil {
@@ -1030,6 +1349,9 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	if isFabricLink(&args.Link, fabricNodes(ll.doc)) {
 		s.detachFabricLink(ll, &args.Link)
 	}
+	ll.mu.Lock()
+	delete(ll.linkFaults, args.Link.ID)
+	ll.mu.Unlock()
 	// Mirror the removal into the loaded doc (see handleLinkAdd's upsert) so the
 	// wiring a later start/refresh derives never resurrects this link.
 	kept := ll.doc.Links[:0]
@@ -1269,6 +1591,9 @@ func (s *Server) handleStatus(raw json.RawMessage) (any, error) {
 			sn.ConsolePort = nr.consolePort
 			if nr.proc != nil {
 				sn.PID = nr.proc.PID()
+			}
+			if sn.PID == 0 && nr.tool != nil {
+				sn.PID = nr.tool.PID()
 			}
 		}
 		res.Nodes = append(res.Nodes, sn)

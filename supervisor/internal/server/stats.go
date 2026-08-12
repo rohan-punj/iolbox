@@ -106,6 +106,7 @@ func (s *Server) statsLoop(ctx context.Context) {
 				s.emit(protocol.EventLinkStats, protocol.LinkStatsData{
 					Link: id, FPS: fps, BPS: bps, Protos: protos,
 					ProtosDir: protosDir, ProtosSubtypeDir: protosSubtypeDir,
+					EpAttrib: toProtocolEndpointAttrib(st.attrib),
 				})
 			}
 		}
@@ -115,6 +116,21 @@ func (s *Server) statsLoop(ctx context.Context) {
 // round1 rounds a rate to one decimal, matching linkRate's fps rounding. Passed
 // to dirstat.Direction so directional rates round the same way as FPS/Protos.
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
+
+func toProtocolEndpointAttrib(in []dirstat.EndpointAttrib) []protocol.EndpointAttrib {
+	if in == nil {
+		return nil
+	}
+	out := make([]protocol.EndpointAttrib, len(in))
+	for i, a := range in {
+		out[i] = protocol.EndpointAttrib{
+			EndpointIndex: a.EndpointIndex,
+			State:         a.State,
+			MAC:           a.MAC,
+		}
+	}
+	return out
+}
 
 // linkRate derives per-second forwarded throughput from two consecutive
 // cumulative samples of a link's relay counters. It returns the frames/sec

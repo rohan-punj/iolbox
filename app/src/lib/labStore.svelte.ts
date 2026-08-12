@@ -1,12 +1,14 @@
 // Central app state, Svelte 5 runes. One instance shared via module scope
 // (simple singleton store — no context provider needed for a single-window app).
-import { emptyLab, type Annotation, type LabDocument, type LabLink, type LabNode, type LibraryImage, type NodeState } from "./labTypes";
+import { emptyLab, type Annotation, type LabDocument, type LabLink, type LabNode, type LibraryImage, type NodeState, type LinkFault } from "./labTypes";
 import { uuid } from "./uid";
 import { SupervisorClient } from "./supervisor";
 import { MockTransport } from "./mockTransport";
 import { selectTransport } from "./transportSelect";
 import { consoleUiStore } from "./consoleUiStore.svelte";
-import { encodePcapng, type CapturedPacket } from "./pcapng";
+import { CaptureTransport } from "./captureTransport";
+import { encodePcapng, PcapngParser, type CapturedPacket, type ParsedPacket } from "./pcapng";
+import { appendLensEvents, type EndpointAttribView, type LensAttribution, type LensEvent } from "./lens";
 import type { StatusResult, SupervisorEvent, ToolPackInfo } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
@@ -17,6 +19,18 @@ export interface LogLine {
   level: "debug" | "info" | "warn" | "error";
   message: string;
   node?: number;
+}
+
+export interface CaptureSubscriber {
+  onReset?(): void;
+  onPackets(packets: readonly ParsedPacket[]): void;
+  onUnavailable?(): void;
+}
+
+interface CaptureSession {
+  transport: CaptureTransport;
+  parser: PcapngParser;
+  subscribers: Set<CaptureSubscriber>;
 }
 
 class LabStore {
@@ -34,9 +48,13 @@ class LabStore {
   /** Live canvas viewport zoom, mirrored from SvelteFlow by CanvasInner. Used by
    *  annotation resize/drag grips to convert screen deltas to flow deltas. */
   canvasZoom = $state(1);
+  /** Live canvas viewport translation, mirrored from SvelteFlow by CanvasInner. */
+  canvasPan = $state({ x: 0, y: 0 });
   /** Client→flow coordinate projector, wired by CanvasInner (useSvelteFlow's
    *  screenToFlowPosition). Used by the line-endpoint grips. */
   screenToFlow: ((clientX: number, clientY: number) => { x: number; y: number }) | null = null;
+  /** Flow-to-client coordinate projector, wired by CanvasInner. */
+  flowToScreen: ((x: number, y: number) => { x: number; y: number }) | null = null;
   nodeStates = $state<Record<number, NodeState>>({});
   /** Per-node action lock (WS1): while an action is in flight on a node, sibling
    *  actions on THAT node are no-ops and the UI shows a lock/progress state.
@@ -44,7 +62,7 @@ class LabStore {
    *  event/promise settles (start/stop → node.state event; wipe/duplicate →
    *  awaited RPC). A 60s safety timeout releases it so a lost event can't wedge
    *  a node permanently. */
-  nodeLocks = $state<Record<number, { action: string; startedAt: number } | null>>({});
+  nodeLocks = $state<Record<number, { action: string; startedAt: number; holdUntilSettled?: boolean } | null>>({});
   private nodeLockTimers: Record<number, ReturnType<typeof setTimeout>> = {};
   consolePorts = $state<Record<number, number>>({});
   images = $state<LibraryImage[]>([]);
@@ -82,7 +100,7 @@ class LabStore {
   features = $state<string[]>([]);
   /** Supervisor build version from the hello handshake (git describe, baked in
    *  via build-release.sh's -ldflags). Empty until connected; surfaced in the
-   *  Palette host-monitor footer so staleness is visible at a glance. */
+   *  resource-bar footer so staleness is visible at a glance. */
   supervisorVersion = $state<string>("");
   /** WS6 — internet-egress capability from the hello handshake. "slirp" (QEMU
    *  user-mode NAT) terminates ICMP so ping/traceroute to the internet do not
@@ -104,6 +122,14 @@ class LabStore {
     protos?: Record<string, number>;
     protosDir?: Record<string, [number, number]>;
     protosSubtypeDir?: Record<string, Record<string, [number, number]>>;
+    epAttrib?: EndpointAttribView[];
+  }>>({});
+  /** Authoritative runtime fault state, separate from link.stats because idle
+   * and admin-down links do not emit throughput samples. */
+  linkFaults = $state<Record<number, {
+    fault: LinkFault | null;
+    active: boolean;
+    reason?: string;
   }>>({});
   /** Latest runtime-VM resource sample (host.stats), or null until the first
    *  event. Drives the left-pane host monitor. */
@@ -121,6 +147,11 @@ class LabStore {
   /** Open live-capture console tabs (feature 1), keyed by link id. Kept separate
    *  from node console tabs (openConsoleTabs) which are keyed by node id. */
   openCaptureTabs = $state<number[]>([]);
+  /** Protocol Lens tabs are views over openCaptureTabs, never independent
+   *  streams. Closing their capture closes the Lens too. */
+  openLensTabs = $state<number[]>([]);
+  /** Bounded, session-only Lens ring: last 2000 events per link. */
+  lensEvents = $state<Record<number, LensEvent[]>>({});
   /** Live pcapng tee TCP port per capturing link, learned from capture.started
    *  events (mirrors how consolePorts tracks node.console). Drives the native
    *  Wireshark flip (wireshark -k -i TCP@<host>:<port>) and capture-tab
@@ -137,6 +168,9 @@ class LabStore {
   private savedDocIds = new Set<string>();
   lastSavedAt = $state<number | null>(null);
   private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One parser and one WebSocket per open capture link. CaptureTerm and the
+   *  Lens subscribe to this session instead of opening parallel streams. */
+  private captureSessions = new Map<number, CaptureSession>();
   /** True while a lab.load round-trip is in flight. Guards against a second
    *  New/Open landing mid-load, which would otherwise interleave two
    *  loadLab() calls and let a slow first response's runtime state (console
@@ -312,10 +346,14 @@ class LabStore {
     // runtime maps (nodeStates/consolePorts/capturePorts), which we are about
     // to populate from the supervisor's actual status instead of resetting.
     this.linkStats = {};
+    this.linkFaults = {};
     this.openConsoleTabs = [];
+    this.closeAllCaptureSessions();
     this.openCaptureTabs = [];
+    this.openLensTabs = [];
     this.captureBuffers.clear();
     this.captureRecorded = {};
+    this.lensEvents = {};
     this.activeConsoleTab = null;
 
     const states: Record<number, NodeState> = {};
@@ -431,11 +469,16 @@ class LabStore {
         // never fires another event — wedging that lock until the real
         // running/crashed event (or the 60s safety timeout). Only "running",
         // "stopped", and "crashed" are terminal; "starting" must NOT release.
-        if (evt.data.state !== "starting") this.releaseNodeLock(evt.data.node);
+        if (evt.data.state !== "starting" && !this.nodeLocks[evt.data.node]?.holdUntilSettled) this.releaseNodeLock(evt.data.node);
         break;
       case "node.console":
         this.consolePorts = { ...this.consolePorts, [evt.data.node]: evt.data.consolePort };
         break;
+      case "node.pcState": {
+        const n = this.lab.nodes.find((item) => item.id === evt.data.node);
+        if (n) n.config = { ...(n.config ?? {}), pc: { ...evt.data.state } };
+        break;
+      }
       case "capture.started":
         this.capturePorts = { ...this.capturePorts, [evt.data.link]: evt.data.capturePort };
         break;
@@ -448,18 +491,40 @@ class LabStore {
       case "link.stats":
         // Replace the whole record so $derived/$effect readers re-run; carry a
         // receive timestamp so FloatingEdge can expire stale glow.
+        const stats = evt.data as typeof evt.data & { epAttrib?: EndpointAttribView[] };
         this.linkStats = {
           ...this.linkStats,
           [evt.data.link]: {
             fps: evt.data.fps,
             bps: evt.data.bps,
             ts: Date.now(),
-            protos: evt.data.protos,
-            protosDir: evt.data.protosDir,
-            protosSubtypeDir: evt.data.protosSubtypeDir,
+            protos: stats.protos,
+            protosDir: stats.protosDir,
+            protosSubtypeDir: stats.protosSubtypeDir,
+            epAttrib: stats.epAttrib,
           },
         };
         break;
+      case "link.fault": {
+        this.linkFaults = {
+          ...this.linkFaults,
+          [evt.data.link]: {
+            fault: evt.data.fault,
+            active: evt.data.active,
+            reason: evt.data.reason,
+          },
+        };
+        // Fault definitions are part of the in-memory document so the normal
+        // lab.saveDoc path persists the same state the user sees. Active is
+        // deliberately runtime-only; inactive-on-reopen is represented by the
+        // persisted definition plus the absence of an active event.
+        const link = this.lab.links.find((l) => l.id === evt.data.link);
+        if (link) {
+          if (evt.data.fault) link.fault = { ...evt.data.fault };
+          else delete link.fault;
+        }
+        break;
+      }
       case "host.stats":
         this.hostStats = { ...evt.data };
         break;
@@ -498,11 +563,15 @@ class LabStore {
     this.reconcileNodeImages();
     // Clear any lingering runtime/glow state from the previous lab.
     this.linkStats = {};
+    this.linkFaults = {};
     this.openConsoleTabs = [];
+    this.closeAllCaptureSessions();
     this.openCaptureTabs = [];
+    this.openLensTabs = [];
     this.capturePorts = {};
     this.captureBuffers.clear();
     this.captureRecorded = {};
+    this.lensEvents = {};
     this.activeConsoleTab = null;
     const res = await this.client.labLoad(lab);
     const ports: Record<number, number> = {};
@@ -594,6 +663,11 @@ class LabStore {
     this.lab.modified = new Date().toISOString();
     let ok = false;
     await this.guarded("save lab", async () => {
+      const synced = await this.client.pcSyncState(this.lab.id);
+      for (const item of synced.states ?? []) {
+        const n = this.lab.nodes.find((candidate) => candidate.id === item.node);
+        if (n) n.config = { ...(n.config ?? {}), pc: { ...item.state } };
+      }
       const res = await this.client.labSaveDoc($state.snapshot(this.lab) as LabDocument);
       const id = res.id ?? this.lab.id;
       this.savedDocIds.add(id);
@@ -721,6 +795,97 @@ class LabStore {
 
   // ---- live-capture console tabs (feature 1) ----
 
+  private ensureCaptureSession(linkId: number) {
+    if (this.transportKind !== "ws" || this.captureSessions.has(linkId)) return;
+    let session: CaptureSession;
+    const transport = new CaptureTransport(linkId, {
+      onOpen: () => {
+        // Every reconnect starts at a new SHB, so parser-local index/tRel state
+        // must reset. The Lens ring intentionally does not reset.
+        session.parser = new PcapngParser();
+        for (const subscriber of [...session.subscribers]) subscriber.onReset?.();
+      },
+      onData: (bytes) => {
+        const packets = session.parser.push(bytes);
+        if (packets.length === 0) return;
+        this.appendCapturePackets(linkId, packets);
+        const firstSeq = consoleUiStore.advanceCaptureDelivery(linkId, packets.length);
+        this.pushLensPackets(linkId, packets, firstSeq);
+        for (const subscriber of [...session.subscribers]) subscriber.onPackets(packets);
+      },
+      onError: () => {
+        for (const subscriber of [...session.subscribers]) subscriber.onUnavailable?.();
+      },
+      onClose: () => {
+        for (const subscriber of [...session.subscribers]) subscriber.onUnavailable?.();
+      },
+    });
+    session = { transport, parser: new PcapngParser(), subscribers: new Set() };
+    this.captureSessions.set(linkId, session);
+    transport.connect();
+  }
+
+  private closeCaptureSession(linkId: number) {
+    const session = this.captureSessions.get(linkId);
+    if (!session) return;
+    this.captureSessions.delete(linkId);
+    session.transport.disconnect();
+  }
+
+  private closeAllCaptureSessions() {
+    for (const linkId of [...this.captureSessions.keys()]) this.closeCaptureSession(linkId);
+  }
+
+  subscribeCapture(linkId: number, subscriber: CaptureSubscriber): () => void {
+    const session = this.captureSessions.get(linkId);
+    if (!session) return () => {};
+    session.subscribers.add(subscriber);
+    return () => session.subscribers.delete(subscriber);
+  }
+
+  retryCapture(linkId: number) {
+    this.captureSessions.get(linkId)?.transport.retryNow();
+  }
+
+  private lensAttribution(linkId: number): LensAttribution {
+    const link = this.lab.links.find((item) => item.id === linkId);
+    const stats = this.linkStats[linkId];
+    return {
+      endpoints: link?.endpoints.map((endpoint) => ({ node: endpoint.node })) ?? [],
+      epAttrib: stats?.epAttrib,
+      nodeName: (nodeId) => this.lab.nodes.find((node) => node.id === nodeId)?.name ?? `#${nodeId}`,
+    };
+  }
+
+  private pushLensPackets(linkId: number, packets: readonly ParsedPacket[], firstSeq: number) {
+    const current = this.lensEvents[linkId] ?? [];
+    this.lensEvents = {
+      ...this.lensEvents,
+      [linkId]: appendLensEvents(current, packets, firstSeq, this.lensAttribution(linkId)),
+    };
+  }
+
+  openLens(linkId: number) {
+    this.openCapture(linkId);
+    if (!this.openLensTabs.includes(linkId)) this.openLensTabs = [...this.openLensTabs, linkId];
+    consoleUiStore.setFocused({ kind: "lens", link: linkId });
+  }
+
+  closeLens(linkId: number) {
+    this.openLensTabs = this.openLensTabs.filter((id) => id !== linkId);
+    const ref = { kind: "lens" as const, link: linkId };
+    if (consoleUiStore.pinned?.kind === "lens" && consoleUiStore.pinned.link === linkId) {
+      consoleUiStore.setPinned(null);
+    }
+    if (consoleUiStore.tiles.some((tile) => tile.kind === "lens" && tile.link === linkId)) {
+      consoleUiStore.toggleTile(ref);
+    }
+    if (consoleUiStore.focused?.kind === "lens" && consoleUiStore.focused.link === linkId) {
+      const capture = this.openCaptureTabs.includes(linkId);
+      consoleUiStore.setFocused(capture ? { kind: "capture", link: linkId } : null);
+    }
+  }
+
   openCapture(linkId: number) {
     const link = this.lab.links.find((l) => l.id === linkId);
     if (link) {
@@ -729,15 +894,18 @@ class LabStore {
       // until restart — the tab surfaces that hint itself.
       link.capture = { enabled: true, mode: "live" };
     }
-    if (!this.openCaptureTabs.includes(linkId)) {
+    const alreadyOpen = this.openCaptureTabs.includes(linkId);
+    if (!alreadyOpen) {
       this.openCaptureTabs = [...this.openCaptureTabs, linkId];
+      // Fresh recording and Lens ring for a newly opened capture session.
+      this.captureBuffers.delete(linkId);
+      const { [linkId]: _oldLens, ...restLens } = this.lensEvents;
+      this.lensEvents = restLens;
     }
     // Ask the supervisor to start teeing this link (idempotent; harmless when
     // the lab is stopped — it'll bridge on next start).
     if (this.lab.id) void this.client.captureStart(this.lab.id, linkId).catch(() => {});
-    // Fresh recording buffer for the "Save .pcapng" download each time a tab is
-    // (re)opened, so a saved file isn't polluted by a prior session's bytes.
-    this.captureBuffers.delete(linkId);
+    this.ensureCaptureSession(linkId);
     this.scheduleAutosave();
   }
 
@@ -805,7 +973,11 @@ class LabStore {
 
   closeCapture(linkId: number) {
     this.openCaptureTabs = this.openCaptureTabs.filter((id) => id !== linkId);
+    this.openLensTabs = this.openLensTabs.filter((id) => id !== linkId);
+    this.closeCaptureSession(linkId);
     this.captureBuffers.delete(linkId);
+    const { [linkId]: _dropLens, ...restLens } = this.lensEvents;
+    this.lensEvents = restLens;
     if (this.captureRecorded[linkId] !== undefined) {
       const { [linkId]: _drop, ...rest } = this.captureRecorded;
       this.captureRecorded = rest;
@@ -851,11 +1023,15 @@ class LabStore {
       this.nodeStates = states;
       this.openConsoleTabs = [];
       this.activeConsoleTab = null;
+      this.closeAllCaptureSessions();
       this.openCaptureTabs = [];
+      this.openLensTabs = [];
       this.capturePorts = {};
       this.captureBuffers.clear();
       this.captureRecorded = {};
+      this.lensEvents = {};
       this.linkStats = {};
+      this.linkFaults = {};
       this.pushLog("info", `force clean: stopped ${res?.reaped ?? 0} node(s) and all relays`);
     });
   }
@@ -866,6 +1042,12 @@ class LabStore {
       this.openConsoleTabs = [];
       this.activeConsoleTab = null;
     });
+  }
+
+  async setLinkFault(linkId: number, fault: LinkFault | null, afterSec?: number, forSec?: number) {
+    await this.guarded(`set fault on link ${linkId}`, () =>
+      this.client.linkSetFault(this.lab.id, linkId, fault, afterSec, forSec)
+    );
   }
 
   /** Deletes saved configs/state for every node in the lab. Destructive —
@@ -908,14 +1090,25 @@ class LabStore {
     });
   }
 
+  async restartNode(nodeId: number) {
+    if (!this.acquireNodeLock(nodeId, "restarting", { holdUntilSettled: true })) return;
+    try {
+      await this.guarded(`restart node ${nodeId}`, async () => {
+        await this.client.nodeRestart(this.lab.id, nodeId);
+      });
+    } finally {
+      this.releaseNodeLock(nodeId);
+    }
+  }
+
   // ---- per-node action lock (WS1) ----
 
   /** Acquire the per-node action lock. Returns false if the node is already
    *  locked (caller must no-op). Arms a 60s safety timeout so a lost driving
    *  event can't wedge the node permanently. */
-  private acquireNodeLock(nodeId: number, action: string): boolean {
+  private acquireNodeLock(nodeId: number, action: string, options?: { holdUntilSettled?: boolean }): boolean {
     if (this.nodeLocks[nodeId]) return false;
-    this.nodeLocks = { ...this.nodeLocks, [nodeId]: { action, startedAt: Date.now() } };
+    this.nodeLocks = { ...this.nodeLocks, [nodeId]: { action, startedAt: Date.now(), ...options } };
     if (this.nodeLockTimers[nodeId]) clearTimeout(this.nodeLockTimers[nodeId]);
     this.nodeLockTimers[nodeId] = setTimeout(() => {
       this.pushLog("warn", `node ${nodeId}: ${action} did not settle in 60s — releasing lock`, nodeId);

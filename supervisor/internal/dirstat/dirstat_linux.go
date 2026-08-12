@@ -32,8 +32,8 @@ const packetOutgoing = 4
 
 // Open binds a raw AF_PACKET socket to each of the (up to two) endpoint tap
 // devices and starts a header-only read goroutine per socket that classifies
-// each RECEIVED frame and attributes it to that endpoint index. devs are the tap
-// device names in doc endpoint order (devs[0] -> endpoint 0). A device that
+// each RECEIVED frame and attributes it to that endpoint index. devs carries
+// the document endpoint index explicitly because the slice is sparse. A device that
 // can't be bound (missing, or the process lacks CAP_NET_RAW) is skipped with a
 // note in err's context but does not fail the others — the link still gets
 // whatever direction it can. Returns a nil *Classifier (and nil error) when no
@@ -42,24 +42,24 @@ const packetOutgoing = 4
 // The appliance runs the supervisor as root, so both sockets normally bind; the
 // non-root dev box simply gets a nil Classifier and the aggregate fps/bps glow
 // is unaffected.
-func Open(devs []string) (*Classifier, error) {
+func Open(devs []EndpointDev) (*Classifier, error) {
 	if len(devs) == 0 {
 		return nil, nil
 	}
-	c := &Classifier{counts: make(Counters), wg: &sync.WaitGroup{}}
+	c := newClassifier(devs)
 	var fds []int
 	var firstErr error
-	for ep, dev := range devs {
-		if ep > 1 {
-			break // a link has exactly two endpoints; ignore any extras defensively
+	for _, d := range devs {
+		if d.Index < 0 || d.Index > 1 {
+			continue // a link has exactly two endpoints; ignore extras defensively
 		}
-		if dev == "" {
+		if d.Dev == "" {
 			continue
 		}
-		fd, err := bindTap(dev)
+		fd, err := bindTap(d.Dev)
 		if err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("dirstat: bind %s: %w", dev, err)
+				firstErr = fmt.Errorf("dirstat: bind %s: %w", d.Dev, err)
 			}
 			continue
 		}
@@ -68,7 +68,7 @@ func Open(devs []string) (*Classifier, error) {
 		go func(ep, fd int) {
 			defer c.wg.Done()
 			c.readLoop(ep, fd)
-		}(ep, fd)
+		}(d.Index, fd)
 	}
 	if len(fds) == 0 {
 		return nil, firstErr
@@ -132,5 +132,10 @@ func (c *Classifier) readLoop(ep, fd int) {
 		}
 		label, subtype, _ := relay.ClassifyDetailed(buf[:n])
 		c.count(ep, label, subtype)
+		if n >= 12 {
+			var source [6]byte
+			copy(source[:], buf[6:12])
+			c.observeSource(ep, source, monotonicNow())
+		}
 	}
 }

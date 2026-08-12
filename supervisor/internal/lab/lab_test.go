@@ -164,6 +164,29 @@ func TestValidateToolNodes(t *testing.T) {
 	}
 }
 
+func TestValidatePCEndpointConstraintsAndNoPack(t *testing.T) {
+	good := &Lab{Version: 1, ID: "lab-pc", Name: "pc", Nodes: []Node{
+		{ID: 0, Kind: KindIOL, Name: "R1", Image: &ImageRef{ID: "abc"}},
+		{ID: 1, Kind: KindPC, Name: "PC1"},
+	}, Links: []Link{{ID: 0, Endpoints: []Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth1"}}}}}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid pc lab rejected: %v", err)
+	}
+	bad := *good
+	bad.Links = append([]Link(nil), good.Links...)
+	bad.Links[0].Endpoints = append([]Endpoint(nil), good.Links[0].Endpoints...)
+	bad.Links[0].Endpoints[1].Interface = "eth0"
+	if err := bad.Validate(); err == nil {
+		t.Fatal("pc eth0 endpoint accepted")
+	}
+	bad = *good
+	bad.Links = append([]Link(nil), good.Links...)
+	bad.Links = append(bad.Links, Link{ID: 1, Endpoints: []Endpoint{{Node: 0, Interface: "e0/1"}, {Node: 1, Interface: "eth1"}}})
+	if err := bad.Validate(); err == nil {
+		t.Fatal("two PC endpoints accepted")
+	}
+}
+
 func TestUnmarshalRoundTrip(t *testing.T) {
 	raw := []byte(`{"version":1,"id":"x","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":1,"y":2}],"links":[]}`)
 	l, err := Unmarshal(raw)

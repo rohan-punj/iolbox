@@ -221,6 +221,34 @@ func TestVPCSArgv(t *testing.T) {
 	}
 }
 
+func TestVPCSMAC(t *testing.T) {
+	tests := []struct {
+		name string
+		node int
+		pc   int
+		want string
+	}{
+		{name: "node one", node: 1, pc: 0, want: "00:50:79:66:68:01"},
+		{name: "node zero", node: 0, pc: 0, want: "00:50:79:66:68:00"},
+		{name: "last octet wraps", node: 256, pc: 0, want: "00:50:79:66:68:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := VPCSMAC(tt.node, tt.pc); got != tt.want {
+				t.Fatalf("VPCSMAC(%d, %d) = %q, want %q", tt.node, tt.pc, got, tt.want)
+			}
+		})
+	}
+
+	argv, err := (Spec{NodeID: 7, ConsolePort: 9000, VPCSCount: 1}).VPCSArgv("pc7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(strings.Join(argv, " ")+" ", "-m 7 ") {
+		t.Fatalf("VPCS argv must keep -m <nodeID> coupling: %v", argv)
+	}
+}
+
 // TestVPCSArgvUDPTunnel checks the UDP tunnel flags: -s binds VPCSUDPLocal (the
 // relay's delivery port), -c targets VPCSUDPRemote (the relay's receiving port),
 // with -t 127.0.0.1. Absent ports => no tunnel flags. -p/-i are always present.

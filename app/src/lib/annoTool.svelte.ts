@@ -1,6 +1,6 @@
-// Excalidraw-style annotation tool state, shared between the Palette DRAW
+// Excalidraw-style annotation tool state, shared between the rail's Draw
 // cluster (which arms a tool) and CanvasInner (which places the annotation on
-// the next pane click). Module-scoped so the palette can signal the canvas
+// the next pane click). Module-scoped so the rail can signal the canvas
 // without prop drilling. Also carries a small fixed colour palette + a request
 // to begin inline editing of a freshly-placed annotation.
 

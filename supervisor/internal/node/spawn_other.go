@@ -5,6 +5,8 @@ package node
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 )
 
 // ErrUnsupportedPlatform is returned when node spawning is attempted off Linux.
@@ -38,3 +40,7 @@ func (p *Process) RunExec(ctx context.Context, holder, cmd string) (string, erro
 
 // Stop is a no-op on non-Linux platforms.
 func (p *Process) Stop() error { return ErrUnsupportedPlatform }
+
+// NewConsoleBridge is unavailable off Linux, but exists so server code keeps
+// one buildable API across the supported and stub platforms.
+func NewConsoleBridge(_ io.ReadWriter, _ string, _ net.Listener) *Process { return &Process{} }

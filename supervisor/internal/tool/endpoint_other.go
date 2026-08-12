@@ -40,6 +40,9 @@ func (e *Endpoint) HostVeth() string { return "" }
 // SocketPath has no AF_UNIX endpoint on an unsupported platform.
 func (e *Endpoint) SocketPath() string { return "" }
 
+// CLISocketPath has no AF_UNIX endpoint on an unsupported platform.
+func (e *Endpoint) CLISocketPath() string { return "" }
+
 func endpointOptionsPayload(options []byte) []byte {
 	if len(options) == 0 {
 		return []byte("{}")

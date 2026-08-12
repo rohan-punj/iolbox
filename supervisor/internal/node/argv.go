@@ -158,6 +158,16 @@ func (s Spec) Environ() []string {
 // Passing "-m" = NodeID makes the last octet vary per node (vpcs's own
 // arg2int() does not actually clamp to the documented 0..240 range — only
 // the final "& 0xff" in pth_reader bounds it — so any NodeID is safe here).
+// VPCSMAC returns the MAC vpcs 0.8.3 will assign to PC index pcIndex of the
+// node with the given id, GIVEN the "-m" value VPCSArgv passes (see the -m
+// block above). It is a consequence of that flag, not an independent fact: if
+// VPCSArgv ever stops passing "-m nodeID", this function is wrong and must
+// change with it. That coupling is the entire reason this lives here and not
+// in the GUI.
+func VPCSMAC(nodeID, pcIndex int) string {
+	return fmt.Sprintf("00:50:79:66:68:%02x", byte((nodeID+pcIndex)&0xff))
+}
+
 func (s Spec) VPCSArgv(name string) ([]string, error) {
 	_ = name // vpcs 0.8.3 has no name flag; see doc above.
 	if s.VPCSCount < 1 || s.VPCSCount > 9 {

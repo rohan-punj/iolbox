@@ -51,6 +51,10 @@ const (
 	// connectable interface, "eth1"; tool-specific data rides the existing
 	// Config map[string]json.RawMessage rather than new top-level Node fields.
 	KindTool Kind = "tool"
+	// KindPC is the first-class netprobe virtual PC. It uses the same single
+	// eth1 data-plane endpoint as a tool, but has a supervisor-owned built-in
+	// pack and a console CLI.
+	KindPC Kind = "pc"
 )
 
 // Node is a single lab device.
@@ -115,6 +119,7 @@ type Link struct {
 	Type      LinkType   `json:"type,omitempty"`
 	Endpoints []Endpoint `json:"endpoints"`
 	Capture   *Capture   `json:"capture,omitempty"`
+	Fault     *LinkFault `json:"fault,omitempty"`
 }
 
 // EffectiveType returns the link type, defaulting to p2p when unset (per schema).
@@ -131,13 +136,37 @@ type Capture struct {
 	Mode    string `json:"mode,omitempty"`
 }
 
+// LinkFault is the persisted definition of a per-link administrative or
+// egress impairment. A nil TargetEndpoint applies an impairment to every
+// currently-present endpoint device; an explicit zero targets endpoints[0].
+// Runtime activation and timers are supervisor state, not lab JSON.
+type LinkFault struct {
+	Down           bool    `json:"down,omitempty"`
+	DelayMs        float64 `json:"delayMs,omitempty"`
+	JitterMs       float64 `json:"jitterMs,omitempty"`
+	LossPct        float64 `json:"lossPct,omitempty"`
+	RateKbit       int     `json:"rateKbit,omitempty"`
+	DuplicatePct   float64 `json:"duplicatePct,omitempty"`
+	ReorderPct     float64 `json:"reorderPct,omitempty"`
+	TargetEndpoint *int    `json:"targetEndpoint,omitempty"`
+	Initial        bool    `json:"initial,omitempty"`
+}
+
 // Endpoint is one side of a link: a node id plus an interface string.
 type Endpoint struct {
 	// Node is a node.id.
 	Node int `json:"node"`
 	// Interface is 'e0/0'/'s1/1' for IOL, 'eth0' for VPCS/NAT, or 'eth1' for a
-	// tool node.
+	// tool/PC node.
 	Interface string `json:"interface"`
+}
+
+// PCState is the small durable state shared by the netprobe CLI, its GUI, and
+// the lab document. Runtime-only addresses and leases are intentionally not
+// persisted here.
+type PCState struct {
+	DHCP          bool     `json:"dhcp"`
+	SavedCommands []string `json:"savedCommands"`
 }
 
 // Unmarshal parses a lab document from JSON.

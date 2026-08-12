@@ -1,71 +1,145 @@
 package dirstat
 
 import (
-	"math"
-	"reflect"
 	"testing"
 )
 
-// round1 mirrors the stats loop's one-decimal fps rounding so the Direction
-// tests exercise the same rounding the server uses.
-func round1(v float64) float64 { return math.Round(v*10) / 10 }
+func testMAC(last byte) [6]byte { return [6]byte{0x02, 0, 0, 0, 0, last} }
 
-// TestDirectionDiff checks that Direction diffs two cumulative snapshots into
-// per-(label,subtype) directional rates, attributing each bucket to its endpoint
-// index and folding subtype counts under their label.
-func TestDirectionDiff(t *testing.T) {
-	prev := Counters{
-		{ep: 0, label: "BGP", subtype: "keepalive"}: 10,
-		{ep: 1, label: "OSPF", subtype: "hello"}:    2,
+func attribFor(t *testing.T, c *Classifier, ep int) EndpointAttrib {
+	t.Helper()
+	for _, a := range c.Attribution() {
+		if a.EndpointIndex == ep {
+			return a
+		}
 	}
-	cur := Counters{
-		{ep: 0, label: "BGP", subtype: "keepalive"}: 14, // +4 over 2s = 2.0 fps ep0
-		{ep: 1, label: "BGP", subtype: "update"}:    2,  // +2 = 1.0 fps ep1
-		{ep: 1, label: "OSPF", subtype: "hello"}:    2,  // no change -> dropped
-		{ep: 0, label: "ARP", subtype: ""}:          6,  // +6 = 3.0 fps ep0, no subtype
-	}
-	byLabel, bySub := Direction(prev, cur, 2.0, round1)
+	t.Fatalf("no attribution for endpoint %d", ep)
+	return EndpointAttrib{}
+}
 
-	wantLabel := map[string][2]float64{
-		"BGP": {2.0, 1.0},
-		"ARP": {3.0, 0.0},
+func TestAttributionSingularMACAndAmbiguity(t *testing.T) {
+	c := newClassifier([]EndpointDev{{Index: 0, Dev: "tap0"}})
+	now := monotonicNow()
+	first := testMAC(1)
+	second := testMAC(2)
+	c.observeSource(0, first, now)
+	if got := attribFor(t, c, 0); got.State != "single" || got.MAC != formatMAC(first) {
+		t.Fatalf("one source MAC = %+v, want single/%s", got, formatMAC(first))
 	}
-	if !reflect.DeepEqual(byLabel, wantLabel) {
-		t.Errorf("byLabel = %v, want %v", byLabel, wantLabel)
+	c.observeSource(0, first, now+1)
+	c.mu.Lock()
+	lastSeen := c.candidates[0].lastSeen
+	c.mu.Unlock()
+	if lastSeen != now+1 {
+		t.Fatalf("same MAC did not refresh lastSeen: got %d want %d", lastSeen, now+1)
 	}
-
-	wantSub := map[string]map[string][2]float64{
-		"BGP": {
-			"keepalive": {2.0, 0.0},
-			"update":    {0.0, 1.0},
-		},
-	}
-	if !reflect.DeepEqual(bySub, wantSub) {
-		t.Errorf("byLabelSubtype = %v, want %v", bySub, wantSub)
+	c.observeSource(0, second, now+2)
+	if got := attribFor(t, c, 0); got.State != "ambiguous" || got.MAC != "" {
+		t.Fatalf("two source MACs = %+v, want ambiguous with no MAC", got)
 	}
 }
 
-// TestDirectionCounterReset ensures a bucket whose counter went backwards (a
-// re-opened socket after link re-add) is skipped rather than producing a
-// negative rate.
-func TestDirectionCounterReset(t *testing.T) {
-	prev := Counters{{ep: 0, label: "TCP", subtype: ""}: 100}
-	cur := Counters{{ep: 0, label: "TCP", subtype: ""}: 5} // reset
-	byLabel, bySub := Direction(prev, cur, 2.0, round1)
-	if byLabel != nil || bySub != nil {
-		t.Errorf("reset: got (%v, %v), want (nil, nil)", byLabel, bySub)
+func TestAttributionIgnoresInvalidSourceMACs(t *testing.T) {
+	c := newClassifier([]EndpointDev{{Index: 0, Dev: "tap0"}})
+	now := monotonicNow()
+	c.observeSource(0, [6]byte{}, now)
+	c.observeSource(0, [6]byte{1, 0, 0, 0, 0, 1}, now+1)
+	if got := attribFor(t, c, 0); got.State != "none" {
+		t.Fatalf("invalid source MACs changed state: %+v", got)
 	}
 }
 
-// TestDirectionEmpty and nil-receiver Snapshot/Close cover the degraded
-// (non-fabric / stub) path.
-func TestDirectionEmpty(t *testing.T) {
-	if bl, bs := Direction(nil, nil, 2.0, round1); bl != nil || bs != nil {
-		t.Errorf("empty: got (%v, %v), want (nil, nil)", bl, bs)
+func TestAttributionAgesAndRelearns(t *testing.T) {
+	c := newClassifier([]EndpointDev{{Index: 0, Dev: "tap0"}})
+	now := monotonicNow()
+	first := testMAC(3)
+	second := testMAC(4)
+	c.observeSource(0, first, now)
+	candidate := c.candidates[0]
+	candidate.lastSeen = monotonicNow() - macTTL.Nanoseconds() - 1
+	c.candidates[0] = candidate
+	if got := attribFor(t, c, 0); got.State != "none" {
+		t.Fatalf("aged candidate = %+v, want none", got)
 	}
+	c.observeSource(0, second, monotonicNow())
+	if got := attribFor(t, c, 0); got.State != "single" || got.MAC != formatMAC(second) {
+		t.Fatalf("relearned candidate = %+v, want single/%s", got, formatMAC(second))
+	}
+
+	c.observeSource(0, first, monotonicNow())
+	c.observeSource(0, second, monotonicNow()+1)
+	if got := attribFor(t, c, 0); got.State != "ambiguous" {
+		t.Fatalf("ambiguous candidate before expiry = %+v", got)
+	}
+	candidate = c.candidates[0]
+	candidate.lastSeen = monotonicNow() - macTTL.Nanoseconds() - 1
+	c.candidates[0] = candidate
+	if got := attribFor(t, c, 0); got.State != "none" {
+		t.Fatalf("aged ambiguity = %+v, want none", got)
+	}
+	c.observeSource(0, second, monotonicNow())
+	if got := attribFor(t, c, 0); got.State != "single" || got.MAC != formatMAC(second) {
+		t.Fatalf("relearned ambiguity = %+v", got)
+	}
+}
+
+func TestAttributionCrossEndpointConflictIsBoundedAndAges(t *testing.T) {
+	c := newClassifier([]EndpointDev{{Index: 0, Dev: "tap0"}, {Index: 1, Dev: "tap1"}})
+	now := monotonicNow()
+	shared := testMAC(10)
+	c.observeSource(0, shared, now)
+	c.observeSource(1, shared, now+1)
+	if got := attribFor(t, c, 0); got.State != "none" {
+		t.Fatalf("old owner after conflict = %+v, want none", got)
+	}
+	if got := attribFor(t, c, 1); got.State != "none" {
+		t.Fatalf("new side after conflict = %+v, want none", got)
+	}
+
+	for i := 0; i < maxConflict+1; i++ {
+		mac := testMAC(byte(20 + i))
+		c.observeSource(0, mac, now+int64(i+2))
+		c.observeSource(1, mac, now+int64(i+3))
+	}
+	if len(c.conflicts) != maxConflict {
+		t.Fatalf("conflict set length = %d, want %d", len(c.conflicts), maxConflict)
+	}
+	if c.conflictIndexLocked(shared) >= 0 {
+		t.Fatalf("oldest conflict was not dropped")
+	}
+	for i := range c.conflicts {
+		c.conflicts[i].lastSeen = monotonicNow() - macTTL.Nanoseconds() - 1
+	}
+	_ = c.Attribution()
+	if len(c.conflicts) != 0 {
+		t.Fatalf("aged conflicts remain: %d", len(c.conflicts))
+	}
+	c.observeSource(0, shared, monotonicNow())
+	if got := attribFor(t, c, 0); got.State != "single" || got.MAC != formatMAC(shared) {
+		t.Fatalf("post-conflict relearn = %+v", got)
+	}
+}
+
+func TestEndpointIndexSurvivesSparseDeviceList(t *testing.T) {
+	// This is the regression for the old compacted []string path: endpoint 0
+	// contributes no device and endpoint 1 does. The indexed path must keep
+	// both the counter key and wire attribution at document index 1.
+	c := newClassifier([]EndpointDev{{Index: 1, Dev: "tap1"}})
+	mac := testMAC(42)
+	c.count(1, "ARP", "request")
+	c.observeSource(1, mac, monotonicNow())
+	if c.Snapshot()[key{ep: 1, label: "ARP", subtype: "request"}] != 1 {
+		t.Fatalf("counter did not retain endpoint index 1: %#v", c.Snapshot())
+	}
+	attrs := c.Attribution()
+	if len(attrs) != 1 || attrs[0].EndpointIndex != 1 || attrs[0].MAC != formatMAC(mac) {
+		t.Fatalf("sparse endpoint attribution = %+v, want only endpoint 1", attrs)
+	}
+}
+
+func TestAttributionNilClassifier(t *testing.T) {
 	var c *Classifier
-	if got := c.Snapshot(); got != nil {
-		t.Errorf("nil Snapshot = %v, want nil", got)
+	if got := c.Attribution(); got != nil {
+		t.Fatalf("nil Attribution = %#v, want nil", got)
 	}
-	c.Close() // must not panic
 }

@@ -13,7 +13,8 @@ import (
 //   - version must equal 1
 //   - id and name are non-empty
 //   - node ids are unique and >= 0
-//   - node kind is iol, vpcs, nat, or tool
+//
+// - node kind is iol, vpcs, nat, tool, or pc
 //   - iol nodes carry an image reference with a non-empty id
 //   - tool nodes carry a non-empty string config.pack
 //   - ethernet/serial group counts are within 0..16
@@ -75,8 +76,10 @@ func (l *Lab) Validate() error {
 			// Per D11, the registry-aware known-pack check runs at the server's
 			// lab.load boundary, preserving load-time timing without making this
 			// pure document package import internal/tool.
+		case KindPC:
+			// pc owns its built-in pack; it has no config.pack field.
 		default:
-			return fmt.Errorf("node %d: kind must be iol, vpcs, nat or tool, got %q", n.ID, n.Kind)
+			return fmt.Errorf("node %d: kind must be iol, vpcs, nat, tool or pc, got %q", n.ID, n.Kind)
 		}
 		if n.Ethernet != nil && (*n.Ethernet < 0 || *n.Ethernet > 16) {
 			return fmt.Errorf("node %d: ethernet groups must be 0..16, got %d", n.ID, *n.Ethernet)
@@ -90,7 +93,7 @@ func (l *Lab) Validate() error {
 		nodeByID[n.ID] = n
 	}
 
-	// extEndpoints counts how many link endpoints reference each nat/tool node,
+	// extEndpoints counts how many link endpoints reference each nat/tool/pc node,
 	// so we can enforce their single-interface constraint (at most one link).
 	extEndpoints := make(map[int]int)
 
@@ -143,6 +146,14 @@ func (l *Lab) Validate() error {
 				extEndpoints[ep.Node]++
 				if extEndpoints[ep.Node] > 1 {
 					return fmt.Errorf("tool: node %d may be referenced by at most one link endpoint", ep.Node)
+				}
+			case KindPC:
+				if ep.Interface != "eth1" {
+					return fmt.Errorf("pc: link %d: node %d has only interface eth1, got %q", link.ID, ep.Node, ep.Interface)
+				}
+				extEndpoints[ep.Node]++
+				if extEndpoints[ep.Node] > 1 {
+					return fmt.Errorf("pc: node %d may be referenced by at most one link endpoint", ep.Node)
 				}
 			}
 		}

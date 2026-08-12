@@ -79,6 +79,44 @@ func TestDetachCmds(t *testing.T) {
 	}
 }
 
+func TestNetemCmds(t *testing.T) {
+	tests := []struct {
+		name string
+		in   Netem
+		want []string
+	}{
+		{name: "delay", in: Netem{DelayMs: 100}, want: []string{"tc", "qdisc", "replace", "dev", "tap0", "root", "netem", "delay", "100ms"}},
+		{name: "delay jitter", in: Netem{DelayMs: 100, JitterMs: 2.5}, want: []string{"tc", "qdisc", "replace", "dev", "tap0", "root", "netem", "delay", "100ms", "2.5ms"}},
+		{name: "loss", in: Netem{LossPct: 1.25}, want: []string{"tc", "qdisc", "replace", "dev", "tap0", "root", "netem", "loss", "1.25%"}},
+		{name: "rate", in: Netem{RateKbit: 1000}, want: []string{"tc", "qdisc", "replace", "dev", "tap0", "root", "netem", "rate", "1000kbit"}},
+		{name: "all", in: Netem{DelayMs: 50, JitterMs: 5, LossPct: 1, DuplicatePct: 2, ReorderPct: 3, RateKbit: 1000}, want: []string{"tc", "qdisc", "replace", "dev", "tap0", "root", "netem", "delay", "50ms", "5ms", "loss", "1%", "duplicate", "2%", "reorder", "3%", "50%", "rate", "1000kbit"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := netemCmds("tap0", tt.in)
+			if len(got) != 1 {
+				t.Fatalf("got %d commands, want one: %#v", len(got), got)
+			}
+			if len(got[0]) != len(tt.want) {
+				t.Fatalf("argv length = %d, want %d: %#v", len(got[0]), len(tt.want), got[0])
+			}
+			for i := range tt.want {
+				if got[0][i] != tt.want[i] {
+					t.Fatalf("argv[%d] = %q, want %q; full argv %#v", i, got[0][i], tt.want[i], got[0])
+				}
+			}
+		})
+	}
+}
+
+func TestNetemClearCmds(t *testing.T) {
+	want := []string{"tc", "qdisc", "del", "dev", "tap0", "root"}
+	got := netemClearCmds("tap0")
+	if len(got) != 1 || strings.Join(got[0], " ") != strings.Join(want, " ") {
+		t.Fatalf("netemClearCmds = %#v, want %#v", got, [][]string{want})
+	}
+}
+
 // TestTapName pins the format and the IFNAMSIZ length guard at its boundary.
 // Prefix "iol" + "_" = 4 fixed chars, leaving 11 bytes for the two decimal
 // numbers combined (15 usable bytes total, IFNAMSIZ=16 including the NUL).

@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { chromeStore } from "../chromeStore.svelte";
   import { labStore } from "../labStore.svelte";
 
   let { x, y, nodeId, onClose }: { x: number; y: number; nodeId: number; onClose: () => void } =
     $props();
+  $effect(() => chromeStore.hold());
 
   let el: HTMLDivElement | undefined = $state();
 

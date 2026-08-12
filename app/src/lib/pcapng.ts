@@ -357,31 +357,73 @@ function tcpFlags(d: Uint8Array, o: number): string {
   return names.length ? `[${names.join(" ")}]` : "";
 }
 
-/** Summarize one ethernet frame. Defensive against truncated captures. */
-export function summarize(frame: Uint8Array, origLen: number): PacketSummary {
+export interface PacketDetails {
+  summary: PacketSummary;
+  srcMac: string;
+  dstMac: string;
+  vlan: number | null;
+  srcIp?: string;
+  dstIp?: string;
+  ipProtocol?: number;
+  l4Offset?: number;
+  l4PayloadOffset?: number;
+  srcPort?: number;
+  dstPort?: number;
+  arp?: { op: number; spa: string; tpa: string };
+  stp?: { bpduType: number };
+  cdpDeviceId?: string;
+}
+
+// ParsedPacket.data is a stable copy owned by PcapngParser. Reusing the
+// dissection result across the capture summary and Lens keeps the two views on
+// one browser-side parse/traversal while allowing lensEvent's reviewed API to
+// remain `lensEvent(ParsedPacket, seq, attrib)`.
+const detailCache = new WeakMap<Uint8Array, PacketDetails>();
+
+/** Dissect one ethernet frame once, retaining the intermediates the Lens uses. */
+export function inspectPacket(frame: Uint8Array, origLen: number): PacketDetails {
+  const cached = detailCache.get(frame);
+  if (cached) return cached;
   const len = origLen || frame.length;
+  const details: PacketDetails = {
+    summary: { proto: "?", addr: "", info: "runt frame", len },
+    srcMac: "",
+    dstMac: "",
+    vlan: null,
+  };
   if (frame.length < 14) {
-    return { proto: "?", addr: "", info: "runt frame", len };
+    detailCache.set(frame, details);
+    return details;
   }
+
   const dstMac = mac(frame, 0);
   const srcMac = mac(frame, 6);
+  details.dstMac = dstMac;
+  details.srcMac = srcMac;
   let etherType = u16(frame, 12);
   let l3 = 14;
-  // Single VLAN tag hop (802.1Q).
+  // Single VLAN tag hop (802.1Q); keep the outer 12-bit VID for the Lens.
   if (etherType === 0x8100 && frame.length >= 18) {
+    details.vlan = u16(frame, 14) & 0x0fff;
     etherType = u16(frame, 16);
     l3 = 18;
   }
 
   // 802.3 framing: a value below 0x0600 (1536) is a LENGTH field, not an
-  // EtherType. The old code fell straight through to the hex fallback, so real
-  // STP BPDUs (dst 01:80:c2:00:00:00) showed up as "0x0027" and CDP/DTP/VTP over
-  // SNAP (dst 01:00:0c:cc:cc:cc) as "0x0183"/"0x004c" etc. Decode LLC instead.
+  // EtherType. Decode LLC so STP and Cisco SNAP frames keep their existing
+  // summaries while exposing their Lens details.
   if (etherType < 0x0600) {
-    return summarizeLlc(frame, l3, srcMac, dstMac, len);
+    details.summary = summarizeLlc(frame, l3, srcMac, dstMac, len, details);
+  } else {
+    details.summary = dispatchEtherType(frame, etherType, l3, srcMac, dstMac, len, details);
   }
+  detailCache.set(frame, details);
+  return details;
+}
 
-  return dispatchEtherType(frame, etherType, l3, srcMac, dstMac, len);
+/** Summarize one ethernet frame. Defensive against truncated captures. */
+export function summarize(frame: Uint8Array, origLen: number): PacketSummary {
+  return inspectPacket(frame, origLen).summary;
 }
 
 /** Dispatch by EtherType. Shared by Ethernet II framing and by SNAP frames
@@ -392,7 +434,8 @@ function dispatchEtherType(
   l3: number,
   srcMac: string,
   dstMac: string,
-  len: number
+  len: number,
+  details: PacketDetails
 ): PacketSummary {
   if (etherType === 0x0806) {
     // ARP
@@ -400,6 +443,7 @@ function dispatchEtherType(
       const op = u16(frame, l3 + 6);
       const spa = ipv4(frame, l3 + 14);
       const tpa = ipv4(frame, l3 + 24);
+      details.arp = { op, spa, tpa };
       const info =
         op === 1 ? `Who has ${tpa}? Tell ${spa}` : op === 2 ? `${spa} is at ${mac(frame, l3 + 8)}` : `op ${op}`;
       return { proto: "ARP", addr: `${spa} > ${tpa}`, info, len };
@@ -408,10 +452,10 @@ function dispatchEtherType(
   }
 
   if (etherType === 0x0800) {
-    return summarizeIPv4(frame, l3, len);
+    return summarizeIPv4(frame, l3, len, details);
   }
   if (etherType === 0x86dd) {
-    return summarizeIPv6(frame, l3, len);
+    return summarizeIPv6(frame, l3, len, details);
   }
 
   // No L3 we dissect: MACs + ethertype hex fallback.
@@ -437,7 +481,8 @@ function summarizeLlc(
   o: number,
   srcMac: string,
   dstMac: string,
-  len: number
+  len: number,
+  details: PacketDetails
 ): PacketSummary {
   if (frame.length < o + 3) {
     return { proto: "LLC", addr: `${srcMac} > ${dstMac}`, info: "runt", len };
@@ -447,7 +492,7 @@ function summarizeLlc(
 
   // Spanning Tree (802.1D/w/s): DSAP=SSAP=0x42, control 0x03 (UI). BPDU follows.
   if (dsap === 0x42 && ssap === 0x42) {
-    return summarizeStp(frame, o + 3, srcMac, dstMac, len);
+    return summarizeStp(frame, o + 3, srcMac, dstMac, len, details);
   }
 
   // SNAP: DSAP=SSAP=0xAA, control 0x03, then OUI(3) + PID(2).
@@ -457,14 +502,14 @@ function summarizeLlc(
     const snapBody = o + 8;
     if (oui === 0x00000c) {
       // Cisco SNAP protocols.
-      if (pid === 0x2000) return summarizeCdp(frame, snapBody, srcMac, dstMac, len);
+      if (pid === 0x2000) return summarizeCdp(frame, snapBody, srcMac, dstMac, len, details);
       if (pid === 0x2004) return { proto: "DTP", addr: `${srcMac} > ${dstMac}`, info: "", len };
       if (pid === 0x2003) return { proto: "VTP", addr: `${srcMac} > ${dstMac}`, info: "", len };
       return { proto: "SNAP", addr: `${srcMac} > ${dstMac}`, info: `Cisco pid 0x${hex2(frame[o + 6])}${hex2(frame[o + 7])}`, len };
     }
     if (oui === 0x000000) {
       // OUI 00:00:00 → the SNAP PID is a real EtherType; reuse the L2 path.
-      return dispatchEtherType(frame, pid, snapBody, srcMac, dstMac, len);
+      return dispatchEtherType(frame, pid, snapBody, srcMac, dstMac, len, details);
     }
     return { proto: "SNAP", addr: `${srcMac} > ${dstMac}`, info: `oui ${hex2(frame[o + 3])}:${hex2(frame[o + 4])}:${hex2(frame[o + 5])}`, len };
   }
@@ -483,11 +528,13 @@ function summarizeStp(
   o: number,
   srcMac: string,
   dstMac: string,
-  len: number
+  len: number,
+  details: PacketDetails
 ): PacketSummary {
   const addr = `${srcMac} > ${dstMac}`;
   if (frame.length < o + 4) return { proto: "STP", addr, info: "runt", len };
   const bpduType = frame[o + 3];
+  details.stp = { bpduType };
   if (bpduType === 0x80) {
     return { proto: "STP", addr, info: "Topology change", len };
   }
@@ -511,7 +558,8 @@ function summarizeCdp(
   o: number,
   srcMac: string,
   dstMac: string,
-  len: number
+  len: number,
+  details: PacketDetails
 ): PacketSummary {
   const addr = `${srcMac} > ${dstMac}`;
   let p = o + 4; // skip CDP header (version, ttl, checksum)
@@ -522,6 +570,7 @@ function summarizeCdp(
     if (type === 0x0001) {
       const valLen = Math.min(tlvLen - 4, frame.length - (p + 4));
       const devId = asciiStr(frame, p + 4, Math.max(0, valLen));
+      details.cdpDeviceId = devId || undefined;
       return { proto: "CDP", addr, info: devId ? `Device ID ${devId}` : "", len };
     }
     p += tlvLen;
@@ -529,23 +578,27 @@ function summarizeCdp(
   return { proto: "CDP", addr, info: "", len };
 }
 
-function summarizeIPv4(frame: Uint8Array, o: number, len: number): PacketSummary {
+function summarizeIPv4(frame: Uint8Array, o: number, len: number, details: PacketDetails): PacketSummary {
   if (frame.length < o + 20) return { proto: "IPv4", addr: "", info: "truncated", len };
   const ihl = (frame[o] & 0x0f) * 4;
   const proto = frame[o + 9];
   const src = ipv4(frame, o + 12);
   const dst = ipv4(frame, o + 16);
   const l4 = o + ihl;
-  return summarizeL4(frame, proto, src, dst, l4, len, false);
+  details.srcIp = src;
+  details.dstIp = dst;
+  return summarizeL4(frame, proto, src, dst, l4, len, false, details);
 }
 
-function summarizeIPv6(frame: Uint8Array, o: number, len: number): PacketSummary {
+function summarizeIPv6(frame: Uint8Array, o: number, len: number, details: PacketDetails): PacketSummary {
   if (frame.length < o + 40) return { proto: "IPv6", addr: "", info: "truncated", len };
   const nextHdr = frame[o + 6];
   const src = ipv6(frame, o + 8);
   const dst = ipv6(frame, o + 24);
   const l4 = o + 40;
-  return summarizeL4(frame, nextHdr, src, dst, l4, len, true);
+  details.srcIp = src;
+  details.dstIp = dst;
+  return summarizeL4(frame, nextHdr, src, dst, l4, len, true, details);
 }
 
 function summarizeL4(
@@ -555,18 +608,26 @@ function summarizeL4(
   dst: string,
   l4: number,
   len: number,
-  v6: boolean
+  v6: boolean,
+  details: PacketDetails
 ): PacketSummary {
+  details.ipProtocol = proto;
+  details.l4Offset = l4;
   // TCP
   if (proto === 6 && frame.length >= l4 + 14) {
     const sport = u16(frame, l4);
     const dport = u16(frame, l4 + 2);
+    details.srcPort = sport;
+    details.dstPort = dport;
     return { proto: "TCP", addr: `${src}:${sport} > ${dst}:${dport}`, info: tcpFlags(frame, l4), len };
   }
   // UDP
   if (proto === 17 && frame.length >= l4 + 8) {
     const sport = u16(frame, l4);
     const dport = u16(frame, l4 + 2);
+    details.srcPort = sport;
+    details.dstPort = dport;
+    details.l4PayloadOffset = l4 + 8;
     return { proto: "UDP", addr: `${src}:${sport} > ${dst}:${dport}`, info: "", len };
   }
   // ICMP / ICMPv6

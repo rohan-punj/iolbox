@@ -1,0 +1,10 @@
+{{define "content"}}
+<h1>Infrastructure services</h1>
+{{if not .Iface}}<article class="warning">eth1 is not wired yet. Set a static address in the Inspector before testing from the lab.</article>{{end}}
+<p class="muted">DHCP, DNS, NTP and TFTP are authoritative/local services only. DNS never recurses or forwards; DHCP option 6, 42, 66 and 150 advertise the cross-service addresses configured in Settings.</p>
+<div class="grid"><article><strong>DHCP</strong><br>UDP :{{.Config.Ports.DHCP}}{{if .DHCP}}<p class="bad">Bind failed: {{.DHCP}}</p>{{else}}<p class="ok">Listening</p>{{end}}</article><article><strong>DNS</strong><br>UDP :{{.Config.Ports.DNS}}{{if .DNS}}<p class="bad">Bind failed: {{.DNS}}</p>{{else}}<p class="ok">Listening · {{.Config.DNS.Zone}}</p>{{end}}</article><article><strong>NTP</strong><br>UDP :{{.Config.Ports.NTP}}{{if .NTP}}<p class="bad">Bind failed: {{.NTP}}</p>{{else}}<p class="ok">Listening</p>{{end}}</article><article><strong>TFTP</strong><br>UDP :{{.Config.Ports.TFTP}}{{if .TFTP}}<p class="bad">Bind failed: {{.TFTP}}</p>{{else}}<p class="ok">Listening</p>{{end}}</article></div>
+<h2>DHCP leases</h2><div id="dhcp" hx-get="/frag/dhcp" hx-trigger="every 3s" hx-swap="innerHTML">{{template "dhcpRows" .Leases}}</div>
+<h2>DNS query log</h2><div id="dns" hx-get="/frag/dns" hx-trigger="every 3s" hx-swap="innerHTML">{{template "dnsRows" .Queries}}</div>
+<h2>NTP clients</h2><div id="ntp" hx-get="/frag/ntp" hx-trigger="every 3s" hx-swap="innerHTML">{{template "ntpRows" .NTPRows}}</div>
+<h2>TFTP transfer log</h2><div id="tftp" hx-get="/frag/tftp" hx-trigger="every 3s" hx-swap="innerHTML">{{template "tftpRows" .Transfers}}</div>
+{{end}}

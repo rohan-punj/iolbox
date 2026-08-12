@@ -1,11 +1,16 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
+  import { consoleUiStore } from "../consoleUiStore.svelte";
+  import { macUiStore } from "../macUiStore.svelte";
   import { themeStore } from "../themeStore.svelte";
+  import { chromeStore } from "../chromeStore.svelte";
   import { uiSvg } from "../icons.svelte";
   import { emptyLab, type LabDocument } from "../labTypes";
   import { importClab, exportClab } from "../clab";
   import { labToYaml, labFromText } from "../yaml";
   import { load as yamlLoad } from "js-yaml";
+  import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
+  import { tick } from "svelte";
 
   const anyRunning = $derived(labStore.labRunning);
   const providerLabel = $derived(
@@ -13,9 +18,23 @@
   );
   const nodeCount = $derived(labStore.lab.nodes.length);
 
-  // Brief "Saved ✓" confirmation after a manual save.
-  let justSaved = $state(false);
   let importInput: HTMLInputElement | undefined = $state();
+  let menuButton: HTMLButtonElement | undefined = $state();
+  let menuOpen = $state(false);
+  let menuAnchor = $state({ x: 0, y: 0 });
+
+  type SaveState = "saved" | "saving" | "unsaved";
+  type AutosaveState = { autosaveTimer: ReturnType<typeof setTimeout> | null };
+  const pendingAutosave = $derived.by(() => {
+    // nowTick is the existing one-second lab clock; it makes the private
+    // debounce timer observable here without changing labStore's API.
+    void labStore.nowTick;
+    return (labStore as unknown as AutosaveState).autosaveTimer !== null;
+  });
+  const saveState = $derived.by((): SaveState => {
+    if (pendingAutosave) return "saving";
+    return labStore.lastSavedAt === null ? "unsaved" : "saved";
+  });
 
   // Fullscreen toggle. Escape already exits fullscreen natively (the
   // Fullscreen API's own browser behavior — no key handler needed here).
@@ -54,11 +73,189 @@
   }
 
   async function save() {
-    const ok = await labStore.saveLab();
-    if (ok) {
-      justSaved = true;
-      setTimeout(() => (justSaved = false), 1600);
+    await labStore.saveLab();
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+    void tick().then(() => menuButton?.focus());
+  }
+
+  function toggleMenu() {
+    if (menuOpen) {
+      closeMenu();
+      return;
     }
+    const rect = menuButton?.getBoundingClientRect();
+    if (!rect) return;
+    const menuWidth = 240;
+    const margin = 8;
+    menuAnchor = {
+      x: Math.max(margin, Math.min(window.innerWidth - menuWidth - margin, rect.right - menuWidth)),
+      y: rect.bottom + 4,
+    };
+    menuOpen = true;
+  }
+
+  function overflowItems(): MenuItem[] {
+    const separator = (id: string, label: string): MenuItem => ({
+      id,
+      label,
+      separator: true,
+      action: () => {},
+    });
+    return [
+      // Lab
+      {
+        id: "lab-new",
+        label: "New",
+        disabled: labStore.labLoading,
+        title: "Start a new empty lab",
+        action: newLab,
+      },
+      {
+        id: "lab-browser",
+        label: "Labs…",
+        disabled: labStore.labLoading,
+        action: () => (labStore.showLabBrowser = true),
+      },
+      { id: "lab-save", label: "Save", title: "Save lab to the store", action: save },
+      {
+        id: "lab-tasks",
+        label: "Tasks",
+        checked: labStore.showTasks,
+        title: "Lab tasks / instructions",
+        action: () => (labStore.showTasks = !labStore.showTasks),
+      },
+      separator("group-import-export", "Import / export"),
+      {
+        id: "export-yaml",
+        label: "Export YAML",
+        title: "Export lab as YAML (.yml)",
+        action: exportYaml,
+      },
+      {
+        id: "export-containerlab",
+        label: "Export containerlab",
+        title: "Export as containerlab .clab.yml",
+        action: exportClabFile,
+      },
+      {
+        id: "import-lab",
+        label: "Import…",
+        title: "Import lab (.yml native, containerlab .clab.yml, or legacy .json)",
+        action: pickImport,
+      },
+      separator("group-library", "Library"),
+      {
+        id: "library-images",
+        label: "Images…",
+        action: () => (labStore.showImageManager = true),
+      },
+      separator("group-view", "View"),
+      {
+        id: "view-return-consoles-to-dock",
+        label: "Return consoles to dock",
+        disabled: consoleUiStore.placement === "dock",
+        title: "Switch floating console windows back to the dock",
+        action: () => consoleUiStore.setPlacement("dock"),
+      },
+      {
+        id: "view-auto-hide-chrome",
+        label: "Auto-hide chrome",
+        checked: chromeStore.enabled,
+        title: "Hide the top bar, rail, and resource bar after 2 seconds of idle time",
+        action: () => chromeStore.toggleEnabled(),
+      },
+      {
+        id: "view-theme",
+        label: "Theme",
+        action: () => {},
+        submenu: [
+          {
+            id: "theme-bench",
+            label: "Bench",
+            checked: themeStore.current === "bench",
+            action: () => themeStore.set("bench"),
+          },
+          {
+            id: "theme-glass",
+            label: "Glass",
+            checked: themeStore.current === "glass",
+            action: () => themeStore.set("glass"),
+          },
+        ],
+      },
+      {
+        id: "view-console-mode",
+        label: "Console mode",
+        action: () => {},
+        submenu: [
+          {
+            id: "console-mode-web",
+            label: "Web",
+            checked: consoleUiStore.consoleMode === "web",
+            action: () => consoleUiStore.setConsoleMode("web"),
+          },
+          {
+            id: "console-mode-native",
+            label: "Native",
+            checked: consoleUiStore.consoleMode === "native",
+            action: () => consoleUiStore.setConsoleMode("native"),
+          },
+        ],
+      },
+      {
+        id: "view-learned-mac-display",
+        label: macUiStore.learnIol
+          ? "Learned IOL MAC display: on"
+          : "Learned IOL MAC display: off",
+        checked: macUiStore.learnIol,
+        title: macUiStore.learnIol
+          ? "Learned IOL MAC display is on — IOL addresses come from observed frames"
+          : "Learned IOL MAC display is off — IOL addresses are inferred from live traffic",
+        action: () => macUiStore.toggleLearnIol(),
+      },
+      separator("group-canvas", "Canvas"),
+      {
+        id: "canvas-link-layout",
+        label: "Link layout",
+        action: () => {},
+        submenu: [
+          {
+            id: "canvas-link-layout-free",
+            label: "Free",
+            checked: (labStore.lab.canvas?.linkLayout ?? "free") === "free",
+            action: () => {
+              const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
+              canvas.linkLayout = "free";
+              labStore.scheduleAutosave();
+            },
+          },
+          {
+            id: "canvas-link-layout-structured",
+            label: "Structured",
+            checked: labStore.lab.canvas?.linkLayout === "structured",
+            action: () => {
+              const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
+              canvas.linkLayout = "structured";
+              labStore.scheduleAutosave();
+            },
+          },
+        ],
+      },
+      {
+        id: "canvas-snap-grid",
+        label: "Snap grid",
+        checked: labStore.lab.canvas?.snapGrid ?? false,
+        title: "Snap dragged nodes to the 20px canvas grid",
+        action: () => {
+          const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
+          canvas.snapGrid = !canvas.snapGrid;
+          labStore.scheduleAutosave();
+        },
+      },
+    ];
   }
 
   function download(text: string, filename: string, mime: string) {
@@ -114,7 +311,7 @@
 
 <svelte:window onfullscreenchange={syncFullscreen} />
 
-<header class="topbar">
+<header class="topbar" class:chrome-hidden={chromeStore.hidden} data-chrome-surface data-provider={providerLabel}>
   <div class="brand">
     <span class="brand-mark">{@html uiSvg("net", 13)}</span>
     <input
@@ -124,7 +321,17 @@
       aria-label="Lab name"
       spellcheck="false"
     />
-    <span class="dim mono">· {nodeCount} {nodeCount === 1 ? "node" : "nodes"}</span>
+  </div>
+
+  <div class="status-pair" aria-label="Lab status">
+    <span class="pill status-pill save-status" class:saved={saveState === "saved"} class:saving={saveState === "saving"} class:unsaved={saveState === "unsaved"}>
+      <span class="led"></span>
+      {saveState === "saved" ? "Saved" : saveState === "saving" ? "Saving…" : "Unsaved"}
+    </span>
+    <span class="pill status-pill node-status" class:running={anyRunning} class:stopped={!anyRunning}>
+      <span class="led"></span>
+      <span class="mono">{nodeCount}</span> {nodeCount === 1 ? "node" : "nodes"}
+    </span>
   </div>
 
   <div class="spacer"></div>
@@ -139,62 +346,6 @@
     </button>
   {/if}
 
-  <span
-    class="pill status-pill"
-    class:connected={labStore.providerStatus === "connected"}
-    class:connecting={labStore.providerStatus === "connecting"}
-    class:error={labStore.providerStatus === "error"}
-  >
-    <span class="led"></span>
-    {providerLabel}
-  </span>
-
-  <div class="seg" role="group" aria-label="Theme">
-    <button
-      class:on={themeStore.current === "bench"}
-      aria-pressed={themeStore.current === "bench"}
-      onclick={() => themeStore.set("bench")}>Bench</button
-    >
-    <button
-      class:on={themeStore.current === "glass"}
-      aria-pressed={themeStore.current === "glass"}
-      onclick={() => themeStore.set("glass")}>Glass</button
-    >
-  </div>
-
-  <button class="btn" onclick={newLab} disabled={labStore.labLoading} title="Start a new empty lab">
-    {@html uiSvg("plus", 13)} New
-  </button>
-
-  <button class="btn" disabled={labStore.labLoading} onclick={() => (labStore.showLabBrowser = true)}>
-    {@html uiSvg("folder", 13)} Labs
-  </button>
-
-  <button
-    class="btn"
-    class:on={labStore.showTasks}
-    aria-pressed={labStore.showTasks}
-    title="Lab tasks / instructions"
-    onclick={() => (labStore.showTasks = !labStore.showTasks)}
-  >
-    {@html uiSvg("tasks", 13)} Tasks
-  </button>
-
-  <button class="btn" class:saved={justSaved} onclick={save} title="Save lab to the store">
-    {@html uiSvg("save", 13)} {justSaved ? "Saved ✓" : "Save"}
-  </button>
-
-  <div class="seg io-seg" role="group" aria-label="Import / export">
-    <button title="Export lab as YAML (.yml)" aria-label="Export YAML" onclick={exportYaml}>
-      {@html uiSvg("download", 13)}
-    </button>
-    <button class="io-clab" title="Export as containerlab .clab.yml" aria-label="Export containerlab YAML" onclick={exportClabFile}>
-      clab
-    </button>
-    <button title="Import lab (.yml native, containerlab .clab.yml, or legacy .json)" aria-label="Import lab" onclick={pickImport}>
-      {@html uiSvg("upload", 13)}
-    </button>
-  </div>
   <input
     bind:this={importInput}
     type="file"
@@ -203,19 +354,37 @@
     onchange={onImportFile}
   />
 
-  <button class="btn" onclick={() => (labStore.showImageManager = true)}>
-    {@html uiSvg("images", 13)} Images
-  </button>
-
   <button
     class="btn"
     aria-pressed={isFullscreen}
-    title={isFullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
     aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+    title={isFullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
     onclick={toggleFullscreen}
   >
     {@html uiSvg(isFullscreen ? "fullscreenExit" : "fullscreen", 13)}
   </button>
+
+  <button
+    bind:this={menuButton}
+    class="btn"
+    aria-expanded={menuOpen}
+    aria-haspopup="menu"
+    aria-label="More actions"
+    title="More actions"
+    onclick={toggleMenu}
+  >
+    {@html uiSvg("more", 15)}
+  </button>
+
+  {#if menuOpen}
+    <ContextMenu
+      x={menuAnchor.x}
+      y={menuAnchor.y}
+      items={overflowItems()}
+      dismissOnWheel={false}
+      onClose={closeMenu}
+    />
+  {/if}
 
   <button class="btn btn-primary" onclick={toggleLab}>
     {@html uiSvg(anyRunning ? "stop" : "play", 12)}
@@ -235,7 +404,13 @@
     backdrop-filter: var(--blur);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    z-index: 5;
+    z-index: var(--z-topbar);
+    transition: transform var(--transition-fast), opacity var(--transition-fast);
+  }
+  .topbar.chrome-hidden {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
   }
   .brand {
     display: flex;
@@ -274,10 +449,10 @@
     background: var(--panel-solid);
     border-color: var(--accent);
   }
-  .dim {
-    font-size: var(--fs-xs);
-    color: var(--ink-3);
-    white-space: nowrap;
+  .status-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
     flex-shrink: 0;
   }
   .spacer {
@@ -303,78 +478,26 @@
     border-radius: 50%;
     background: var(--state-stopped);
   }
-  .status-pill.connected .led {
+  .save-status.saved .led,
+  .node-status.running .led {
     background: var(--state-running);
     box-shadow: 0 0 0 3px color-mix(in oklab, var(--state-running) 22%, transparent);
   }
-  .status-pill.connecting .led {
+  .save-status.saving .led {
     background: var(--state-starting);
   }
-  .status-pill.error .led {
-    background: var(--state-crashed);
-  }
-
-  .seg {
-    display: inline-flex;
-    padding: 3px;
-    gap: 2px;
-    background: var(--panel-2);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-full);
-  }
-  .seg button {
-    font-family: var(--font-ui);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    border: 0;
-    background: transparent;
-    color: var(--ink-3);
-    padding: 4px 12px;
-    border-radius: var(--radius-full);
-    cursor: pointer;
-    letter-spacing: 0.02em;
-    transition: color var(--transition-fast), background var(--transition-fast);
-  }
-  .seg button:hover {
-    color: var(--ink);
-  }
-  .seg button.on {
-    background: var(--accent);
-    color: var(--accent-ink);
+  .node-status.stopped .led,
+  .save-status.unsaved .led {
+    background: var(--state-stopped);
   }
 
   .btn :global(svg) {
     width: 13px;
     height: 13px;
   }
-  .btn.saved {
-    color: var(--success);
-    border-color: color-mix(in oklab, var(--success) 55%, transparent);
-  }
-  .btn.on {
-    color: var(--accent);
-    border-color: var(--accent);
-    background: var(--accent-muted);
-  }
-  .io-seg {
-    padding: 3px;
-  }
-  .io-seg button {
-    display: grid;
-    place-items: center;
-    padding: 4px 8px;
-    color: var(--ink-3);
-  }
-  .io-seg button:hover {
-    color: var(--ink);
-  }
-  .io-seg :global(svg) {
-    width: 13px;
-    height: 13px;
-  }
-  .io-seg .io-clab {
-    font-size: 11px;
-    font-weight: 650;
-    letter-spacing: 0.02em;
+  @media (prefers-reduced-motion: reduce) {
+    .topbar {
+      transition: none;
+    }
   }
 </style>

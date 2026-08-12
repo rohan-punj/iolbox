@@ -41,7 +41,7 @@ func fabricNodes(doc *lab.Lab) map[int]bool {
 	out := make(map[int]bool, len(doc.Nodes))
 	for i := range doc.Nodes {
 		switch doc.Nodes[i].Kind {
-		case lab.KindIOL, lab.KindNAT, lab.KindVPCS, lab.KindTool:
+		case lab.KindIOL, lab.KindNAT, lab.KindVPCS, lab.KindTool, lab.KindPC:
 			out[doc.Nodes[i].ID] = true
 		}
 	}

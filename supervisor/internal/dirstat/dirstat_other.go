@@ -6,4 +6,4 @@ package dirstat
 // runtime is always Linux, so the dev-box build returns a nil Classifier (which
 // Snapshot/Close both handle nil-safely). The aggregate fps/bps stats path is
 // unaffected.
-func Open(devs []string) (*Classifier, error) { return nil, nil }
+func Open(devs []EndpointDev) (*Classifier, error) { return nil, nil }

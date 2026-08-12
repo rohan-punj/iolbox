@@ -11,6 +11,7 @@
   const image = $derived(labStore.images.find((i) => i.id === node?.image?.id));
   const isIol = $derived(node?.kind === "iol");
   const isTool = $derived(node?.kind === "tool");
+  const isPc = $derived(node?.kind === "pc");
 
   let showImagePicker = $state(false);
   let iconPicker = $state<{ x: number; y: number } | null>(null);
@@ -220,7 +221,8 @@
           oninput={updateConfig}
         ></textarea>
       </label>
-    {:else if isTool}
+    {:else if isTool || isPc}
+      {#if isTool}
       <div class="field">
         <span class="label">Pack</span>
         <select class="mono" value={packId} onchange={updatePack}>
@@ -239,6 +241,7 @@
           <span class="warn">Choose an installed pack.</span>
         {/if}
       </div>
+      {/if}
 
       <div class="field-row">
         <label class="field">
@@ -270,12 +273,12 @@
           oninput={(e) => updateNet("gateway", (e.target as HTMLInputElement).value)}
         />
       </label>
-      <div class="vpcs-hint">Applied to eth1 when the node starts. Leave IP blank to leave it unaddressed (most modules don't need one).</div>
+      <div class="vpcs-hint">Applied to eth1 when the node starts. PC console commands include <span class="mono">ip</span>, <span class="mono">ip dhcp</span>, <span class="mono">ping</span>, and <span class="mono">trace</span>.</div>
     {:else}
       <div class="vpcs-hint">VPCS nodes take their config from canned commands (set later).</div>
     {/if}
 
-    {#if isIol || isTool}
+    {#if isIol || isTool || isPc}
       <button
         class="btn btn-success savecfg-btn"
         title="Push the changes above to the supervisor — editing the fields alone doesn't apply them"

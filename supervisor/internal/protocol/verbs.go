@@ -169,6 +169,70 @@ type NodeArgs struct {
 	Node  int    `json:"node"`
 }
 
+// NodeMACsArgs requests the current per-interface MAC facts for one node.
+// Learned is reserved for the opt-in learned-IOL display and defaults false.
+type NodeMACsArgs struct {
+	Node    int  `json:"node"`
+	Learned bool `json:"learned"`
+}
+
+// NodeMAC is one interface's link-layer address for a node, with the PROVENANCE
+// that licenses reporting it. There is no reading of this struct that yields a
+// MAC the supervisor did not either compute from a flag it passed, read from the
+// kernel, or positively learn from observed traffic.
+//
+// Source:
+//
+//	"derived" - computed from an argument this supervisor passed to the node
+//	            (VPCS -m; see node.VPCSMAC). Valid even while the node is stopped.
+//	"read"    - read from the kernel for a device this supervisor created
+//	            (a netns node's GuestIface). Requires the node to be running.
+//	"learned" - observed as the single source MAC on this endpoint's tap
+//	            (P6 Batch 7's dirstat attribution). Requires traffic AND the
+//	            learned-MAC DISPLAY opt-in. The supervisor learns either way;
+//	            the opt-in gates only whether this handler reports it.
+//	""        - nothing is known; State says why.
+//
+// State:
+//
+//	"known"     - MAC is set and is the interface's address.
+//	"unknown"   - not knowable right now; Reason carries a short human phrase.
+//	"ambiguous" - the endpoint relays for other devices, so no single address can
+//	              be attributed to it (11b only; see P6 plan §7.3.2).
+//	"disabled"  - knowable in principle, but the learned-MAC display opt-in is
+//	              off (11b only). NOT a statement that learning is off.
+type NodeMAC struct {
+	Interface string `json:"interface"`        // the lab document's spelling: e0/0, eth0, eth1
+	MAC       string `json:"mac,omitempty"`    // lowercase colon-separated; set iff State=="known"
+	Source    string `json:"source,omitempty"` // "derived" | "read" | "learned"
+	State     string `json:"state"`            // "known" | "unknown" | "ambiguous" | "disabled"
+	Reason    string `json:"reason,omitempty"` // short phrase for the UI, e.g. "node not running"
+}
+
+type NodeMACsResult struct {
+	Node int       `json:"node"`
+	MACs []NodeMAC `json:"macs"`
+}
+
+// PCStateSyncArgs asks the supervisor to pull durable state from one running
+// PC, or every running PC in the selected lab when Node is omitted.
+type PCStateSyncArgs struct {
+	LabID string `json:"labId"`
+	Node  *int   `json:"node,omitempty"`
+}
+
+// PCStateData is the authoritative PC state mirrored into the GUI lab model.
+type PCStateData struct {
+	Node  int          `json:"node"`
+	State *lab.PCState `json:"state"`
+	Stale bool         `json:"stale"`
+}
+
+// PCStateSyncResult is the response to pc.syncState.
+type PCStateSyncResult struct {
+	States []PCStateData `json:"states"`
+}
+
 // --- node.add / node.remove ---
 //
 // Incremental topology sync for nodes, the counterpart of link.add/link.remove:
@@ -233,6 +297,18 @@ type NodeSetImageResult struct {
 type LinkArgs struct {
 	LabID string   `json:"labId"`
 	Link  lab.Link `json:"link"`
+}
+
+// LinkFaultArgs carries a complete fault replacement. Fault=nil clears the
+// persisted definition and any currently-applied qdiscs/administrative state.
+// afterSec and forSec are runtime-only scheduling controls and are never
+// written into the lab document.
+type LinkFaultArgs struct {
+	LabID    string         `json:"labId"`
+	Link     int            `json:"link"`
+	Fault    *lab.LinkFault `json:"fault"`
+	AfterSec float64        `json:"afterSec,omitempty"`
+	ForSec   float64        `json:"forSec,omitempty"`
 }
 
 // --- capture.start / capture.stop ---
@@ -503,15 +579,39 @@ type NodeConsoleData struct {
 	ConsolePort int `json:"consolePort"`
 }
 
+// PCStateEventData is the node.pcState event payload.
+type PCStateEventData = PCStateData
+
 // LinkData is the link.up/link.down event payload.
 type LinkData struct {
 	Link int `json:"link"`
+}
+
+// LinkFaultData is the authoritative, separate link.fault event payload.
+type LinkFaultData struct {
+	Link   int            `json:"link"`
+	Fault  *lab.LinkFault `json:"fault"`
+	Active bool           `json:"active"`
+	Reason string         `json:"reason,omitempty"`
 }
 
 // CaptureData is the capture.started/stopped event payload.
 type CaptureData struct {
 	Link        int `json:"link"`
 	CapturePort int `json:"capturePort"`
+}
+
+// EndpointAttrib is the per-endpoint source-MAC attribution hint for one
+// fabric link. EndpointIndex is the lab document endpoint index, not the
+// position in EpAttrib: the slice is sparse when an endpoint has no tap.
+// "single" is the only state that licenses naming a node. "ambiguous" means
+// the endpoint forwarded more than one source MAC during the learning window,
+// so its MAC is intentionally withheld; "none" means no usable observation
+// remains. A MAC that appears on both endpoints is withheld from both sides.
+type EndpointAttrib struct {
+	EndpointIndex int    `json:"endpointIndex"`
+	State         string `json:"state"`
+	MAC           string `json:"mac,omitempty"`
 }
 
 // LinkStatsData is the link.stats event payload: per-link forwarded throughput
@@ -547,6 +647,12 @@ type LinkStatsData struct {
 	// ProtosDir under the label but appear under no subtype here. Omitted (nil)
 	// when there's nothing to report.
 	ProtosSubtypeDir map[string]map[string][2]float64 `json:"protosSubtypeDir,omitempty"`
+	// EpAttrib is omitted when the per-endpoint classifier could not be opened.
+	// When present it contains explicit document endpoint indexes and the
+	// singular-MAC learning state: single, ambiguous, or none. It is a hint,
+	// never a general CAM table; the browser names a node only for a unique
+	// single MAC match at event-creation time.
+	EpAttrib []EndpointAttrib `json:"epAttrib,omitempty"`
 }
 
 // HostStatsData is the host.stats event payload: the runtime VM's resource

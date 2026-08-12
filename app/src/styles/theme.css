@@ -55,6 +55,16 @@
   --transition-fast: 120ms ease;
   --transition-base: 180ms ease;
 
+  /* Semantic stacking scale. Values preserve the bands already in use. */
+  --z-canvas: 1;
+  --z-topbar: 5;
+  --z-panel: 60;
+  --z-float: 900;
+  --z-menu: 1000;
+  --z-dialog: 1200;
+  --z-modal: 2000;
+  --z-tooltip: 70;
+
   /* Semantic status — LED palette, identical on both themes. */
   --state-stopped: #5b6b7f;
   --state-starting: #f0b429;

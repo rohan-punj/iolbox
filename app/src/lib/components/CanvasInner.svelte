@@ -19,6 +19,7 @@
   import IolNode from "../nodes/IolNode.svelte";
   import VpcsNode from "../nodes/VpcsNode.svelte";
   import ToolNode from "../nodes/ToolNode.svelte";
+  import PcNode from "../nodes/PcNode.svelte";
   import AnnoText from "../nodes/AnnoText.svelte";
   import AnnoShape from "../nodes/AnnoShape.svelte";
   import AnnoLine, { LINE_PAD } from "../nodes/AnnoLine.svelte";
@@ -30,9 +31,10 @@
   import InterfacePicker from "./InterfacePicker.svelte";
   import { uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
+  import { railUiStore, type NodePlacement } from "../railUiStore.svelte";
   import { nextFreeInterface } from "../interfaces";
   import { annoTool } from "../annoTool.svelte";
-  import type { Annotation, LabNode, NodeKind } from "../labTypes";
+  import type { Annotation, LabNode, LinkFault, NodeKind } from "../labTypes";
 
   // The NAT gateway reuses the VPCS single-interface node chrome; the
   // distinct glyph comes from its default icon (defaultIconFor). annoText /
@@ -43,6 +45,7 @@
     vpcs: VpcsNode,
     nat: VpcsNode,
     tool: ToolNode,
+    pc: PcNode,
     annoText: AnnoText,
     annoShape: AnnoShape,
     annoLine: AnnoLine,
@@ -166,6 +169,7 @@
       data: {
         linkId: l.id,
         capture: l.capture?.enabled ?? false,
+        fault: labStore.linkFaults[l.id],
         source: endpointInfo(a?.node ?? 0, a?.interface ?? ""),
         target: endpointInfo(b?.node ?? 0, b?.interface ?? ""),
       },
@@ -226,6 +230,7 @@
     // Recompute edges whenever links, node names, states or console ports change.
     void labStore.nodeStates;
     void labStore.consolePorts;
+    void labStore.linkFaults;
     edges = buildEdges();
   });
 
@@ -293,6 +298,7 @@
 
   // --- drag from palette to create nodes ---
   let canvasEl: HTMLDivElement | undefined = $state();
+  const snap = $derived(labStore.lab.canvas?.snapGrid ?? false);
   const { screenToFlowPosition, flowToScreenPosition, fitView, getViewport, setViewport } =
     useSvelteFlow();
 
@@ -383,6 +389,11 @@
   onMount(() => {
     linking.start = startLinkDrag;
     linking.requestEdit = openEdit;
+    const unbindPlaceNode = railUiStore.bindPlaceNode(placeNodeAtViewportCenter);
+    const viewport = getViewport();
+    labStore.canvasZoom = viewport.zoom;
+    labStore.canvasPan = { x: viewport.x, y: viewport.y };
+    labStore.flowToScreen = (x, y) => flowToScreenPosition({ x, y });
     // Annotation grips need to project screen→flow and know the live zoom.
     labStore.screenToFlow = (cx, cy) => screenToFlowPosition({ x: cx, y: cy });
     annoTool.requestStyle = (annoId, clientX, clientY, focusText) => {
@@ -392,7 +403,10 @@
     return () => {
       linking.start = null;
       linking.requestEdit = null;
+      unbindPlaceNode();
       labStore.screenToFlow = null;
+      labStore.flowToScreen = null;
+      labStore.canvasPan = { x: 0, y: 0 };
       annoTool.requestStyle = null;
       window.removeEventListener("pointermove", onLinkMove);
       window.removeEventListener("pointerup", onLinkUp);
@@ -439,6 +453,23 @@
     }
   }
 
+  function placeNodeAtViewportCenter(drag: NodePlacement) {
+    const rect = canvasEl?.getBoundingClientRect();
+    if (!rect) return;
+    const pos = screenToFlowPosition({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+    const id = labStore.nextNodeId();
+    const img = labStore.images.find((i) => i.id === drag.imageId);
+    const node: LabNode = buildDroppedNode(drag.kind, id, pos, img, drag.packId);
+    const registered = labStore.addNode(node);
+    labStore.selectedNodeId = id;
+    if (drag.kind === "nat") {
+      void registered.then(() => labStore.startNode(id));
+    }
+  }
+
   // Count existing nodes of a kind, for stable NAT1 naming.
   function nameForKind(kind: "nat"): string {
     const n = labStore.lab.nodes.filter((x) => x.kind === kind).length + 1;
@@ -480,6 +511,9 @@
         config: { pack: packId ?? labStore.toolPacks[0]?.id ?? "" },
         icon: pack?.icon,
       };
+    }
+    if (kind === "pc") {
+      return { id, kind, name: `PC${id}`, x: pos.x, y: pos.y };
     }
     return { id, kind: "vpcs", name: `PC${id}`, x: pos.x, y: pos.y };
   }
@@ -653,6 +687,13 @@
   function onWindowKeydown(e: KeyboardEvent) {
     // Escape cancels an in-progress line placement (or a fully-armed tool).
     if (e.key === "Escape") {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const inInputOrTerminal = Boolean(
+        target?.matches("input, textarea, select, [contenteditable='true']") ||
+          target?.isContentEditable ||
+          target?.closest(".xterm, .term-container, .cap-container")
+      );
+      if (!inInputOrTerminal) labStore.selectedLinkId = null;
       if (linePending) {
         linePending = null;
         annoTool.disarm();
@@ -680,21 +721,25 @@
     const locked = labStore.nodeLocks[nid] != null;
     return [
       {
+        id: "node-start",
         label: "Start",
         disabled: locked || nodeState === "running" || nodeState === "starting",
         action: () => void labStore.startNode(nid),
       },
       {
+        id: "node-stop",
         label: "Stop",
         disabled: locked || nodeState === "stopped",
         action: () => void labStore.stopNode(nid),
       },
       {
+        id: "node-console",
         label: "Console",
         disabled: nodeState !== "running",
         action: () => labStore.openConsoleByMode(nid),
       },
       {
+        id: "node-duplicate",
         label: "Duplicate",
         disabled: locked,
         action: () => {
@@ -703,6 +748,7 @@
         },
       },
       {
+        id: "node-wipe",
         label: "Wipe",
         // Mirrors the bulk-selection Wipe gate: requires the node be stopped.
         disabled: locked || nodeState !== "stopped",
@@ -711,25 +757,29 @@
           void labStore.wipeNode(nid);
         },
       },
-      { separator: true, label: "sep1", action: () => {} },
+      { id: "node-separator-actions", separator: true, label: "sep1", action: () => {} },
       {
+        id: "node-edit",
         label: "Edit…",
         action: () => openEdit(nid),
       },
       {
+        id: "node-change-image",
         label: "Change image…",
         action: () => {
           imagePopover = { x: menu.x, y: menu.y, nodeId: nid };
         },
       },
       {
+        id: "node-change-icon",
         label: "Change icon…",
         action: () => {
           iconPicker = { x: menu.x, y: menu.y, nodeId: nid };
         },
       },
-      { separator: true, label: "sep2", action: () => {} },
+      { id: "node-separator-danger", separator: true, label: "sep2", action: () => {} },
       {
+        id: "node-delete",
         label: "Delete",
         danger: true,
         action: () => labStore.removeNode(nid),
@@ -750,8 +800,9 @@
     const anyLocked = ids.some((id) => labStore.nodeLocks[id] != null);
     return [
       // Header row — plain disabled item showing what the menu acts on.
-      { label: `${ids.length} nodes`, disabled: true, action: () => {} },
+      { id: "selection-summary", label: `${ids.length} nodes`, disabled: true, action: () => {} },
       {
+        id: "selection-start",
         label: "Start",
         disabled: anyLocked || startable.length === 0,
         action: () => {
@@ -759,6 +810,7 @@
         },
       },
       {
+        id: "selection-stop",
         label: "Stop",
         disabled: anyLocked || stoppable.length === 0,
         action: () => {
@@ -766,6 +818,7 @@
         },
       },
       {
+        id: "selection-console",
         label: "Console",
         disabled: running.length === 0,
         action: () => {
@@ -778,8 +831,9 @@
           });
         },
       },
-      { separator: true, label: "sep1", action: () => {} },
+      { id: "selection-separator-actions", separator: true, label: "sep1", action: () => {} },
       {
+        id: "selection-duplicate",
         label: "Duplicate",
         disabled: anyLocked,
         action: () => {
@@ -787,6 +841,7 @@
         },
       },
       {
+        id: "selection-wipe",
         label: "Wipe",
         // Wipe requires stopped nodes (mirrors the single-node quick-action gate).
         disabled: anyLocked || stoppable.length > 0,
@@ -795,8 +850,9 @@
           for (const id of ids) void labStore.wipeNode(id);
         },
       },
-      { separator: true, label: "sep2", action: () => {} },
+      { id: "selection-separator-danger", separator: true, label: "sep2", action: () => {} },
       {
+        id: "selection-delete",
         label: "Delete",
         danger: true,
         action: () => {
@@ -810,12 +866,93 @@
   function buildLinkMenuItems(menu: { linkId: number }): MenuItem[] {
     const link = labStore.lab.links.find((l) => l.id === menu.linkId);
     const capturing = link?.capture?.enabled ?? false;
+    const unsupportedReason = link ? linkFaultUnsupportedReason(link) : "unknown link";
+    const faultChildren: MenuItem[] = [];
+    if (link) {
+      faultChildren.push({
+        id: "link-fault-clear",
+        label: "Clear fault",
+        action: () => void labStore.setLinkFault(link.id, null),
+      });
+      const targets: Array<{ label: string; targetEndpoint?: number }> = [
+        { label: "Both ends" },
+        ...link.endpoints.map((ep, index) => ({
+          label: `${endpointDisplay(ep)}`,
+          targetEndpoint: index,
+        })),
+      ];
+      for (const target of targets) {
+        const suffix = target.targetEndpoint === undefined ? "" : ` (${target.label})`;
+        faultChildren.push({
+          id: `link-fault-down-${target.targetEndpoint ?? "both"}`,
+          label: `Down${suffix}`,
+          action: () => void labStore.setLinkFault(link.id, {
+            down: true,
+            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
+          }),
+        });
+        faultChildren.push({
+          id: `link-fault-delay-${target.targetEndpoint ?? "both"}`,
+          label: `100 ms delay${suffix}`,
+          action: () => void labStore.setLinkFault(link.id, {
+            delayMs: 100,
+            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
+          }),
+        });
+        faultChildren.push({
+          id: `link-fault-loss-${target.targetEndpoint ?? "both"}`,
+          label: `20% loss${suffix}`,
+          action: () => void labStore.setLinkFault(link.id, {
+            lossPct: 20,
+            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
+          }),
+        });
+        faultChildren.push({
+          id: `link-fault-rate-${target.targetEndpoint ?? "both"}`,
+          label: `1 mbit rate${suffix}`,
+          action: () => void labStore.setLinkFault(link.id, {
+            rateKbit: 1000,
+            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
+          }),
+        });
+      }
+      faultChildren.push({ id: "link-fault-separator", separator: true, label: "fault-sep", action: () => {} });
+      faultChildren.push({
+        id: "link-fault-custom",
+        label: "Custom JSON…",
+        title: "Enter a LinkFault JSON object; omit targetEndpoint for every endpoint",
+        action: () => {
+          const raw = window.prompt(
+            'LinkFault JSON (for example {"delayMs":50,"lossPct":1,"targetEndpoint":0})'
+          );
+          if (raw === null) return;
+          try {
+            const fault = JSON.parse(raw) as LinkFault;
+            void labStore.setLinkFault(link.id, fault);
+          } catch {
+            labStore.lastError = "Fault JSON is invalid";
+            labStore.pushLog("error", labStore.lastError);
+          }
+        },
+      });
+    }
     return [
       {
+        id: "link-faults",
+        label: "Faults",
+        disabled: Boolean(unsupportedReason),
+        title: unsupportedReason || "Admin down/up and per-endpoint egress impairment",
+        action: () => {},
+        submenu: faultChildren,
+      },
+      { id: "link-separator-faults", separator: true, label: "fault-menu-sep", action: () => {} },
+      {
+        id: "link-live-capture",
         label: "Live capture…",
         action: () => labStore.openCapture(menu.linkId),
       },
       {
+        id: "link-wireshark-capture",
         label: capturing ? "Stop capture" : "Capture in Wireshark…",
         action: () => {
           if (capturing) {
@@ -835,6 +972,7 @@
         },
       },
       {
+        id: "link-delete",
         label: "Delete",
         danger: true,
         action: () => labStore.removeLink(menu.linkId),
@@ -842,24 +980,42 @@
     ];
   }
 
+  function endpointDisplay(ep: { node: number; interface: string }): string {
+    const n = labStore.lab.nodes.find((node) => node.id === ep.node);
+    return `${n?.name ?? `#${ep.node}`} ${ep.interface}`;
+  }
+
+  function linkFaultUnsupportedReason(link: (typeof labStore.lab.links)[number]): string {
+    for (const ep of link.endpoints) {
+      const n = labStore.lab.nodes.find((node) => node.id === ep.node);
+      if (String(n?.kind) === "iol" && !/^e\d+\/\d+$/i.test(ep.interface)) {
+        return `Unsupported: ${n?.name ?? `node ${ep.node}`} ${ep.interface} has no Ethernet static tap`;
+      }
+    }
+    return "";
+  }
+
   function buildAnnoMenuItems(menu: { annoId: string }): MenuItem[] {
     const anno = labStore.lab.annotations?.find((a) => a.id === menu.annoId);
     const items: MenuItem[] = [];
     items.push({
+      id: "anno-edit",
       label: anno?.type === "text" ? "Edit text…" : "Edit label…",
       action: () => {
         annoTool.editRequestId = menu.annoId;
       },
     });
     items.push({
+      id: "anno-duplicate",
       label: "Duplicate",
       action: () => {
         const newId = labStore.duplicateAnnotation(menu.annoId);
         if (newId !== null) labStore.selectedAnnotationId = newId;
       },
     });
-    items.push({ separator: true, label: "sep", action: () => {} });
+    items.push({ id: "anno-separator", separator: true, label: "sep", action: () => {} });
     items.push({
+      id: "anno-delete",
       label: "Delete",
       danger: true,
       action: () => labStore.removeAnnotation(menu.annoId),
@@ -891,6 +1047,7 @@
     panOnDrag={panMode}
     panActivationKey="Control"
     selectionOnDrag={!panMode}
+    snapGrid={snap ? [20, 20] : undefined}
     proOptions={{ hideAttribution: true }}
     onnodedragstop={onNodeDragStop}
     onconnect={onConnect}
@@ -900,7 +1057,11 @@
     onnodeclick={onNodeClick}
     onedgeclick={onEdgeClick}
     onpaneclick={onPaneClick}
-    onmove={() => (labStore.canvasZoom = getViewport().zoom)}
+    onmove={() => {
+      const viewport = getViewport();
+      labStore.canvasZoom = viewport.zoom;
+      labStore.canvasPan = { x: viewport.x, y: viewport.y };
+    }}
     colorMode={themeStore.current === "glass" ? "light" : "dark"}
   >
     <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} bgColor="transparent" patternColor="var(--dot)" />

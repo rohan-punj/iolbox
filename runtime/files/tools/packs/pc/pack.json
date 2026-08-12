@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "id": "pc",
+  "name": "Virtual PC",
+  "icon": "pc",
+  "interpreter": "none",
+  "gui": {
+    "bin": "pc-gui",
+    "transport": "unix",
+    "console": "cli",
+    "health": "/healthz",
+    "proxyRoutes": [{ "prefix": "/", "allowWS": false }]
+  },
+  "caps": ["NET_RAW"],
+  "options": [],
+  "groups": ["addressing", "diagnostics", "services", "config"],
+  "modules": [],
+  "limits": {
+    "memoryMax": 268435456,
+    "pidsMax": 128,
+    "cpuMax": "100000 100000",
+    "swapMax": 0
+  }
+}

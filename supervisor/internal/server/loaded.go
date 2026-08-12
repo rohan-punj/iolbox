@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/bcap"
 	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
@@ -40,6 +41,10 @@ type loadedLab struct {
 	// fabricLinks records which link ids currently have a Linux bridge created +
 	// their endpoint taps attached. Guarded by mu.
 	fabricLinks map[int]bool
+	// linkFaults holds persisted fault definitions plus their runtime active
+	// marker and optional timer. Guarded by mu. A definition may be present but
+	// inactive after lab.load when its JSON lacks initial:true.
+	linkFaults map[int]activeFault
 	// bcaps holds the live bridge captures (tcpdump -i br-<linkid> -> pcapng TCP
 	// server) for links that have an active capture, keyed by link id. Guarded by
 	// mu.
@@ -94,7 +99,7 @@ type nodeRuntime struct {
 }
 
 func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
-	return &loadedLab{
+	ll := &loadedLab{
 		doc:      doc,
 		nodes:    make(map[int]*nodeRuntime),
 		captures: make(map[int]int),
@@ -103,10 +108,41 @@ func newLoadedLab(doc *lab.Lab, runDir string) *loadedLab {
 		staticTaps:  make(map[int]map[string]ifaceTap),
 		tapBridges:  make(map[string]*labBridge),
 		fabricLinks: make(map[int]bool),
+		linkFaults:  make(map[int]activeFault),
 		bcaps:       make(map[int]*bcap.Capture),
 		dirstats:    make(map[int]*dirstat.Classifier),
 		slowtees:    make(map[int]*slowtee.Tee),
 	}
+	for i := range doc.Links {
+		if doc.Links[i].Fault != nil {
+			ll.linkFaults[doc.Links[i].ID] = activeFault{
+				Fault: cloneLinkFault(doc.Links[i].Fault),
+			}
+		}
+	}
+	return ll
+}
+
+// activeFault is runtime-only state for one persisted link fault. The timer is
+// never serialized into the lab document.
+type activeFault struct {
+	Fault  *lab.LinkFault
+	Active bool
+	Timer  *time.Timer
+}
+
+func (ll *loadedLab) faultForLink(id int) (activeFault, bool) {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	f, ok := ll.linkFaults[id]
+	if !ok {
+		return activeFault{}, false
+	}
+	f.Fault = cloneLinkFault(f.Fault)
+	// A returned timer is only an implementation detail and must not be
+	// operated on outside the lock.
+	f.Timer = nil
+	return f, true
 }
 
 // labDir returns the SHARED per-lab working directory. Every IOL instance in a

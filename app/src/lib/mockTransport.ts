@@ -10,6 +10,7 @@ import type {
   LabLoadResult,
   LabStartResult,
   NodeRuntimeStatus,
+  NodeMACsResult,
   NodeSetImageResult,
   StatusResult,
   ToolListPacksResult,
@@ -206,6 +207,18 @@ export class MockTransport implements Transport {
         this.ok<ToolListPacksResult>(id, { packs: MOCK_TOOL_PACKS });
         return;
       }
+      case "pc.syncState": {
+        const node = typeof (args as any)?.node === "number" ? (args as any).node : undefined;
+        const states = (this.lab?.nodes ?? [])
+          .filter((n) => n.kind === "pc" && (node === undefined || n.id === node))
+          .map((n) => ({
+            node: n.id,
+            state: ((n.config?.pc as any) ?? { dhcp: false, savedCommands: [] }),
+            stale: false,
+          }));
+        this.ok(id, { states });
+        return;
+      }
 
       case "image.register": {
         const filename = String(args?.path ?? "unknown.bin").split(/[\\/]/).pop()!;
@@ -338,9 +351,82 @@ export class MockTransport implements Transport {
         return;
       }
 
+      case "node.macs": {
+        const nid = Number(args?.node);
+        const node = this.lab?.nodes.find((n) => n.id === nid);
+        if (!node) {
+          this.err(id, "bad_request", `unknown node ${nid}`);
+          return;
+        }
+
+        const interfaces: string[] = [];
+        if (node.kind === "vpcs" || node.kind === "nat") {
+          interfaces.push("eth0");
+        } else if (node.kind === "pc" || node.kind === "tool") {
+          interfaces.push("eth1");
+        } else {
+          const ethernet = Math.max(node.ethernet ?? 1, 1);
+          const serial = Math.max(node.serial ?? 0, 0);
+          for (let a = 0; a < ethernet; a++) {
+            for (let p = 0; p < 4; p++) interfaces.push(`e${a}/${p}`);
+          }
+          for (let a = 0; a < serial; a++) {
+            for (let p = 0; p < 4; p++) interfaces.push(`s${a}/${p}`);
+          }
+        }
+
+        const running = this.nodes.get(nid)?.state === "running";
+        const learned = args?.learned === true;
+        const macs: NodeMACsResult["macs"] = interfaces.map((iface, index) => {
+          if (node.kind === "vpcs") {
+            return { interface: iface, mac: "02:00:00:00:00:01", source: "derived", state: "known" };
+          }
+          if (node.kind === "pc" || node.kind === "tool") {
+            return running
+              ? { interface: iface, mac: "02:00:00:00:00:11", source: "read", state: "known" }
+              : { interface: iface, state: "unknown", reason: "node not running" };
+          }
+          if (node.kind === "iol") {
+            if (!learned) {
+              return { interface: iface, state: "disabled", reason: "turn on learned-MAC display to see this" };
+            }
+            const suffix = (index + 1).toString(16).padStart(2, "0");
+            return {
+              interface: iface,
+              mac: `02:00:00:10:00:${suffix}`,
+              source: "learned",
+              state: "known",
+            };
+          }
+          return { interface: iface, state: "unknown", reason: "not tracked for the NAT gateway" };
+        });
+        this.ok<NodeMACsResult>(id, { node: nid, macs });
+        return;
+      }
+
       case "link.add":
       case "link.remove": {
         this.ok(id, {});
+        return;
+      }
+
+      case "link.setFault": {
+        const linkId = Number(args?.link);
+        const fault = (args?.fault ?? null) as LabDocument["links"][number]["fault"];
+        const link = this.lab?.links.find((l) => l.id === linkId);
+        if (!link) {
+          this.err(id, "bad_request", `unknown link ${linkId}`);
+          return;
+        }
+        if (fault) link.fault = { ...fault };
+        else delete link.fault;
+        this.ok(id, { link: linkId, fault: fault ?? null, active: fault !== null, reason: "mock applied" });
+        setTimeout(() => {
+          this.emit({
+            event: "link.fault",
+            data: { link: linkId, fault: fault ?? null, active: fault !== null, reason: "mock applied" },
+          } as SupervisorEvent);
+        }, 20);
         return;
       }
 
@@ -703,7 +789,7 @@ export class MockTransport implements Transport {
       const kinds = l.endpoints.map(
         (e) => this.lab?.nodes.find((n) => n.id === e.node)?.kind
       );
-      return kinds.some((k) => k === "vpcs" || k === "nat" || k === "tool");
+      return kinds.some((k) => k === "vpcs" || k === "nat" || k === "tool" || k === "pc");
     };
     // Network Watcher demo — fixed control-plane mixes so the overlays are
     // demo-able with predictable direction: link 0 shows one-way STP (from

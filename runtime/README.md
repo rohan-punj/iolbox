@@ -136,8 +136,14 @@ Windows hostname and IOL rejects the license).
 
 ## Debugging a built appliance
 
-- Root console login: user `root`, password `iolbox` (no sshd in the image;
-  console only). Open the VM in the Workstation UI instead of `nogui`.
+- Root console login: user `root`, password `iolbox`. Open the VM in the
+  Workstation UI instead of `nogui` if you need the console.
+- SSH: `ssh root@<vm-ip>` (same password), served by dropbear
+  (`iolbox-dropbear.service`) — a ~200 KB SSH server, not openssh-server.
+  This is the primary way to push a rebuilt binary/redeploy scripts onto a
+  running appliance; VM guest automation (`vmrun runProgramInGuest`) has
+  proven unreliable against this minimal image (process exec fails even
+  though guest auth and file-copy guestOps work).
 - Supervisor logs: `journalctl -u iolbox-supervisor -f`.
 - The unit's `KillMode=control-group` means bouncing the supervisor also
   reaps every IOL/VPCS child — no orphan hunting.

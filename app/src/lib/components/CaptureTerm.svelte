@@ -1,28 +1,31 @@
 <script lang="ts">
-  // Live packet-summary view for one capturing link (feature 1). Connects to the
-  // /capture/<linkId> WS, parses the incremental pcapng byte stream, and prints a
-  // read-only tshark-ish one-line summary per packet into an xterm instance.
+  // Live packet-summary view for one capturing link (feature 1). Subscribes to
+  // labStore's single parsed /capture/<linkId> session and prints a read-only
+  // tshark-ish one-line summary per packet into an xterm instance.
   import { onMount, onDestroy } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
   import { labStore } from "../labStore.svelte";
   import { themeStore } from "../themeStore.svelte";
-  import { CaptureTransport } from "../captureTransport";
-  import { PcapngParser, summarize } from "../pcapng";
+  import { summarize, type ParsedPacket } from "../pcapng";
+  import type { ConsoleMark } from "../consoleUiStore.svelte";
 
-  let { linkId, active }: { linkId: number; active: boolean } = $props();
+  let {
+    linkId,
+    visible,
+    focused: _focused,
+    marks = [],
+  }: { linkId: number; visible: boolean; focused: boolean; marks?: ConsoleMark[] } = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
   let resizeObserver: ResizeObserver | undefined;
-  let capture: CaptureTransport | undefined;
-  // Fresh parser per (re)connection: every reconnect delivers a brand-new
-  // pcapng stream (SHB first), so index/t0 must restart cleanly.
-  let parser = new PcapngParser();
+  let unsubscribeCapture: (() => void) | undefined;
   let sawData = false;
   let hintShown = false;
+  let lastMarkId = 0;
 
   // SGR palette for the protocol column (mirrors consoleColorizer's approach).
   const ESC = "\x1b[";
@@ -88,6 +91,16 @@
     term?.write(`${DIM}   #   time      source > destination                proto   len  info${RESET}\r\n`);
   }
 
+  function refit(): boolean {
+    if (!fit || !container || container.clientWidth === 0 || container.clientHeight === 0) return false;
+    fit.fit();
+    return true;
+  }
+
+  function writeMark(mark: ConsoleMark) {
+    term?.write(`\r\n${DIM}──── ${mark.label} ────${RESET}\r\n`);
+  }
+
   onMount(() => {
     term = new Terminal({
       convertEol: true,
@@ -102,32 +115,21 @@
     term.loadAddon(fit);
     if (container) {
       term.open(container);
-      fit.fit();
+      refit();
     }
     writeHeader();
 
     if (labStore.transportKind === "ws") {
-      const cap = new CaptureTransport(linkId, {
-        onOpen: () => {
-          // A (re)connection restarts the pcapng stream from its SHB.
-          parser = new PcapngParser();
-        },
-        onData: (bytes) => {
+      // labStore owns the single transport/parser for this link. The capture
+      // summary and Lens are subscribers to the same parsed packet batch.
+      unsubscribeCapture = labStore.subscribeCapture(linkId, {
+        onReset: () => writeHeader(),
+        onPackets: (packets) => {
           sawData = true;
-          // Parse once: feed the live view AND buffer the PARSED packets for
-          // the "Save .pcapng" download. Buffering packets (not the raw stream)
-          // lets the download re-serialize ONE clean pcapng section that opens
-          // in Wireshark even across capture reconnects (which restart the
-          // stream with a fresh SHB and can drop mid-block).
-          const pkts = parser.push(bytes);
-          labStore.appendCapturePackets(linkId, pkts);
-          for (const pkt of pkts) writePacket(pkt);
+          for (const pkt of packets) writePacket(pkt);
         },
-        onError: () => writeHint(),
-        onClose: () => writeHint(),
+        onUnavailable: () => writeHint(),
       });
-      cap.connect();
-      capture = cap;
     } else {
       // Mock transport has no real byte stream — show the hint so the tab is
       // still meaningful in dev, plus a couple of synthetic lines.
@@ -138,18 +140,27 @@
     // If no data has arrived shortly after opening on a non-bridged link, hint.
     if (!linkBridged()) setTimeout(() => writeHint(), 400);
 
-    resizeObserver = new ResizeObserver(() => fit?.fit());
+    resizeObserver = new ResizeObserver(() => refit());
     if (container) resizeObserver.observe(container);
   });
 
   onDestroy(() => {
     resizeObserver?.disconnect();
-    capture?.disconnect();
+    unsubscribeCapture?.();
     term?.dispose();
   });
 
   $effect(() => {
-    if (active) queueMicrotask(() => fit?.fit());
+    if (visible) requestAnimationFrame(() => refit());
+  });
+
+  $effect(() => {
+    const latest = marks.length > 0 ? marks[marks.length - 1].id : 0;
+    if (!term) return;
+    for (const mark of marks) {
+      if (mark.id > lastMarkId && mark.capturePos[linkId] !== undefined) writeMark(mark);
+    }
+    lastMarkId = latest;
   });
 
   $effect(() => {
@@ -163,10 +174,10 @@
   $effect(() => {
     const port = labStore.capturePorts[linkId];
     const running = labStore.labRunning;
-    if ((port || running) && capture) capture.retryNow();
+    if (port || running) labStore.retryCapture(linkId);
   });
 
-  function writePacket(pkt: { index: number; tRel: number; data: Uint8Array; origLen: number }) {
+  function writePacket(pkt: ParsedPacket) {
     const s = summarize(pkt.data, pkt.origLen);
     const idx = String(pkt.index).padStart(4);
     const t = `+${pkt.tRel.toFixed(4)}`.padEnd(9);

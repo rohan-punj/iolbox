@@ -1,0 +1,33 @@
+# Light SSH access to the appliance, for maintainers/deploy tooling. VM
+# guest automation (vmrun runProgramInGuest) has proven unreliable against
+# this minimal image — guest auth and file-copy guestOps work, but process
+# execution consistently fails ("A file was not found") even for binaries
+# that exist — so SSH is the only scriptable way in short of the VM console.
+#
+# dropbear, not openssh-server: ~200 KB vs ~5 MB, no PAM/config-package
+# baggage, single static-ish binary. We own the systemd wiring ourselves
+# (installed to /etc/systemd/system/iolbox-dropbear.service and enabled at
+# build time — see build-rootfs.sh) rather than relying on the upstream
+# dropbear package's own init glue, exactly like every other unit here.
+#
+# Root login with the same documented password as the console ("iolbox",
+# see build-rootfs.sh Stage 8) is intentional, not an oversight: single-
+# tenant disposable lab appliance, nobody else on the box to protect.
+# Dropbear allows password root login by default (no -w flag below).
+[Unit]
+Description=iolbox dropbear SSH server (maintainer/deploy access)
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/opt/iolbox/dropbear-keygen.sh
+ExecStart=/usr/sbin/dropbear -F -E -p 22 \
+    -r /etc/dropbear/dropbear_rsa_host_key \
+    -r /etc/dropbear/dropbear_ecdsa_host_key
+Restart=always
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

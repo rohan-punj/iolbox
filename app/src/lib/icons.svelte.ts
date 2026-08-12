@@ -133,6 +133,7 @@ export const UI_GLYPHS: Record<string, string> = {
     '<path d="M9 3v3a2 2 0 0 1-2 2H4M15 3v3a2 2 0 0 0 2 2h3M9 21v-3a2 2 0 0 0-2-2H4M15 21v-3a2 2 0 0 1 2-2h3"/>',
   chevronLeft: '<path d="M15 5 8 12l7 7"/>',
   chevronRight: '<path d="M9 5l7 7-7 7"/>',
+  more: '<circle cx="12" cy="5" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.5" fill="currentColor" stroke="none"/>',
 };
 
 /** Runtime store of user-imported icons, keyed by registry key. */
@@ -212,7 +213,8 @@ export function uiSvg(name: keyof typeof UI_GLYPHS | string, size = 15): string 
 export function defaultIconFor(kind: string, imageClass?: string): string {
   if (kind === "vpcs") return "pc";
   if (kind === "nat") return "nat";
-  if (kind === "tool") return "tool";
+	if (kind === "tool") return "tool";
+	if (kind === "pc") return "pc";
   if (imageClass === "l2") return "switch";
   return "router"; // l3 / unknown
 }

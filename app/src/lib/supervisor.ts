@@ -10,14 +10,17 @@ import type {
   LabLoadResult,
   LabSaveDocResult,
   LabStartResult,
+  PCStateSyncResult,
   LabWipeResult,
+  NodeMACsResult,
   NodeSetImageResult,
   StatusResult,
   SupervisorEvent,
   ToolListPacksResult,
 } from "./protocol";
-import type { LabDocument, LabLink, LabNode } from "./labTypes";
+import type { LabDocument, LabLink, LabNode, LinkFault } from "./labTypes";
 import type { PainterProto, PainterResult, StpVlansResult } from "./painterTypes";
+import { macUiStore } from "./macUiStore.svelte";
 import { labToYaml, labFromText } from "./yaml";
 import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
@@ -195,6 +198,17 @@ export class SupervisorClient {
     return this.call<NodeSetImageResult>("node.setImage", { labId, node, imageId });
   }
 
+  nodeMACs(node: number, learned = false) {
+    // Batch 11a's popover predates the learned-IOL preference and passes its
+    // placeholder value explicitly. Keep that caller untouched while making
+    // the shared client request reflect the display preference. An explicit
+    // learned=true remains supported for future callers.
+    return this.call<NodeMACsResult>("node.macs", {
+      node,
+      learned: learned || macUiStore.learnIol,
+    });
+  }
+
   linkAdd(labId: string, link: LabLink) {
     return this.call<void>("link.add", { labId, link });
   }
@@ -206,6 +220,19 @@ export class SupervisorClient {
     // object, not a bare id) — see handleLinkRemove in
     // supervisor/internal/server/handlers.go.
     return this.call<void>("link.remove", { labId, link });
+  }
+
+  linkSetFault(
+    labId: string,
+    link: number,
+    fault: LinkFault | null,
+    afterSec?: number,
+    forSec?: number
+  ) {
+    return this.call<{ link: number; fault: LinkFault | null; active: boolean; reason?: string }>(
+      "link.setFault",
+      { labId, link, fault, afterSec, forSec }
+    );
   }
 
   captureStart(labId: string, link: number, mode: "live" | "file" = "live", file?: string) {
@@ -226,6 +253,10 @@ export class SupervisorClient {
   // LabDocument terms. Docs that fail to parse are dropped from the list.
   labSaveDoc(lab: LabDocument) {
     return this.call<LabSaveDocResult>("lab.saveDoc", { lab: labToYaml(lab) });
+  }
+
+  pcSyncState(labId: string, node?: number) {
+    return this.call<PCStateSyncResult>("pc.syncState", node === undefined ? { labId } : { labId, node });
   }
 
   async labListDocs(): Promise<LabListDocsResult> {

@@ -85,6 +85,11 @@ type Server struct {
 	toolRoot tool.CgroupRoot
 	// toolPacks is the validated installed-pack registry used by tool handlers.
 	toolPacks []tool.Pack
+	// pcPack is the supervisor-owned built-in netprobe pack. It is deliberately
+	// absent from toolPacks so ordinary tool.listPacks/config.pack cannot select
+	// it.
+	pcPack   tool.Pack
+	pcPackOK bool
 	// toolStop stops the supervisor-scope orphan reaper, when runtime startup
 	// reached the point at which the reaper was started.
 	toolStop func()
@@ -201,6 +206,7 @@ func (s *Server) StopRuntime() {
 func (s *Server) register() {
 	s.disp.Handle("hello", s.handleHello)
 	s.disp.Handle("tool.listPacks", s.handleToolListPacks)
+	s.disp.Handle("pc.syncState", s.handlePCSyncState)
 	s.disp.Handle("image.list", s.handleImageList)
 	s.disp.Handle("image.register", s.handleImageRegister)
 	s.disp.Handle("lab.load", s.handleLabLoad)
@@ -218,8 +224,10 @@ func (s *Server) register() {
 	s.disp.Handle("node.stop", s.handleNodeStop)
 	s.disp.Handle("node.restart", s.handleNodeRestart)
 	s.disp.Handle("node.setImage", s.handleNodeSetImage)
+	s.disp.Handle("node.macs", s.handleNodeMACs)
 	s.disp.Handle("link.add", s.handleLinkAdd)
 	s.disp.Handle("link.remove", s.handleLinkRemove)
+	s.disp.Handle("link.setFault", s.handleLinkSetFault)
 	s.disp.Handle("capture.start", s.handleCaptureStart)
 	s.disp.Handle("capture.stop", s.handleCaptureStop)
 	s.disp.Handle("config.save", s.handleConfigExtract)

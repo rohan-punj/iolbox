@@ -98,6 +98,14 @@ Start/stop all nodes (or a subset).
 - args: `{ "labId", "nodes":[<id>...]|null }`
 - result: `{ "started":[{"node","consolePort","pid","state"}] }`
 
+### `pc.syncState`
+Pull the durable state from a running built-in `pc` node over its GUI AF_UNIX
+socket and mirror it into the loaded lab. `node` may be omitted to sync every
+running PC. A failed pull is non-fatal and returns the previous state with
+`stale:true`.
+- args: `{ "labId", "node"? }`
+- result: `{ "states":[{"node","state":{"dhcp","savedCommands"},"stale"}] }`
+
 ### `lab.wipe`
 Reset node state (like PNetLab's wipe): stop the targeted nodes and delete their
 persisted per-node NVRAM (`nvram_<id>`) so they next boot from the injected
@@ -126,6 +134,25 @@ Hot-swap the image bound to a node (applied on next start).
 - args: `{ "labId","node","imageId" }`
 - result: `{ "node","imageId","class" }`
 
+### `node.macs`
+Read the current per-interface link-layer addresses for one node. This is a
+request/response snapshot made on demand; the result is not pushed as an event
+and is not part of `link.stats`.
+- args: `{ "node", "learned" }` where `learned` defaults to `false` and is the
+  opt-in for the learned-IOL display. With `false`, IOL rows are returned as
+  `disabled`; with `true`, they are resolved from the existing dirstat
+  attribution channel. VPCS/PC/tool rows are unaffected by this flag.
+- result: `{ "node", "macs":[{"interface","mac","source","state","reason"}] }`
+- `source` is `derived` for a VPCS address computed from the `-m` argument this
+  supervisor passes, `read` for a netns node's guest interface address read from
+  the kernel, and `learned` for a single source address positively attributed
+  from observed traffic. It is omitted when no address is known.
+- `state` is `known` when `mac` is set and is the interface's address, `unknown`
+  when the address is not knowable now (with a short `reason`), `ambiguous` when
+  an endpoint relays for other devices, and `disabled` when learned-MAC display
+  is opted out. `ambiguous` and `disabled` are reserved for the learned-IOL
+  path; `disabled` does not mean that supervisor-side learning is off.
+
 ### `link.add` / `link.remove`
 Wire/unwire two endpoints at runtime. The link is UPSERTED into (or removed
 from) the loaded doc, the bridge plan is rebuilt (deterministic — unchanged
@@ -134,6 +161,19 @@ link drawn mid-session carries traffic for relay-attached endpoints (VPCS,
 NAT) immediately. A native IOL↔IOL link (and the IOL side of a bridged one)
 still needs the node(s) restarted to re-read the boot NETMAP.
 - args: `{ "labId","link": <link.json> }`
+
+### `link.setFault`
+Replace the runtime fault on one Ethernet-realizable fabric link. Faults are
+applied to each targeted endpoint device's egress, never to the bridge netdev.
+An omitted `targetEndpoint` means every endpoint; explicit `0` means the first
+entry in the link's `endpoints` array. `null` clears the definition. `afterSec`
+and `forSec` are runtime-only timers and are not persisted.
+- args: `{ "labId","link":<id>,"fault":<LinkFault|null>,"afterSec?":<number>,"forSec?":<number> }`
+- result: `{ "link","fault","active","reason?" }`
+- `LinkFault` fields: `down`, `delayMs`, `jitterMs`, `lossPct`, `rateKbit`,
+  `duplicatePct`, `reorderPct`, `targetEndpoint`, and `initial`.
+- serial-endpoint links are rejected with `unsupported`; `reorderPct` requires
+  a positive `delayMs`, and `down` cannot be combined with impairment fields.
 
 ### `capture.start` / `capture.stop`
 Tee a link to a pcapng TCP stream (and/or file).
@@ -167,11 +207,19 @@ Full snapshot.
 
 ## Events (server → GUI push)
 
+- `node.pcState` `{node,state:{dhcp,savedCommands},stale}` is emitted when the
+  supervisor pulls built-in PC state; stale means the previous document state
+  was retained because the pull failed.
+
 - `node.state`  `{node,state}` — state ∈ `starting|running|stopped|crashed`
 - `node.console` `{node,consolePort}` — console became reachable
 - `link.up` / `link.down` `{link}`
 - `capture.started` / `capture.stopped` `{link,capturePort}`
-- `link.stats` `{link,fps,bps,protos?,protosDir?}` — per-link forwarded throughput
+- `link.fault` `{link,fault,active,reason?}` — authoritative fault state,
+  emitted on every change and replayed for every fault definition at lab start.
+  This is intentionally separate from `link.stats`, which is silent for idle
+  and administratively-down links.
+- `link.stats` `{link,fps,bps,protos?,protosDir?,protosSubtypeDir?,epAttrib?}` — per-link forwarded throughput
   over the last 2s sampling interval: `fps` is frames/sec forwarded (float, one
   decimal), `bps` is bytes/sec forwarded, both summed across directions (and hub
   fan-out).
@@ -209,6 +257,20 @@ Full snapshot.
   links (VPCS, segment, captured, cross-host) have a relay and therefore stats;
   native same-host IOL↔IOL links carry traffic via the whole-lab NETMAP with no
   relay and produce no `link.stats` events.
+
+  `epAttrib` is an optional per-endpoint source-MAC attribution hint from the
+  always-on endpoint-tap classifier. Each entry is
+  `{endpointIndex,state,mac?}`, where `endpointIndex` is the lab document's
+  endpoint index, not the entry's position in the sparse array. `state` is
+  `single`, `ambiguous`, or `none`: only `single` carries one lowercase
+  colon-separated MAC and licenses the browser to name that endpoint's node.
+  A second distinct source MAC makes an endpoint `ambiguous` for the current
+  five-minute learning window and withholds its MAC; a MAC observed on both
+  endpoints is withheld from both. The browser resolves a unique `single` MAC
+  to a node name when it creates a Lens event, never retroactively while
+  rendering older events. If endpoint classifiers cannot be opened, `epAttrib`
+  is omitted entirely; that means attribution is unavailable, not that the
+  link has no traffic.
 - `log` `{level,message,node?}`
 
 ## WebSocket bridge endpoints (browser transport)

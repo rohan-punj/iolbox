@@ -100,7 +100,7 @@ func TestAllVerbsRegistered(t *testing.T) {
 	want := []string{
 		"hello", "image.list", "image.register", "lab.load", "lab.start", "lab.stop",
 		"lab.wipe", "node.start", "node.stop", "node.restart", "node.setImage", "link.add",
-		"link.remove", "capture.start", "capture.stop", "config.save", "config.extract", "status",
+		"link.remove", "link.setFault", "capture.start", "capture.stop", "config.save", "config.extract", "status",
 	}
 	have := map[string]bool{}
 	for _, v := range s.Dispatcher().Verbs() {

@@ -5,7 +5,10 @@
 // already-running IOL instances with no restart of either).
 package fabric
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // ifnamsiz is the Linux interface-name limit (IFNAMSIZ), INCLUDING the
 // trailing NUL the kernel requires, so the usable name length is 15 bytes.
@@ -86,6 +89,57 @@ func detachCmds(tap string) [][]string {
 	return [][]string{
 		{"ip", "link", "set", tap, "nomaster"},
 	}
+}
+
+// Netem is the flat, per-device impairment applied by SetNetem. Zero values
+// mean that the corresponding netem primitive is omitted. The server validates
+// the user-facing LinkFault before converting it to this command shape.
+type Netem struct {
+	DelayMs      float64
+	JitterMs     float64
+	LossPct      float64
+	DuplicatePct float64
+	ReorderPct   float64
+	RateKbit     int
+}
+
+func netemNumber(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// netemCmds returns the exact argv for one atomic flat netem replacement.
+// It deliberately emits no distribution or separate shaping qdisc. The v1
+// model has no correlation field; reorder still needs tc's correlation token,
+// so it uses a fixed 50% correlation value.
+func netemCmds(dev string, n Netem) [][]string {
+	argv := []string{"tc", "qdisc", "replace", "dev", dev, "root", "netem"}
+	if n.DelayMs > 0 {
+		argv = append(argv, "delay", netemNumber(n.DelayMs)+"ms")
+		if n.JitterMs > 0 {
+			argv = append(argv, netemNumber(n.JitterMs)+"ms")
+		}
+	}
+	if n.LossPct > 0 {
+		argv = append(argv, "loss", netemNumber(n.LossPct)+"%")
+	}
+	if n.DuplicatePct > 0 {
+		argv = append(argv, "duplicate", netemNumber(n.DuplicatePct)+"%")
+	}
+	if n.ReorderPct > 0 {
+		// LinkFault v1 has no separate reorder-correlation knob. Use the
+		// netem default convention explicitly so the argv satisfies tc's
+		// reorder grammar while keeping the wire model intentionally small.
+		argv = append(argv, "reorder", netemNumber(n.ReorderPct)+"%", "50%")
+	}
+	if n.RateKbit > 0 {
+		argv = append(argv, "rate", strconv.Itoa(n.RateKbit)+"kbit")
+	}
+	return [][]string{argv}
+}
+
+// netemClearCmds returns the idempotent qdisc removal argv for one device.
+func netemClearCmds(dev string) [][]string {
+	return [][]string{{"tc", "qdisc", "del", "dev", dev, "root"}}
 }
 
 // sudoArgv chooses how to exec a privileged argv given the caller's effective

@@ -39,14 +39,15 @@ type Process struct {
 	Spec    Spec
 	Machine *Machine
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	ptmx    *os.File     // pty master (IOL only); the node's console I/O flows through this
-	ln      net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
-	hub     *consoleHub  // multi-client console fan-out over ptmx (IOL only)
-	pgid    int          // process group id to kill on Stop (VPCS: the daemonized group)
-	done    chan struct{}
-	stopped bool // true once Stop() has been called on THIS instance — see wait()/ReapDecision
+	mu          sync.Mutex
+	cmd         *exec.Cmd
+	ptmx        *os.File     // pty master (IOL only); the node's console I/O flows through this
+	ln          net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
+	hub         *consoleHub  // multi-client console fan-out over ptmx (IOL only)
+	consoleConn io.Closer    // private AF_UNIX console source (PC only)
+	pgid        int          // process group id to kill on Stop (VPCS: the daemonized group)
+	done        chan struct{}
+	stopped     bool // true once Stop() has been called on THIS instance — see wait()/ReapDecision
 }
 
 // Spawn launches the node described by spec, dispatching to the console model
@@ -440,8 +441,8 @@ func (p *Process) wait() {
 // rather than waiting on the read to notice. Idempotent.
 func (p *Process) teardown() {
 	p.mu.Lock()
-	ptmx, ln, hub, done := p.ptmx, p.ln, p.hub, p.done
-	p.ptmx, p.ln, p.hub = nil, nil, nil
+	ptmx, ln, hub, done, consoleConn := p.ptmx, p.ln, p.hub, p.done, p.consoleConn
+	p.ptmx, p.ln, p.hub, p.consoleConn = nil, nil, nil, nil
 	p.mu.Unlock()
 	if done != nil {
 		select {
@@ -452,6 +453,9 @@ func (p *Process) teardown() {
 	}
 	if ptmx != nil {
 		_ = ptmx.Close()
+	}
+	if consoleConn != nil {
+		_ = consoleConn.Close()
 	}
 	if ln != nil {
 		_ = ln.Close()
@@ -472,6 +476,18 @@ func NewProcessForTest(pty io.ReadWriter, name string) *Process {
 		hub:  newConsoleHub(pty, name),
 		done: make(chan struct{}),
 	}
+}
+
+// NewConsoleBridge wraps a pack's AF_UNIX CLI stream in the same console hub
+// used by IOL. The supplied listener is the supervisor-owned TCP console port;
+// the underlying socket is closed by Stop so all hub goroutines can exit.
+func NewConsoleBridge(conn io.ReadWriter, name string, ln net.Listener) *Process {
+	p := &Process{hub: newConsoleHub(conn, name), ln: ln, done: make(chan struct{})}
+	if closer, ok := conn.(io.Closer); ok {
+		p.consoleConn = closer
+	}
+	go p.serveConsole()
+	return p
 }
 
 // Subscribe attaches an in-process console subscriber to this node's hub (see
@@ -527,7 +543,9 @@ func (p *Process) Stop() error {
 	p.stopped = true
 	p.mu.Unlock()
 
-	p.Machine.To(StateStopped)
+	if p.Machine != nil {
+		p.Machine.To(StateStopped)
+	}
 
 	var err error
 	if pgid > 0 {

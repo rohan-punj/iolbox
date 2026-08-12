@@ -20,6 +20,8 @@ func netnsCreateNetnsCmds(nodeID int) []cmdSpec {
 		{name: "ip", args: []string{"netns", "add", NetnsName(nodeID)}},
 		{name: "ip", args: NetnsExecArgs(nodeID, []string{
 			"sysctl", "-w", "net.ipv4.ip_unprivileged_port_start=1"})[1:]},
+		{name: "ip", args: NetnsExecArgs(nodeID, []string{
+			"sysctl", "-w", "net.ipv4.ping_group_range=0 2147483647"})[1:]},
 	}
 }
 
