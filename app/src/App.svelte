@@ -23,6 +23,7 @@
   import LabBrowser from "./lib/components/LabBrowser.svelte";
   import SwitchLabDialog from "./lib/components/SwitchLabDialog.svelte";
   import SettingsDialog from "./lib/components/SettingsDialog.svelte";
+  import LinkFaultDialog from "./lib/components/LinkFaultDialog.svelte";
   import SplitPane from "./lib/components/SplitPane.svelte";
   import WatcherPanel from "./lib/components/WatcherPanel.svelte";
   import PainterPanel from "./lib/components/PainterPanel.svelte";
@@ -377,6 +378,10 @@
 
 {#if labStore.showSettings}
   <SettingsDialog onClose={() => (labStore.showSettings = false)} />
+{/if}
+
+{#if labStore.showLinkFault}
+  <LinkFaultDialog linkId={labStore.showLinkFault.linkId} onClose={() => (labStore.showLinkFault = null)} />
 {/if}
 
 <SwitchLabDialog />

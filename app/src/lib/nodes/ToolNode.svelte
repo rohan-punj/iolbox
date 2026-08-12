@@ -13,6 +13,7 @@
   const isLocked = $derived(labStore.nodeLocks[nodeId] != null);
   const isDropTarget = $derived(linking.dropTargetId === nodeId);
   const isLinkSource = $derived(linking.sourceId === nodeId);
+  const hasFault = $derived(labStore.nodeHasFault(nodeId));
   const label = $derived((data as any).label as string);
   // Falls back to the node's learning-tool pack's own icon (e.g. Security
   // Bench's firewall glyph) before the generic wrench, matching the
@@ -63,6 +64,9 @@
       <span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>
     {/if}
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
+    {#if hasFault}
+      <span class="fault-badge" title="An impacted link is attached to this node" aria-label="Link fault on this node">!</span>
+    {/if}
     <button
       class="gui-button nodrag"
       title="Open learning-tool GUI"
@@ -127,6 +131,24 @@
   .glyph :global(svg) {
     width: 30px;
     height: 30px;
+  }
+  .fault-badge {
+    position: absolute;
+    bottom: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: var(--accent-ink);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: var(--shadow-md);
+    z-index: 5;
+    pointer-events: none;
   }
   .connector,
   .gui-button {

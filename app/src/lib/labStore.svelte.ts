@@ -93,6 +93,7 @@ class LabStore {
   showImageManager = $state(false);
   showLabBrowser = $state(false);
   showSettings = $state(false);
+  showLinkFault = $state<{ linkId: number } | null>(null);
   /** Tasks pane toggle (TopBar checklist). When on it takes precedence over the
    *  empty-selection auto-hide of the right pane. */
   showTasks = $state(false);
@@ -1049,6 +1050,28 @@ class LabStore {
     await this.guarded(`set fault on link ${linkId}`, () =>
       this.client.linkSetFault(this.lab.id, linkId, fault, afterSec, forSec)
     );
+  }
+
+  /** Bounces a link: administratively down for a few seconds, then the
+   *  supervisor's own forSec expiry clears it automatically — a one-click
+   *  "unplug and replug the cable" for testing STP convergence, DHCP
+   *  renewal, etc., without the caller having to schedule the follow-up
+   *  clear itself. */
+  async terminateLink(linkId: number) {
+    await this.setLinkFault(linkId, { down: true }, undefined, 3);
+  }
+
+  /** True when any link touching this node currently has an active fault
+   *  (admin-down or egress impairment) — drives the red indicator on the
+   *  node face so an impacted link is visible even when the edge itself
+   *  is off-screen or hard to notice at the current zoom level. */
+  nodeHasFault(nodeId: number): boolean {
+    for (const link of this.lab.links) {
+      if (link.endpoints.some((ep) => ep.node === nodeId) && this.linkFaults[link.id]?.active) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Deletes saved configs/state for every node in the lab. Destructive —

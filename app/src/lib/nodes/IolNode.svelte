@@ -17,6 +17,10 @@
   const isLocked = $derived(labStore.nodeLocks[nodeId] != null);
   const isDropTarget = $derived(linking.dropTargetId === nodeId);
   const isLinkSource = $derived(linking.sourceId === nodeId);
+  // A red indicator on the node itself, not just the edge — an impacted link
+  // can be off-screen or easy to miss at a busy zoom level, but the node it
+  // touches should still read "something's wrong here" at a glance.
+  const hasFault = $derived(labStore.nodeHasFault(nodeId));
 
   function onConnectorDown(ev: PointerEvent) {
     ev.preventDefault();
@@ -67,6 +71,9 @@
       <span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>
     {/if}
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
+    {#if hasFault}
+      <span class="fault-badge" title="An impacted link is attached to this node" aria-label="Link fault on this node">!</span>
+    {/if}
     <button
       class="connector nodrag"
       title="Drag to another node to connect"
@@ -176,6 +183,27 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  /* Fault indicator — bottom-right corner (the only one free of the
+     always-hover connector at top-right and the STP crown above it). Always
+     visible, not hover-gated, since the whole point is to be noticeable. */
+  .fault-badge {
+    position: absolute;
+    bottom: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: var(--accent-ink);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: var(--shadow-md);
+    z-index: 5;
+    pointer-events: none;
   }
   /* WS5b — STP root-bridge crown, pinned to the top-right of the face. */
   .stp-crown {

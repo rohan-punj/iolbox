@@ -14,6 +14,7 @@
   const isLocked = $derived(labStore.nodeLocks[nodeId] != null);
   const isDropTarget = $derived(linking.dropTargetId === nodeId);
   const isLinkSource = $derived(linking.sourceId === nodeId);
+  const hasFault = $derived(labStore.nodeHasFault(nodeId));
 
   function onConnectorDown(ev: PointerEvent) {
     ev.preventDefault();
@@ -70,6 +71,9 @@
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
     {#if egressWarn}
       <span class="egress-badge" title={egressNote} aria-label={egressNote}>⚠</span>
+    {/if}
+    {#if hasFault}
+      <span class="fault-badge" title="An impacted link is attached to this node" aria-label="Link fault on this node">!</span>
     {/if}
     <button
       class="connector nodrag"
@@ -171,6 +175,26 @@
     z-index: 5;
     pointer-events: auto;
     cursor: help;
+  }
+  /* Fault indicator — bottom-right, the one corner free of the connector
+     (top-right, hover-only) and the egress-badge (top-left). Always visible. */
+  .fault-badge {
+    position: absolute;
+    bottom: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: var(--accent-ink);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: var(--shadow-md);
+    z-index: 5;
+    pointer-events: none;
   }
   /* WS1 — action-lock progress overlay (see IolNode for rationale). */
   .lock-overlay {

@@ -12,6 +12,7 @@
   const locked = $derived(labStore.nodeLocks[nodeId] != null);
   const dropTarget = $derived(linking.dropTargetId === nodeId);
   const linkSource = $derived(linking.sourceId === nodeId);
+  const hasFault = $derived(labStore.nodeHasFault(nodeId));
   const label = $derived((data as any).label as string);
   const iconKey = $derived((data as any).icon ?? defaultIconFor("pc"));
   const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, 30)));
@@ -38,6 +39,9 @@
     <NodeActions nodeId={nodeId} state={nodeState} />
     {#if locked}<span class="lock-overlay" aria-hidden="true"><span class="lock-ring"></span></span>{/if}
     <span class="glyph" aria-hidden="true">{@html glyph}</span>
+    {#if hasFault}
+      <span class="fault-badge" title="An impacted link is attached to this node" aria-label="Link fault on this node">!</span>
+    {/if}
     <button class="gui-button nodrag" title="Open PC GUI" aria-label="Open PC GUI" onclick={openGui}
       onpointerdown={(e) => e.stopPropagation()}>{@html uiSvg("tool", 12)}</button>
     <button class="connector nodrag" title="Drag to another node to connect" aria-label="Connect this node"
@@ -64,6 +68,7 @@
   .node.selected .face, .node.drop-target .face { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 26%, transparent), var(--shadow-md); }
   .glyph { display: grid; place-items: center; }
   .glyph :global(svg) { width: 30px; height: 30px; }
+  .fault-badge { position: absolute; bottom: -5px; right: -5px; width: 16px; height: 16px; border-radius: 50%; background: var(--danger); color: var(--accent-ink); display: grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; box-shadow: var(--shadow-md); z-index: 5; pointer-events: none; }
   .connector, .gui-button { all: unset; position: absolute; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; z-index: 6; }
   .connector { top: -6px; right: -6px; background: var(--accent); color: var(--accent-ink); opacity: 0; transform: scale(.6); }
   .gui-button { left: -6px; bottom: -6px; background: var(--panel-solid); border: 1px solid var(--accent); color: var(--accent); opacity: 0; transform: scale(.7); }

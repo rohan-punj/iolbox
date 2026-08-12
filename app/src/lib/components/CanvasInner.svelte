@@ -35,7 +35,7 @@
   import { dragNodeCountStore, NODE_SPACING_PX } from "../dragNodeCountStore.svelte";
   import { nextFreeInterface } from "../interfaces";
   import { annoTool } from "../annoTool.svelte";
-  import type { Annotation, LabNode, LinkFault, NodeKind } from "../labTypes";
+  import type { Annotation, LabNode, NodeKind } from "../labTypes";
 
   // The NAT gateway reuses the VPCS single-interface node chrome; the
   // distinct glyph comes from its default icon (defaultIconFor). annoText /
@@ -898,83 +898,22 @@
     const link = labStore.lab.links.find((l) => l.id === menu.linkId);
     const capturing = link?.capture?.enabled ?? false;
     const unsupportedReason = link ? linkFaultUnsupportedReason(link) : "unknown link";
-    const faultChildren: MenuItem[] = [];
-    if (link) {
-      faultChildren.push({
-        id: "link-fault-clear",
-        label: "Clear fault",
-        action: () => void labStore.setLinkFault(link.id, null),
-      });
-      const targets: Array<{ label: string; targetEndpoint?: number }> = [
-        { label: "Both ends" },
-        ...link.endpoints.map((ep, index) => ({
-          label: `${endpointDisplay(ep)}`,
-          targetEndpoint: index,
-        })),
-      ];
-      for (const target of targets) {
-        const suffix = target.targetEndpoint === undefined ? "" : ` (${target.label})`;
-        faultChildren.push({
-          id: `link-fault-down-${target.targetEndpoint ?? "both"}`,
-          label: `Down${suffix}`,
-          action: () => void labStore.setLinkFault(link.id, {
-            down: true,
-            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
-          }),
-        });
-        faultChildren.push({
-          id: `link-fault-delay-${target.targetEndpoint ?? "both"}`,
-          label: `100 ms delay${suffix}`,
-          action: () => void labStore.setLinkFault(link.id, {
-            delayMs: 100,
-            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
-          }),
-        });
-        faultChildren.push({
-          id: `link-fault-loss-${target.targetEndpoint ?? "both"}`,
-          label: `20% loss${suffix}`,
-          action: () => void labStore.setLinkFault(link.id, {
-            lossPct: 20,
-            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
-          }),
-        });
-        faultChildren.push({
-          id: `link-fault-rate-${target.targetEndpoint ?? "both"}`,
-          label: `1 mbit rate${suffix}`,
-          action: () => void labStore.setLinkFault(link.id, {
-            rateKbit: 1000,
-            ...(target.targetEndpoint === undefined ? {} : { targetEndpoint: target.targetEndpoint }),
-          }),
-        });
-      }
-      faultChildren.push({ id: "link-fault-separator", separator: true, label: "fault-sep", action: () => {} });
-      faultChildren.push({
-        id: "link-fault-custom",
-        label: "Custom JSON…",
-        title: "Enter a LinkFault JSON object; omit targetEndpoint for every endpoint",
-        action: () => {
-          const raw = window.prompt(
-            'LinkFault JSON (for example {"delayMs":50,"lossPct":1,"targetEndpoint":0})'
-          );
-          if (raw === null) return;
-          try {
-            const fault = JSON.parse(raw) as LinkFault;
-            void labStore.setLinkFault(link.id, fault);
-          } catch {
-            labStore.lastError = "Fault JSON is invalid";
-            labStore.pushLog("error", labStore.lastError);
-          }
-        },
-      });
-    }
     return [
       {
         id: "link-faults",
-        label: "Faults",
+        label: "Faults…",
         disabled: Boolean(unsupportedReason),
         title: unsupportedReason || "Admin down/up and per-endpoint egress impairment",
-        action: () => {},
-        submenu: faultChildren,
+        action: () => {
+          labStore.showLinkFault = { linkId: menu.linkId };
+        },
+      },
+      {
+        id: "link-terminate",
+        label: "Terminate link",
+        disabled: Boolean(unsupportedReason),
+        title: unsupportedReason || "Briefly takes the link down, then brings it back up automatically (unplug/replug)",
+        action: () => void labStore.terminateLink(menu.linkId),
       },
       { id: "link-separator-faults", separator: true, label: "fault-menu-sep", action: () => {} },
       {
@@ -1011,10 +950,6 @@
     ];
   }
 
-  function endpointDisplay(ep: { node: number; interface: string }): string {
-    const n = labStore.lab.nodes.find((node) => node.id === ep.node);
-    return `${n?.name ?? `#${ep.node}`} ${ep.interface}`;
-  }
 
   function linkFaultUnsupportedReason(link: (typeof labStore.lab.links)[number]): string {
     for (const ep of link.endpoints) {
