@@ -4,7 +4,6 @@ import { labStore } from "./labStore.svelte";
 
 const STORAGE_KEY = "iolbox.chrome.autohide";
 const HIDE_AFTER_MS = 2000;
-const POINTER_DEBOUNCE_MS = 250;
 const EDGE_PX = 8;
 
 function readEnabled(): boolean {
@@ -29,7 +28,6 @@ class ChromeStore {
   private focusEpoch = $state(0);
   private pointerEpoch = $state(0);
   private clockTimer: ReturnType<typeof setInterval> | null = null;
-  private pointerTimer: ReturnType<typeof setTimeout> | null = null;
 
   idle = $derived(this.now - this.lastActivity);
   suppressed = $derived.by(() => {
@@ -64,8 +62,6 @@ class ChromeStore {
     return () => {
       if (this.clockTimer) clearInterval(this.clockTimer);
       this.clockTimer = null;
-      if (this.pointerTimer) clearTimeout(this.pointerTimer);
-      this.pointerTimer = null;
     };
   }
 
@@ -94,14 +90,16 @@ class ChromeStore {
     this.hidden = false;
   }
 
+  // Reveals ONLY on proximity to the left edge (icon rail) or top edge (top
+  // bar) — the chrome surfaces that live there. This used to ALSO reveal on
+  // any pointer movement anywhere on screen: the unconditional
+  // setTimeout(reveal, POINTER_DEBOUNCE_MS) below fired ~250ms after every
+  // single move regardless of position, so auto-hide effectively never held
+  // — any mouse activity brought the chrome back. Found live ("hide chrome
+  // works but appears any time mouse cursor appears").
   onPointerMove(event: PointerEvent) {
     this.pointerEpoch += 1;
-    if (event.clientY <= EDGE_PX || event.clientY >= window.innerHeight - EDGE_PX) this.reveal();
-    if (this.pointerTimer) clearTimeout(this.pointerTimer);
-    this.pointerTimer = setTimeout(() => {
-      this.pointerTimer = null;
-      this.reveal();
-    }, POINTER_DEBOUNCE_MS);
+    if (event.clientX <= EDGE_PX || event.clientY <= EDGE_PX) this.reveal();
   }
 
   onPointerUp() {
