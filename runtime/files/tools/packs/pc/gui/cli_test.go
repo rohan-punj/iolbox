@@ -76,6 +76,95 @@ func TestCLIConnectionEchoesKeystrokes(t *testing.T) {
 	}
 }
 
+// TestCLIConnectionArrowKeyHistory covers the CLI history recall feature: up
+// arrow (ESC [ A) should redraw the line with a previously entered command,
+// most-recent first, and down arrow (ESC [ B) should step back toward
+// whatever was being typed before the first up-arrow. Reproduces "netprobe
+// does not allow going up on cli to previous commands" — arrow-key escape
+// sequences used to be silently dropped as unrecognized control bytes.
+func TestCLIConnectionArrowKeyHistory(t *testing.T) {
+	app := testApp(t)
+	client, server := net.Pipe()
+	defer client.Close()
+	go handleCLIConnection(server, app)
+
+	readN := func(n int) string {
+		t.Helper()
+		buf := make([]byte, n)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := readFull(client, buf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return string(buf)
+	}
+	sendLine := func(line string) {
+		t.Helper()
+		if _, err := client.Write([]byte(line + "\r")); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		// Drain echo + "\r\n" + response + "\r\n" + prompt without asserting
+		// exact response text (covered by other tests) — just get back to a
+		// clean prompt so the next arrow-key assertion starts from a known state.
+		buf := make([]byte, 4096)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		total := 0
+		for {
+			n, err := client.Read(buf[total:])
+			total += n
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if strings.HasSuffix(string(buf[:total]), cliPrompt) {
+				return
+			}
+		}
+	}
+
+	if got := readN(len(cliPrompt)); got != cliPrompt {
+		t.Fatalf("initial prompt = %q, want %q", got, cliPrompt)
+	}
+	sendLine("show ip")
+	sendLine("arp show")
+
+	press := func(final byte) {
+		t.Helper()
+		if _, err := client.Write([]byte{0x1b, '[', final}); err != nil {
+			t.Fatalf("write arrow: %v", err)
+		}
+	}
+
+	erase := func(n int) string { return strings.Repeat("\b \b", n) }
+
+	// Up once recalls the most recent command ("arp show"); the redraw first
+	// erases nothing (line is empty) then writes the 8 bytes of "arp show".
+	press('A')
+	want := erase(0) + "arp show"
+	if got := readN(len(want)); got != want {
+		t.Fatalf("first up-arrow redraw = %q, want %q", got, want)
+	}
+
+	// Up again recalls the older command ("show ip"): erase "arp show" (8), write "show ip" (7).
+	press('A')
+	want = erase(len("arp show")) + "show ip"
+	if got := readN(len(want)); got != want {
+		t.Fatalf("second up-arrow redraw = %q, want %q", got, want)
+	}
+
+	// Down steps back toward the newest history entry: erase "show ip" (7), write "arp show" (8).
+	press('B')
+	want = erase(len("show ip")) + "arp show"
+	if got := readN(len(want)); got != want {
+		t.Fatalf("down-arrow redraw = %q, want %q", got, want)
+	}
+
+	// Down again returns to the empty in-progress line: erase "arp show" (8), write nothing.
+	press('B')
+	want = erase(len("arp show"))
+	if got := readN(len(want)); got != want {
+		t.Fatalf("final down-arrow redraw = %q, want %q", got, want)
+	}
+}
+
 func readFull(conn net.Conn, buf []byte) (int, error) {
 	total := 0
 	for total < len(buf) {

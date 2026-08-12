@@ -47,6 +47,14 @@ func (s *RuntimeState) Remember(command string) {
 	s.mu.Unlock()
 }
 
+// History returns the remembered commands oldest-first, for the CLI's
+// up/down arrow recall. The caller owns the returned slice.
+func (s *RuntimeState) History() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.history...)
+}
+
 func (s *RuntimeState) SetAddress(ip string, prefix int, gateway string) error {
 	parsed := net.ParseIP(strings.TrimSpace(ip))
 	if parsed == nil || parsed.To4() == nil {

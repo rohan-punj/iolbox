@@ -30,15 +30,78 @@ func handleCLIConnection(conn net.Conn, app *App) {
 	_, _ = io.WriteString(conn, cliPrompt)
 	reader := bufio.NewReader(conn)
 	var line []byte
+	// esc tracks a partially-read ANSI escape sequence for arrow keys: 0 = none,
+	// 1 = saw ESC (0x1b), 2 = saw ESC '['. xterm/xterm.js send up as ESC [ A and
+	// down as ESC [ B; every other CSI final byte is dropped once seen, same as
+	// the always-dropped control bytes below.
+	esc := 0
+	// hist is a snapshot of app.state.History() taken lazily on the first arrow
+	// press per line (oldest-first); pos counts back from len(hist) (not yet
+	// navigating) down to 0 (oldest). pending holds what was typed before the
+	// first up-arrow, restored when navigating back past the newest entry.
+	var hist []string
+	pos := -1
+	var pending []byte
+
+	redraw := func(next []byte) {
+		for range line {
+			_, _ = io.WriteString(conn, "\b \b")
+		}
+		line = append(line[:0], next...)
+		_, _ = conn.Write(line)
+	}
+
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
 			return
 		}
+		if esc == 1 {
+			esc = 0
+			if b == '[' {
+				esc = 2
+				continue
+			}
+			continue // lone ESC or an unsupported ESC-prefixed sequence
+		}
+		if esc == 2 {
+			esc = 0
+			switch b {
+			case 'A': // up — recall an older command
+				if hist == nil {
+					hist = app.state.History()
+					pos = len(hist)
+				}
+				if pos > 0 {
+					if pos == len(hist) {
+						pending = append([]byte(nil), line...)
+					}
+					pos--
+					redraw([]byte(hist[pos]))
+				}
+			case 'B': // down — return toward the in-progress line
+				if hist != nil && pos < len(hist) {
+					pos++
+					if pos == len(hist) {
+						redraw(pending)
+					} else {
+						redraw([]byte(hist[pos]))
+					}
+				}
+			default:
+				// Left/right/other CSI sequences: this CLI has no cursor
+				// positioning within the line, so drop them rather than
+				// corrupt the visible buffer.
+			}
+			continue
+		}
 		switch {
+		case b == 0x1b: // ESC — start of a possible arrow-key sequence
+			esc = 1
 		case b == '\r' || b == '\n':
 			_, _ = io.WriteString(conn, "\r\n"+dispatchLine(app, string(line))+"\r\n"+cliPrompt)
 			line = line[:0]
+			hist, pos, pending = nil, -1, nil
 		case b == 0x7f || b == 0x08: // Backspace/DEL
 			if len(line) > 0 {
 				line = line[:len(line)-1]
@@ -48,11 +111,10 @@ func handleCLIConnection(conn net.Conn, app *App) {
 			line = append(line, b)
 			_, _ = conn.Write([]byte{b})
 		default:
-			// Control bytes (Ctrl-C, arrow-key escape sequences, telnet
-			// IAC stragglers, ...) are silently dropped rather than fed
-			// into the line buffer — this CLI has no line-editing beyond
-			// backspace, so echoing them back would just corrupt the
-			// visible line.
+			// Control bytes (Ctrl-C, telnet IAC stragglers, ...) are silently
+			// dropped rather than fed into the line buffer — this CLI has no
+			// line-editing beyond backspace and arrow-key recall, so echoing
+			// them back would just corrupt the visible line.
 		}
 	}
 }
