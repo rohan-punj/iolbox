@@ -1,7 +1,5 @@
 <script lang="ts">
   import { labStore } from "../labStore.svelte";
-  import { consoleUiStore } from "../consoleUiStore.svelte";
-  import { macUiStore } from "../macUiStore.svelte";
   import { chromeStore } from "../chromeStore.svelte";
   import { uiSvg } from "../icons.svelte";
   import { emptyLab, type LabDocument } from "../labTypes";
@@ -153,65 +151,13 @@
       },
       separator("group-view", "View"),
       {
-        id: "view-return-consoles-to-dock",
-        label: "Return consoles to dock",
-        disabled: consoleUiStore.placement === "dock",
-        title: "Switch floating console windows back to the dock",
-        action: () => consoleUiStore.setPlacement("dock"),
-      },
-      {
-        // Theme, Console mode, Auto-hide chrome, and Snap grid used to be
-        // loose items/submenus right here — consolidated into one dialog
-        // (SettingsDialog.svelte) alongside console dock/colorize/font-size
-        // prefs that had no home in this menu at all. Kept OUT of that
-        // dialog: "Detect IOL MAC addresses" (a data-observation behavior,
-        // not a view preference) and "Link layout" below (a per-lab-document
-        // canvas property, not a GUI preference).
+        // Everything view/preference-shaped now lives in SettingsDialog.svelte
+        // (Theme, Console mode, Auto-hide chrome, Snap grid, Link layout,
+        // Detect IOL MAC addresses, Return consoles to dock, console dock/
+        // colorize/font-size prefs) — this is the one entry point left here.
         id: "view-settings",
         label: "Settings…",
         action: () => (labStore.showSettings = true),
-      },
-      {
-        id: "view-learned-mac-display",
-        // Static label, checkmark conveys state — matches every other
-        // checkable item in this menu (Auto-hide chrome, Snap grid,
-        // Free/Structured). Was "Learned IOL MAC display: on/off", which
-        // both baked the state into the text AND had the on/off tooltips
-        // swapped (off's tooltip described what on actually does).
-        label: "Detect IOL MAC addresses",
-        checked: macUiStore.learnIol,
-        title: macUiStore.learnIol
-          ? "IOL MAC addresses are inferred from observed live traffic (VPCS/PC addresses are always shown directly)"
-          : "IOL MAC addresses are not shown — VPCS/PC addresses are always shown directly",
-        action: () => macUiStore.toggleLearnIol(),
-      },
-      separator("group-canvas", "Canvas"),
-      {
-        id: "canvas-link-layout",
-        label: "Link layout",
-        action: () => {},
-        submenu: [
-          {
-            id: "canvas-link-layout-free",
-            label: "Free",
-            checked: (labStore.lab.canvas?.linkLayout ?? "free") === "free",
-            action: () => {
-              const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
-              canvas.linkLayout = "free";
-              labStore.scheduleAutosave();
-            },
-          },
-          {
-            id: "canvas-link-layout-structured",
-            label: "Structured",
-            checked: labStore.lab.canvas?.linkLayout === "structured",
-            action: () => {
-              const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
-              canvas.linkLayout = "structured";
-              labStore.scheduleAutosave();
-            },
-          },
-        ],
       },
     ];
   }

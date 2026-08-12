@@ -10,6 +10,7 @@
   import { labStore } from "../labStore.svelte";
   import { chromeStore } from "../chromeStore.svelte";
   import { themeStore } from "../themeStore.svelte";
+  import { macUiStore } from "../macUiStore.svelte";
   import { consoleUiStore, FONT_MIN, FONT_MAX } from "../consoleUiStore.svelte";
 
   let { onClose }: { onClose: () => void } = $props();
@@ -19,6 +20,13 @@
     canvas.snapGrid = !canvas.snapGrid;
     labStore.scheduleAutosave();
   }
+
+  function setLinkLayout(layout: "free" | "structured") {
+    const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
+    canvas.linkLayout = layout;
+    labStore.scheduleAutosave();
+  }
+  const linkLayout = $derived(labStore.lab.canvas?.linkLayout ?? "free");
 
   function onScrimDown(e: MouseEvent) {
     if (e.target === e.currentTarget) onClose();
@@ -54,12 +62,26 @@
 
     <section>
       <h4>Canvas</h4>
+      <div class="row">
+        <span class="row-label">Link layout</span>
+        <div class="segmented">
+          <button class:on={linkLayout === "free"} onclick={() => setLinkLayout("free")}>Free</button>
+          <button class:on={linkLayout === "structured"} onclick={() => setLinkLayout("structured")}>Structured</button>
+        </div>
+      </div>
       <label class="row toggle-row">
         <span class="row-copy">
           <span class="row-label">Snap grid</span>
           <span class="row-hint">Snap dragged nodes to the 20px canvas grid</span>
         </span>
         <input type="checkbox" checked={labStore.lab.canvas?.snapGrid ?? false} onchange={toggleSnapGrid} />
+      </label>
+      <label class="row toggle-row">
+        <span class="row-copy">
+          <span class="row-label">Detect IOL MAC addresses</span>
+          <span class="row-hint">Infer IOL addresses from observed live traffic (VPCS/PC addresses always show directly)</span>
+        </span>
+        <input type="checkbox" checked={macUiStore.learnIol} onchange={() => macUiStore.toggleLearnIol()} />
       </label>
     </section>
 
