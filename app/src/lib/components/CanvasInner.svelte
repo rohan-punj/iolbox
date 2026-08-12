@@ -497,6 +497,19 @@
     return `NAT${n}`;
   }
 
+  // Tool-pack nodes were always named "Tool<id>" regardless of which pack was
+  // dragged (a Syslog Server became "Tool4"), which reads as meaningless once
+  // the canvas has more than one. Derive a short name from the pack's own
+  // display name instead (e.g. "Syslog Server" -> "Syslog"), numbered by how
+  // many nodes of that SAME pack already exist — same stable-counter pattern
+  // as nameForKind above — rather than the raw (gappy, shared-across-kinds) id.
+  function nameForTool(packId: string): string {
+    const pack = labStore.toolPacks.find((p) => p.id === packId);
+    const base = (pack?.name.split(" ")[0] || "Tool").replace(/[^A-Za-z0-9]/g, "") || "Tool";
+    const n = labStore.lab.nodes.filter((x) => x.kind === "tool" && x.config?.pack === packId).length + 1;
+    return `${base}${n}`;
+  }
+
   function buildDroppedNode(
     kind: NodeKind,
     id: number,
@@ -522,14 +535,15 @@
       return { id, kind, name: nameForKind(kind), x: pos.x, y: pos.y };
     }
     if (kind === "tool") {
-      const pack = labStore.toolPacks.find((p) => p.id === (packId ?? labStore.toolPacks[0]?.id));
+      const resolvedPackId = packId ?? labStore.toolPacks[0]?.id ?? "";
+      const pack = labStore.toolPacks.find((p) => p.id === resolvedPackId);
       return {
         id,
         kind,
-        name: `Tool${id}`,
+        name: nameForTool(resolvedPackId),
         x: pos.x,
         y: pos.y,
-        config: { pack: packId ?? labStore.toolPacks[0]?.id ?? "" },
+        config: { pack: resolvedPackId },
         icon: pack?.icon,
       };
     }
