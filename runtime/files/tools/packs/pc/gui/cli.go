@@ -13,13 +13,47 @@ const cliPrompt = "PC> "
 
 func malformed(usage string) string { return "% Usage: " + usage }
 
+// handleCLIConnection is the ONLY console this pack (or any tool pack) types
+// commands into — every other pack's console is "http" (a browser dashboard,
+// no keystroke handling). Unlike an IOL node's console, which is a real pty
+// and gets keystroke echo for free from the guest kernel's tty layer, this is
+// a bare AF_UNIX socket wrapped in the same console hub IOL uses (see
+// node.NewConsoleBridge) purely as a byte-stream multiplexer — nothing on
+// that path echoes. bufio.Scanner-based line reading only ever wrote back
+// the command's RESPONSE after a full line arrived, so every keystroke
+// appeared to do nothing until Enter, and even then nothing showed the typed
+// line — indistinguishable from a dead console. Reading byte-by-byte here
+// and echoing as we go (with basic backspace handling) is what makes typing
+// visible at all.
 func handleCLIConnection(conn net.Conn, app *App) {
 	defer conn.Close()
 	_, _ = io.WriteString(conn, cliPrompt)
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 1024), 4096)
-	for scanner.Scan() {
-		_, _ = io.WriteString(conn, dispatchLine(app, scanner.Text())+"\r\n"+cliPrompt)
+	reader := bufio.NewReader(conn)
+	var line []byte
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return
+		}
+		switch {
+		case b == '\r' || b == '\n':
+			_, _ = io.WriteString(conn, "\r\n"+dispatchLine(app, string(line))+"\r\n"+cliPrompt)
+			line = line[:0]
+		case b == 0x7f || b == 0x08: // Backspace/DEL
+			if len(line) > 0 {
+				line = line[:len(line)-1]
+				_, _ = io.WriteString(conn, "\b \b")
+			}
+		case b >= 0x20 && b < 0x7f: // printable ASCII
+			line = append(line, b)
+			_, _ = conn.Write([]byte{b})
+		default:
+			// Control bytes (Ctrl-C, arrow-key escape sequences, telnet
+			// IAC stragglers, ...) are silently dropped rather than fed
+			// into the line buffer — this CLI has no line-editing beyond
+			// backspace, so echoing them back would just corrupt the
+			// visible line.
+		}
 	}
 }
 

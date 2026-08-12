@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testApp(t *testing.T) *App { t.Helper(); return NewApp(NewStore(t.TempDir() + "/options.json")) }
@@ -14,6 +16,76 @@ func TestCLIValidCoreGrammar(t *testing.T) {
 			t.Fatalf("%q rejected: %q", line, got)
 		}
 	}
+}
+
+// TestCLIConnectionEchoesKeystrokes covers the actual bug (console typing
+// looked dead over the web GUI): a bufio.Scanner-based line reader never
+// wrote anything back until a full line arrived, so nothing on screen ever
+// reflected a keystroke. Drives handleCLIConnection over a real net.Pipe,
+// one byte at a time like a terminal would, and asserts each typed
+// character is echoed back before Enter — plus that backspace erases
+// visibly (\b \b) and the dispatched response still comes through.
+func TestCLIConnectionEchoesKeystrokes(t *testing.T) {
+	app := testApp(t)
+	client, server := net.Pipe()
+	defer client.Close()
+	go handleCLIConnection(server, app)
+
+	readN := func(n int) string {
+		t.Helper()
+		buf := make([]byte, n)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := readFull(client, buf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return string(buf)
+	}
+
+	if got := readN(len(cliPrompt)); got != cliPrompt {
+		t.Fatalf("initial prompt = %q, want %q", got, cliPrompt)
+	}
+
+	// Type "show ip", expecting each byte echoed back immediately.
+	line := "show ip"
+	for i := 0; i < len(line); i++ {
+		if _, err := client.Write([]byte{line[i]}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if got := readN(1); got != string(line[i]) {
+			t.Fatalf("echo byte %d = %q, want %q", i, got, string(line[i]))
+		}
+	}
+
+	// Backspace the trailing "p" and retype it — erase sequence is "\b \b".
+	if _, err := client.Write([]byte{0x7f}); err != nil {
+		t.Fatalf("write backspace: %v", err)
+	}
+	if got := readN(3); got != "\b \b" {
+		t.Fatalf("backspace echo = %q, want %q", got, "\b \b")
+	}
+	if _, err := client.Write([]byte("p\r")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := readN(1); got != "p" {
+		t.Fatalf("echo byte = %q, want %q", got, "p")
+	}
+
+	want := "\r\n" + app.state.ShowIP() + "\r\n" + cliPrompt
+	if got := readN(len(want)); got != want {
+		t.Fatalf("response = %q, want %q", got, want)
+	}
+}
+
+func readFull(conn net.Conn, buf []byte) (int, error) {
+	total := 0
+	for total < len(buf) {
+		n, err := conn.Read(buf[total:])
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
 }
 
 func TestCLIMalformedOutput(t *testing.T) {
