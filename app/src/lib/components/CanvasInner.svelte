@@ -590,16 +590,34 @@
     linkMenu = { x: event.clientX, y: event.clientY, linkId };
   }
 
+  // xyflow/svelte has no onnodedoubleclick event (checked its types — only
+  // click/contextmenu/drag*/pointer* exist), so double-click is detected by
+  // hand: two onnodeclick firings on the same node inside DBLCLICK_MS.
+  const DBLCLICK_MS = 400;
+  let lastNodeClick: { id: string; at: number } | null = null;
+
   function onNodeClick({ node }: { node: Node }) {
     if (isAnnoId(node.id)) {
       labStore.selectedAnnotationId = annoIdFromFlow(node.id);
       labStore.selectedNodeId = null;
       labStore.selectedLinkId = null;
+      lastNodeClick = null;
       return;
     }
-    labStore.selectedNodeId = Number(node.id);
+    const nodeId = Number(node.id);
+    labStore.selectedNodeId = nodeId;
     labStore.selectedLinkId = null;
     labStore.selectedAnnotationId = null;
+
+    const now = Date.now();
+    const isDoubleClick =
+      lastNodeClick?.id === node.id && now - lastNodeClick.at < DBLCLICK_MS;
+    lastNodeClick = isDoubleClick ? null : { id: node.id, at: now };
+    // Mirrors the hover-toolbar Console button's own guard: only running
+    // nodes have a console worth opening.
+    if (isDoubleClick && labStore.nodeStates[nodeId] === "running") {
+      labStore.openConsoleByMode(nodeId);
+    }
   }
 
   function onEdgeClick({ edge }: { edge: Edge }) {
