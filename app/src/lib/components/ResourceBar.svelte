@@ -135,7 +135,7 @@
     align-items: center;
     gap: var(--sp-2);
     min-width: 0;
-    flex: 1 1 0;
+    flex: 0 0 auto;
     height: 100%;
     white-space: nowrap;
   }
