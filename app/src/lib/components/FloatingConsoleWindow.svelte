@@ -5,6 +5,8 @@
     clampGeom,
     consoleUiStore,
     paneKey,
+    FONT_MIN,
+    FONT_MAX,
     type PaneRef,
     type Viewport,
   } from "../consoleUiStore.svelte";
@@ -146,6 +148,26 @@
     <span class="state-led" class:running={state === "running"} class:starting={state === "starting"} class:crashed={state === "crashed"}></span>
     <span class="float-title-text">{title}</span>
     <span class="float-spacer"></span>
+    {#if ref.kind === "console"}
+      <div class="font-ctl" title="Console text size ({consoleUiStore.fontSize}px)">
+        <button
+          class="title-btn font-btn"
+          title="Smaller console text"
+          aria-label="Decrease console text size"
+          disabled={consoleUiStore.fontSize <= FONT_MIN}
+          onpointerdown={(event) => event.stopPropagation()}
+          onclick={() => consoleUiStore.bumpFontSize(-1)}
+        >A−</button>
+        <button
+          class="title-btn font-btn"
+          title="Larger console text"
+          aria-label="Increase console text size"
+          disabled={consoleUiStore.fontSize >= FONT_MAX}
+          onpointerdown={(event) => event.stopPropagation()}
+          onclick={() => consoleUiStore.bumpFontSize(1)}
+        >A+</button>
+      </div>
+    {/if}
     <button
       class="title-btn"
       class:on={consoleUiStore.isWindowPinned(key)}
@@ -272,6 +294,23 @@
   }
   .title-btn.close:hover {
     color: var(--state-crashed);
+  }
+  .font-ctl {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+  }
+  .font-btn {
+    width: auto;
+    min-width: 20px;
+    padding: 0 3px;
+    font: 600 11px/1 var(--font-mono);
+  }
+  .font-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+    background: none;
+    color: var(--text-tertiary);
   }
   .pane-content {
     flex: 1;
