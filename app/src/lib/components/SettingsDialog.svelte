@@ -184,10 +184,20 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 6px 0;
+    padding: 6px 8px;
+    margin: 0 -8px;
+    border-radius: var(--radius-sm);
   }
   .toggle-row {
     cursor: pointer;
+    transition: background var(--transition-fast);
+  }
+  .toggle-row:hover {
+    background: var(--bg-hover);
+  }
+  .toggle-row:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .row-copy {
     display: flex;
@@ -217,9 +227,18 @@
     color: var(--text-secondary);
     font-size: var(--fs-xs);
     cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
   }
   .segmented button + button {
     border-left: 1px solid var(--border-strong);
+  }
+  .segmented button:hover:not(.on):not(:disabled) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .segmented button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .segmented button.on {
     color: var(--bg-0);
@@ -239,5 +258,11 @@
     display: flex;
     justify-content: flex-end;
     margin-top: 16px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .segmented button,
+    .toggle-row {
+      transition: none;
+    }
   }
 </style>

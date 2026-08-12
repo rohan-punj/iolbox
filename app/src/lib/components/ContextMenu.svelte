@@ -237,6 +237,7 @@
     color: var(--text-primary);
     border-radius: var(--radius-sm);
     cursor: pointer;
+    transition: background var(--transition-fast);
   }
   .state-mark {
     position: relative;
@@ -288,6 +289,15 @@
   .item:hover:not(:disabled) {
     background: var(--bg-hover);
   }
+  /* Items are tabindex="-1" with focus driven programmatically by
+     handleItemKey's arrow-key navigation — `all: unset` above strips the
+     native focus ring, so without this, keyboard nav through the menu had
+     literally no visible indicator of which item was focused. */
+  .item:focus-visible {
+    background: var(--bg-hover);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
   .item:disabled {
     color: var(--text-disabled);
     cursor: not-allowed;
@@ -295,8 +305,14 @@
   .item.danger {
     color: var(--danger);
   }
-  .item.danger:hover {
+  .item.danger:hover,
+  .item.danger:focus-visible {
     background: rgba(240, 87, 93, 0.12);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .item {
+      transition: none;
+    }
   }
   .sep {
     height: 1px;
