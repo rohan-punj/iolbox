@@ -153,7 +153,7 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 			ll.mu.Lock()
 			lb, hasPump := ll.tapBridges[t.netioPath]
 			ll.mu.Unlock()
-			if hasPump && tapDeviceExists(t.tapName) {
+			if hasPump && lb.tapName == t.tapName && tapDeviceExists(t.tapName) {
 				continue
 			}
 			if hasPump {
@@ -162,6 +162,23 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 				delete(ll.tapBridges, t.netioPath)
 				ll.mu.Unlock()
 			}
+			// A pseudo-instance reshuffle (e.g. this tap's netio path was
+			// recomputed differently than when its pump was first opened) can
+			// leave a GHOST pump for this exact tapName parked under a different,
+			// now-stale netioPath key — hasPump above only ever looked up this
+			// tap's CURRENT path, so that ghost survives the check above even
+			// though it's still holding this tap's fd open. Evict it by identity
+			// (tapName), not by path, or the TUNSETIFF just below fails with
+			// "device or resource busy" against a pump this very map already owns.
+			ll.mu.Lock()
+			for path, ghost := range ll.tapBridges {
+				if path == t.netioPath || ghost.tapName != t.tapName {
+					continue
+				}
+				_ = ghost.close()
+				delete(ll.tapBridges, path)
+			}
+			ll.mu.Unlock()
 			existed := tapDeviceExists(t.tapName)
 			if err := mgr.EnsureTap(ctx, t.tapName, uid); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tap %s: %v", t.tapName, err)
@@ -189,10 +206,32 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 			c, cancel := context.WithCancel(context.Background())
 			go func(b *iouyap.TapBridge, ctx context.Context) { _ = b.Run(ctx) }(tb, c)
 			ll.mu.Lock()
-			ll.tapBridges[t.netioPath] = &labBridge{netioPath: t.netioPath, cancel: cancel, closer: tb}
+			ll.tapBridges[t.netioPath] = &labBridge{netioPath: t.netioPath, tapName: t.tapName, cancel: cancel, closer: tb}
 			ll.mu.Unlock()
 		}
 	}
+
+	// Evict any tapBridges entry whose netioPath is no longer part of the
+	// current static-tap set at all — a pump left over from a node/interface
+	// that's since been removed (node.remove never tears these down itself).
+	// Left alone, an orphan like this can still be holding open the exact tap
+	// device a LATER pseudo-instance reshuffle reassigns to a different,
+	// still-live interface, producing the same "device or resource busy" this
+	// function otherwise guards against above.
+	livePaths := make(map[string]bool)
+	for _, m := range ll.staticTaps {
+		for _, t := range m {
+			livePaths[t.netioPath] = true
+		}
+	}
+	ll.mu.Lock()
+	for path, lb := range ll.tapBridges {
+		if !livePaths[path] {
+			_ = lb.close()
+			delete(ll.tapBridges, path)
+		}
+	}
+	ll.mu.Unlock()
 
 	// ids scoping: build a lookup set once so the loop below is O(1) per link
 	// instead of O(len(ids)) per link. Empty/nil ids means "whole lab" (the set

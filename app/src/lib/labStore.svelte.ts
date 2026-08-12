@@ -1102,10 +1102,23 @@ class LabStore {
   }
 
   async startNode(nodeId: number) {
-    // Lock the node until its next node.state event (released in handleEvent).
-    // Already-locked → no-op (that IS the lock).
+    // Lock the node until its next node.state event (released in handleEvent) —
+    // that's the success path, left exactly as before. But when the RPC itself
+    // is REJECTED (e.g. a fabric-prep error that never reaches this node's own
+    // spawn/state-machine step, so no node.state event for it will ever come),
+    // nothing would otherwise clear the lock until the 60s safety timeout —
+    // release explicitly on that path only, same as wipeNode/restartNode below.
     if (!this.acquireNodeLock(nodeId, "starting")) return;
-    await this.guarded(`start node ${nodeId}`, () => this.client.nodeStart(this.lab.id, nodeId));
+    let rpcRejected = false;
+    await this.guarded(`start node ${nodeId}`, async () => {
+      try {
+        await this.client.nodeStart(this.lab.id, nodeId);
+      } catch (e) {
+        rpcRejected = true;
+        throw e;
+      }
+    });
+    if (rpcRejected) this.releaseNodeLock(nodeId);
   }
 
   async stopNode(nodeId: number) {

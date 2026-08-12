@@ -16,6 +16,7 @@ import (
 // real bridge. cancel stops the bridge's Run goroutine.
 type labBridge struct {
 	netioPath string
+	tapName   string
 	cancel    context.CancelFunc
 	closer    interface{ Close() error }
 }
