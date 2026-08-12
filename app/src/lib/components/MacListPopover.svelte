@@ -3,6 +3,7 @@
   import { labStore } from "../labStore.svelte";
   import type { NodeMACsResult } from "../protocol";
   import { colonToDotted } from "../macs";
+  import { portal } from "../portal";
 
   let { x, y, nodeId, onClose }: { x: number; y: number; nodeId: number; onClose: () => void } =
     $props();
@@ -19,6 +20,12 @@
   function handleKey(e: KeyboardEvent) {
     if (e.key === "Escape") onClose();
   }
+
+  // Clamp within viewport — mirrors InterfacePicker's px/py pattern. No
+  // popover height is known ahead of render, so the bottom clamp uses a
+  // conservative estimate (max-height below); a few px of slack is fine.
+  const px = $derived(Math.max(8, Math.min(x, window.innerWidth - 358)));
+  const py = $derived(Math.max(8, Math.min(y, window.innerHeight - 368)));
 
   onMount(() => {
     let alive = true;
@@ -38,7 +45,7 @@
 
 <svelte:window onmousedown={handleWindowClick} onkeydown={handleKey} />
 
-<div class="popover" bind:this={el} style:left={`${x}px`} style:top={`${y}px`}>
+<div class="popover" use:portal bind:this={el} style:left={`${px}px`} style:top={`${py}px`}>
   <div class="title">MAC addresses — <span class="mono">{nodeName}</span></div>
   {#if error}
     <div class="empty">Unable to read MAC addresses: {error}</div>
