@@ -2,6 +2,7 @@
   import { labStore } from "./lib/labStore.svelte";
   import { consoleUiStore } from "./lib/consoleUiStore.svelte";
   import { railUiStore } from "./lib/railUiStore.svelte";
+  import { dragNodeCountStore } from "./lib/dragNodeCountStore.svelte";
   import { nodeCatalog, type CatalogEntry } from "./lib/nodeCatalog";
   import { annoTool, ANNO_COLORS, type AnnoTool } from "./lib/annoTool.svelte";
   import { chromeStore } from "./lib/chromeStore.svelte";
@@ -113,6 +114,15 @@
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("application/iolbox-node", JSON.stringify(entry.drag));
+    dragNodeCountStore.begin(entry.drag, e.clientX, e.clientY);
+  }
+
+  function onDragEnd() {
+    // Fires whether the drag ended in a drop or was cancelled (dropped
+    // outside the canvas, Escape) — CanvasInner's onDrop already consumed
+    // (and reset) the store on a real drop, so this is a no-op then and a
+    // cleanup-only path otherwise.
+    dragNodeCountStore.reset();
   }
 
   function placeNode(entry: CatalogEntry) {
@@ -192,6 +202,7 @@
                             aria-label={`${entry.name}, ${entry.sub}`}
                             onclick={() => placeNode(entry)}
                             ondragstart={(event) => onDragStart(event, entry)}
+                            ondragend={onDragEnd}
                           >
                             <span class="catalog-icon" aria-hidden="true">{@html iconSvg(entry.icon, 26)}</span>
                             <span class="catalog-copy">
@@ -257,7 +268,7 @@
               <div class="shape-tools" role="group" aria-label="Annotation shape tools">
                 {#each (["rect", "ellipse", "note", "line"] as AnnoTool[]) as tool}
                   <button class="shape-tool" class:on={annoTool.active === tool} aria-pressed={annoTool.active === tool} onclick={() => pickShape(tool)}>
-                    <span class="shape-icon" aria-hidden="true">{@html uiSvg(tool === "line" ? "link" : tool === "note" ? "edit" : "net", 16)}</span>
+                    <span class="shape-icon" aria-hidden="true">{@html uiSvg(tool === "line" ? "lineShape" : tool === "note" ? "edit" : tool === "ellipse" ? "ellipseShape" : "rectShape", 16)}</span>
                     <span>{tool === "rect" ? "Rectangle" : tool[0].toUpperCase() + tool.slice(1)}</span>
                   </button>
                 {/each}
@@ -341,6 +352,16 @@
   <FloatingConsoleLayer />
 {/if}
 
+{#if dragNodeCountStore.active && dragNodeCountStore.count > 1}
+  <div
+    class="drag-count-badge"
+    style:left={`${dragNodeCountStore.cursor.x + 16}px`}
+    style:top={`${dragNodeCountStore.cursor.y + 16}px`}
+  >
+    ×{dragNodeCountStore.count}
+  </div>
+{/if}
+
 {#if labStore.showPreflight}
   <Preflight onDismiss={() => (labStore.showPreflight = false)} />
 {/if}
@@ -361,6 +382,19 @@
     flex-direction: column;
     height: 100vh;
     width: 100vw;
+  }
+  .drag-count-badge {
+    position: fixed;
+    z-index: var(--z-modal);
+    pointer-events: none;
+    background: var(--accent);
+    color: var(--bg-0);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
   }
   .body {
     flex: 1;

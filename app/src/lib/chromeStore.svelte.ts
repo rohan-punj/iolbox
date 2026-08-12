@@ -1,3 +1,4 @@
+import { untrack } from "svelte";
 import { annoTool } from "./annoTool.svelte";
 import { labStore } from "./labStore.svelte";
 
@@ -116,14 +117,27 @@ class ChromeStore {
     if (isChromeTarget(event.target)) this.reveal();
   }
 
+  // untrack() around the read-modify-write is load-bearing: callers invoke
+  // this from inside $effect(() => chromeStore.hold()) (ContextMenu,
+  // AnnoStylePopover, ChangeImagePopover, IconPicker, InterfacePicker,
+  // SplitPane, dragMove). Without untrack, `this.holds += 1` both reads
+  // and writes the same $state field DURING that effect's own run, which
+  // makes the effect depend on `holds` and then immediately re-triggers
+  // itself from its own write — Svelte trips effect_update_depth_exceeded
+  // (reproduced live: opening the overflow menu wedged the whole app,
+  // silently breaking outside-click dismiss and everything downstream).
   hold(): () => void {
-    this.holds += 1;
+    untrack(() => {
+      this.holds += 1;
+    });
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      this.holds = Math.max(0, this.holds - 1);
-      if (this.holds === 0) this.reveal();
+      untrack(() => {
+        this.holds = Math.max(0, this.holds - 1);
+        if (this.holds === 0) this.reveal();
+      });
     };
   }
 

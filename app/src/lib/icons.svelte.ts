@@ -122,6 +122,11 @@ export const UI_GLYPHS: Record<string, string> = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   console: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
   wipe: '<path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12"/><path d="M10 11v5m4-5v5"/>',
+  // Add-Shapes flyout tool icons — one shape each, distinct from "net"/"link"
+  // (those are for the network-watcher/link-menu chrome, not annotations).
+  rectShape: '<rect x="4" y="6" width="16" height="12" rx="1.5"/>',
+  ellipseShape: '<ellipse cx="12" cy="12" rx="8" ry="6"/>',
+  lineShape: '<path d="M5 19 19 5"/><circle cx="5" cy="19" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="5" r="1.5" fill="currentColor" stroke="none"/>',
   // Floppy-disk "save config" glyph.
   savecfg:
     '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 21v-6h8v6"/>',

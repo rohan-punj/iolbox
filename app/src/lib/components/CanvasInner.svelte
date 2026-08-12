@@ -32,6 +32,7 @@
   import { uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
   import { railUiStore, type NodePlacement } from "../railUiStore.svelte";
+  import { dragNodeCountStore, NODE_SPACING_PX } from "../dragNodeCountStore.svelte";
   import { nextFreeInterface } from "../interfaces";
   import { annoTool } from "../annoTool.svelte";
   import type { Annotation, LabNode, LinkFault, NodeKind } from "../labTypes";
@@ -428,6 +429,7 @@
   function onDragOver(e: DragEvent) {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    dragNodeCountStore.update(e.clientX, e.clientY, e.shiftKey);
   }
 
   function onDrop(e: DragEvent) {
@@ -439,18 +441,29 @@
       imageId?: string;
       packId?: string;
     };
-    const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-    const id = labStore.nextNodeId();
+    // Shift-drag: dragNodeCountStore tracked how far the cursor traveled
+    // past the drop origin while Shift was held (App.svelte's onDragStart /
+    // CanvasInner's onDragOver) and turned that into a count. Consume it
+    // here rather than trusting e.shiftKey at drop time — the modifier can
+    // legitimately be released a frame before the drop event fires.
+    const dragCount = dragNodeCountStore.consume()?.count ?? 1;
     const img = labStore.images.find((i) => i.id === imageId);
-    const node: LabNode = buildDroppedNode(kind, id, pos, img, packId);
-    const registered = labStore.addNode(node);
-    labStore.selectedNodeId = id;
-    // A NAT gateway has no boot/config step and only exists to provide egress —
-    // start it the moment it lands (after the supervisor ack'd node.add, so
-    // node.start can find it). Other kinds stay stopped for pre-start editing.
-    if (kind === "nat") {
-      void registered.then(() => labStore.startNode(id));
+    let lastId = -1;
+    for (let i = 0; i < dragCount; i++) {
+      const pos = screenToFlowPosition({ x: e.clientX + i * NODE_SPACING_PX, y: e.clientY });
+      const id = labStore.nextNodeId();
+      lastId = id;
+      const node: LabNode = buildDroppedNode(kind, id, pos, img, packId);
+      const registered = labStore.addNode(node);
+      // A NAT gateway has no boot/config step and only exists to provide
+      // egress — start it the moment it lands (after the supervisor ack'd
+      // node.add, so node.start can find it). Other kinds stay stopped for
+      // pre-start editing.
+      if (kind === "nat") {
+        void registered.then(() => labStore.startNode(id));
+      }
     }
+    labStore.selectedNodeId = lastId;
   }
 
   function placeNodeAtViewportCenter(drag: NodePlacement) {
