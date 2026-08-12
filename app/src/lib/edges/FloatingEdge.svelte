@@ -815,7 +815,7 @@
     white-space: nowrap;
     cursor: default;
     transform: scale(1);
-    transition: transform 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2), color 140ms ease,
+    transition: transform 140ms cubic-bezier(0.2, 0.9, 0.3, 1), color 140ms ease,
       background 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
   }
   .chip-detail,

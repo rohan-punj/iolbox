@@ -154,29 +154,25 @@
     margin: auto;
     background: var(--border);
     border-radius: 2px;
-    transition: background var(--transition-fast), width var(--transition-fast),
-      height var(--transition-fast);
+    transition: background var(--transition-fast), transform var(--transition-fast);
   }
   .divider.horizontal::after {
-    width: 1px;
+    width: 3px;
     height: 100%;
+    transform: scaleX(0.3333);
   }
   .divider.vertical::after {
-    height: 1px;
+    height: 3px;
     width: 100%;
+    transform: scaleY(0.3333);
   }
   /* Grabbable affordance: the thin rule fattens + tints accent on hover/drag so
-     the handle is discoverable, not invisible. */
+     the handle is discoverable, not invisible. Base rule paints the rule at
+     1px via a 3px box scaled down (transform, not width/height, so this
+     doesn't trigger layout on hover); hover/drag un-scales it to the full 3px. */
   .divider:hover::after,
   .divider.dragging::after {
     background: var(--accent);
-  }
-  .divider.horizontal:hover::after,
-  .divider.horizontal.dragging::after {
-    width: 3px;
-  }
-  .divider.vertical:hover::after,
-  .divider.vertical.dragging::after {
-    height: 3px;
+    transform: none;
   }
 </style>

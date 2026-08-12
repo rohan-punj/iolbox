@@ -150,7 +150,7 @@
       </button>
       {#if uploadProgress !== null}
         <div class="progress-wrap" role="progressbar" aria-valuenow={uploadProgress} aria-valuemin="0" aria-valuemax="100">
-          <div class="progress-bar" style:width={`${uploadProgress}%`}></div>
+          <div class="progress-bar" style:transform={`scaleX(${uploadProgress / 100})`}></div>
           <span class="progress-label">{uploadProgress}%</span>
         </div>
       {:else}
@@ -295,9 +295,11 @@
   }
   .progress-bar {
     position: absolute;
-    inset: 0 auto 0 0;
+    inset: 0 0 0 0;
+    transform-origin: left;
     background: var(--accent, #5b8cff);
-    transition: width 120ms linear;
+    transition: transform 120ms linear;
+    will-change: transform;
   }
   .progress-label {
     position: relative;
