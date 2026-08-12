@@ -167,49 +167,51 @@
     {#if item.separator}
       <div class="sep"></div>
     {:else}
-      <button
-        class="item"
-        class:danger={item.danger}
-        class:checkable={item.checked !== undefined}
-        disabled={item.disabled}
-        title={item.title}
-        aria-checked={item.checked}
-        aria-haspopup={item.submenu ? "menu" : undefined}
-        tabindex="-1"
-        role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
-        bind:this={itemEls[item.id]}
-        onclick={() => handleClick(item)}
-        onkeydown={(e) => handleItemKey(e, item)}
-      >
-        <span class="state-mark" class:checked={item.checked} aria-hidden="true"></span>
-        {item.label}
-      </button>
-      {#if item.submenu}
-        <div class="submenu" class:open={openSubmenuId === item.id} role="menu">
-          {#each item.submenu as child (child.id)}
-            {#if child.separator}
-              <div class="sep"></div>
-            {:else}
-              <button
-                class="item"
-                class:danger={child.danger}
-                class:checkable={child.checked !== undefined}
-                disabled={child.disabled}
-                title={child.title}
-                aria-checked={child.checked}
-                tabindex="-1"
-                role={child.checked === undefined ? "menuitem" : "menuitemradio"}
-                bind:this={itemEls[child.id]}
-                onclick={() => handleSubmenuClick(child)}
-                onkeydown={(e) => handleItemKey(e, child, item.id)}
-              >
-                <span class="state-mark" class:checked={child.checked} aria-hidden="true"></span>
-                {child.label}
-              </button>
-            {/if}
-          {/each}
-        </div>
-      {/if}
+      <div class="item-wrap">
+        <button
+          class="item"
+          class:danger={item.danger}
+          class:checkable={item.checked !== undefined}
+          disabled={item.disabled}
+          title={item.title}
+          aria-checked={item.checked}
+          aria-haspopup={item.submenu ? "menu" : undefined}
+          tabindex="-1"
+          role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+          bind:this={itemEls[item.id]}
+          onclick={() => handleClick(item)}
+          onkeydown={(e) => handleItemKey(e, item)}
+        >
+          <span class="state-mark" class:checked={item.checked} aria-hidden="true"></span>
+          {item.label}
+        </button>
+        {#if item.submenu}
+          <div class="submenu" class:open={openSubmenuId === item.id} role="menu">
+            {#each item.submenu as child (child.id)}
+              {#if child.separator}
+                <div class="sep"></div>
+              {:else}
+                <button
+                  class="item"
+                  class:danger={child.danger}
+                  class:checkable={child.checked !== undefined}
+                  disabled={child.disabled}
+                  title={child.title}
+                  aria-checked={child.checked}
+                  tabindex="-1"
+                  role={child.checked === undefined ? "menuitem" : "menuitemradio"}
+                  bind:this={itemEls[child.id]}
+                  onclick={() => handleSubmenuClick(child)}
+                  onkeydown={(e) => handleItemKey(e, child, item.id)}
+                >
+                  <span class="state-mark" class:checked={child.checked} aria-hidden="true"></span>
+                  {child.label}
+                </button>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+      </div>
     {/if}
   {/each}
 </div>
@@ -254,6 +256,9 @@
     border-bottom: 1.5px solid var(--accent);
     transform: rotate(45deg);
   }
+  .item-wrap {
+    position: relative;
+  }
   .item:has(+ .submenu) {
     padding-right: 24px;
   }
@@ -265,7 +270,7 @@
   .submenu {
     position: absolute;
     left: calc(100% - 4px);
-    top: 4px;
+    top: 0;
     min-width: 230px;
     background: var(--bg-elevated);
     border: 1px solid var(--border-strong);
@@ -274,9 +279,9 @@
     padding: 4px;
     display: none;
   }
-  .menu > .item:hover + .submenu,
-  .menu > .submenu:hover,
-  .menu > .submenu.open {
+  .item-wrap:hover > .submenu,
+  .item-wrap > .submenu:hover,
+  .item-wrap > .submenu.open {
     display: flex;
     flex-direction: column;
   }
