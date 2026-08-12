@@ -92,6 +92,7 @@ class LabStore {
   showPreflight = $state(true);
   showImageManager = $state(false);
   showLabBrowser = $state(false);
+  showSettings = $state(false);
   /** Tasks pane toggle (TopBar checklist). When on it takes precedence over the
    *  empty-selection auto-hide of the right pane. */
   showTasks = $state(false);

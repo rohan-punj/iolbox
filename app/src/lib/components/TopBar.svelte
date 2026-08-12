@@ -2,7 +2,6 @@
   import { labStore } from "../labStore.svelte";
   import { consoleUiStore } from "../consoleUiStore.svelte";
   import { macUiStore } from "../macUiStore.svelte";
-  import { themeStore } from "../themeStore.svelte";
   import { chromeStore } from "../chromeStore.svelte";
   import { uiSvg } from "../icons.svelte";
   import { emptyLab, type LabDocument } from "../labTypes";
@@ -161,49 +160,16 @@
         action: () => consoleUiStore.setPlacement("dock"),
       },
       {
-        id: "view-auto-hide-chrome",
-        label: "Auto-hide chrome",
-        checked: chromeStore.enabled,
-        title: "Hide the top bar, rail, and resource bar after 2 seconds of idle time",
-        action: () => chromeStore.toggleEnabled(),
-      },
-      {
-        id: "view-theme",
-        label: "Theme",
-        action: () => {},
-        submenu: [
-          {
-            id: "theme-bench",
-            label: "Bench",
-            checked: themeStore.current === "bench",
-            action: () => themeStore.set("bench"),
-          },
-          {
-            id: "theme-glass",
-            label: "Glass",
-            checked: themeStore.current === "glass",
-            action: () => themeStore.set("glass"),
-          },
-        ],
-      },
-      {
-        id: "view-console-mode",
-        label: "Console mode",
-        action: () => {},
-        submenu: [
-          {
-            id: "console-mode-web",
-            label: "Web",
-            checked: consoleUiStore.consoleMode === "web",
-            action: () => consoleUiStore.setConsoleMode("web"),
-          },
-          {
-            id: "console-mode-native",
-            label: "Native",
-            checked: consoleUiStore.consoleMode === "native",
-            action: () => consoleUiStore.setConsoleMode("native"),
-          },
-        ],
+        // Theme, Console mode, Auto-hide chrome, and Snap grid used to be
+        // loose items/submenus right here — consolidated into one dialog
+        // (SettingsDialog.svelte) alongside console dock/colorize/font-size
+        // prefs that had no home in this menu at all. Kept OUT of that
+        // dialog: "Detect IOL MAC addresses" (a data-observation behavior,
+        // not a view preference) and "Link layout" below (a per-lab-document
+        // canvas property, not a GUI preference).
+        id: "view-settings",
+        label: "Settings…",
+        action: () => (labStore.showSettings = true),
       },
       {
         id: "view-learned-mac-display",
@@ -246,17 +212,6 @@
             },
           },
         ],
-      },
-      {
-        id: "canvas-snap-grid",
-        label: "Snap grid",
-        checked: labStore.lab.canvas?.snapGrid ?? false,
-        title: "Snap dragged nodes to the 20px canvas grid",
-        action: () => {
-          const canvas = labStore.lab.canvas ?? (labStore.lab.canvas = {});
-          canvas.snapGrid = !canvas.snapGrid;
-          labStore.scheduleAutosave();
-        },
       },
     ];
   }

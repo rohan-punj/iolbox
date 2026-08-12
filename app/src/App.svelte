@@ -22,6 +22,7 @@
   import ImageManager from "./lib/components/ImageManager.svelte";
   import LabBrowser from "./lib/components/LabBrowser.svelte";
   import SwitchLabDialog from "./lib/components/SwitchLabDialog.svelte";
+  import SettingsDialog from "./lib/components/SettingsDialog.svelte";
   import SplitPane from "./lib/components/SplitPane.svelte";
   import WatcherPanel from "./lib/components/WatcherPanel.svelte";
   import PainterPanel from "./lib/components/PainterPanel.svelte";
@@ -372,6 +373,10 @@
 
 {#if labStore.showLabBrowser}
   <LabBrowser onClose={() => (labStore.showLabBrowser = false)} />
+{/if}
+
+{#if labStore.showSettings}
+  <SettingsDialog onClose={() => (labStore.showSettings = false)} />
 {/if}
 
 <SwitchLabDialog />
