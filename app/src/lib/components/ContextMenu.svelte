@@ -231,7 +231,10 @@
   }
   .item {
     all: unset;
+    display: flex;
+    align-items: center;
     box-sizing: border-box;
+    width: 100%;
     padding: 7px 10px;
     font-size: var(--fs-sm);
     color: var(--text-primary);
@@ -265,7 +268,7 @@
   }
   .item:has(+ .submenu)::after {
     content: "›";
-    float: right;
+    margin-left: auto;
     color: var(--text-secondary);
   }
   .submenu {

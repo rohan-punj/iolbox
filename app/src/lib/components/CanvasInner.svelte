@@ -441,12 +441,20 @@
       imageId?: string;
       packId?: string;
     };
-    // Shift-drag: dragNodeCountStore tracked how far the cursor traveled
-    // past the drop origin while Shift was held (App.svelte's onDragStart /
-    // CanvasInner's onDragOver) and turned that into a count. Consume it
-    // here rather than trusting e.shiftKey at drop time — the modifier can
-    // legitimately be released a frame before the drop event fires.
-    const dragCount = dragNodeCountStore.consume()?.count ?? 1;
+    // Shift-drag: dragNodeCountStore tracked whether Shift was held while
+    // dragging over the canvas (App.svelte's onDragStart / CanvasInner's
+    // onDragOver). Consume it here rather than trusting e.shiftKey at drop
+    // time — the modifier can legitimately be released a frame before the
+    // drop event fires. When held, ask how many to place instead of
+    // guessing from drag distance.
+    const consumed = dragNodeCountStore.consume();
+    let dragCount = 1;
+    if (consumed?.shiftHeld) {
+      const answer = prompt("How many nodes to add?", "1");
+      const parsed = answer === null ? 0 : Math.floor(Number(answer));
+      if (answer === null) return;
+      dragCount = Number.isFinite(parsed) ? Math.min(20, Math.max(1, parsed)) : 1;
+    }
     const img = labStore.images.find((i) => i.id === imageId);
     let lastId = -1;
     for (let i = 0; i < dragCount; i++) {

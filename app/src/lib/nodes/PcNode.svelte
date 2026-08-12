@@ -2,7 +2,7 @@
   import { Handle, Position, type NodeProps } from "@xyflow/svelte";
   import { labStore } from "../labStore.svelte";
   import { stateLabel } from "../nodeVisuals";
-  import { defaultIconFor, iconRegistryVersion, iconSvg, uiSvg } from "../icons.svelte";
+  import { defaultIconFor, iconRegistryVersion, iconSvg, isArtworkIcon, uiSvg } from "../icons.svelte";
   import { linking } from "../linking.svelte";
   import NodeActions from "./NodeActions.svelte";
 
@@ -15,7 +15,10 @@
   const hasFault = $derived(labStore.nodeHasFault(nodeId));
   const label = $derived((data as any).label as string);
   const iconKey = $derived((data as any).icon ?? defaultIconFor("pc"));
-  const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, 30)));
+  // Artwork icons carry their own plate and render full-bleed, matching
+  // VpcsNode — PC0/PC1 share the same default "pc" icon and must look alike.
+  const artwork = $derived((iconRegistryVersion(), isArtworkIcon(iconKey)));
+  const glyph = $derived((iconRegistryVersion(), iconSvg(iconKey, artwork ? 58 : 30)));
   let guiOpen = $state(false);
 
   function connect(ev: PointerEvent) {
@@ -29,7 +32,7 @@
   }
 </script>
 
-<div class="node face-node pc" class:selected class:drop-target={dropTarget} class:linking={linkSource}
+<div class="node face-node pc" class:selected class:artwork class:drop-target={dropTarget} class:linking={linkSource}
   class:locked data-state={nodeState} ondblclick={edit} role="button" tabindex="-1">
   <Handle type="source" position={Position.Top} id="top" />
   <Handle type="source" position={Position.Right} id="right" />
@@ -67,7 +70,13 @@
     box-shadow: var(--shadow-md); color: var(--node-vpcs); }
   .node.selected .face, .node.drop-target .face { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 26%, transparent), var(--shadow-md); }
   .glyph { display: grid; place-items: center; }
-  .glyph :global(svg) { width: 30px; height: 30px; }
+  .glyph :global(svg), .glyph :global(img) { width: 30px; height: 30px; }
+  /* Artwork icons ARE the node: hide the tile, let the icon fill the face.
+     Selection/drop rings are re-asserted below so they survive this reset. */
+  .node.artwork .face { background: none; border-color: transparent; box-shadow: none; }
+  .node.artwork .glyph :global(svg), .node.artwork .glyph :global(img) { width: 58px; height: 58px; }
+  .node.artwork.selected .face { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 26%, transparent); }
+  .node.artwork.drop-target .face { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 34%, transparent); }
   .fault-badge { position: absolute; bottom: -5px; right: -5px; width: 16px; height: 16px; border-radius: 50%; background: var(--danger); color: var(--accent-ink); display: grid; place-items: center; font-size: 10px; font-weight: 700; line-height: 1; box-shadow: var(--shadow-md); z-index: 5; pointer-events: none; }
   .connector, .gui-button { all: unset; position: absolute; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; z-index: 6; }
   .connector { top: -6px; right: -6px; background: var(--accent); color: var(--accent-ink); opacity: 0; transform: scale(.6); }

@@ -354,13 +354,13 @@
   <FloatingConsoleLayer />
 {/if}
 
-{#if dragNodeCountStore.active && dragNodeCountStore.count > 1}
+{#if dragNodeCountStore.active && dragNodeCountStore.shiftHeld}
   <div
     class="drag-count-badge"
     style:left={`${dragNodeCountStore.cursor.x + 16}px`}
     style:top={`${dragNodeCountStore.cursor.y + 16}px`}
   >
-    ×{dragNodeCountStore.count}
+    drop to choose count
   </div>
 {/if}
 
