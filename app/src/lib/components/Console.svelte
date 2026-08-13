@@ -404,7 +404,7 @@
           class:untiled={consoleUiStore.layout !== "tabs" && !isTiled(ref)}
           class:hidden={consoleUiStore.layout === "tabs" && !isFocused(ref)}
         >
-          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} />
+          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} tiled={consoleUiStore.layout !== "tabs"} />
         </div>
       {/each}
       {#each labStore.openCaptureTabs as linkId (`cap-${linkId}`)}
@@ -415,7 +415,7 @@
           class:untiled={consoleUiStore.layout !== "tabs" && !isTiled(ref)}
           class:hidden={consoleUiStore.layout === "tabs" && !isFocused(ref)}
         >
-          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} />
+          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} tiled={consoleUiStore.layout !== "tabs"} />
         </div>
       {/each}
       {#each labStore.openLensTabs as linkId (`lens-${linkId}`)}
@@ -426,7 +426,7 @@
           class:untiled={consoleUiStore.layout !== "tabs" && !isTiled(ref)}
           class:hidden={consoleUiStore.layout === "tabs" && !isFocused(ref)}
         >
-          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} />
+          <PaneBody {ref} visible={isVisible(ref)} focused={isFocused(ref)} tiled={consoleUiStore.layout !== "tabs"} />
         </div>
       {/each}
     </div>

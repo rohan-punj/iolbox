@@ -27,6 +27,12 @@ class ChromeStore {
   private lastActivity = $state(Date.now());
   private focusEpoch = $state(0);
   private pointerEpoch = $state(0);
+  // True whenever the pointer's current target is a chrome surface/menu/
+  // dialog — kept live by onPointerMove regardless of idle time, so chrome
+  // stays put for as long as the mouse simply rests over it (a stationary
+  // hover fires no further reveal-refreshing events, so idle-timer-based
+  // reveal alone would still hide chrome out from under the cursor).
+  private pointerOverChrome = $state(false);
   private clockTimer: ReturnType<typeof setInterval> | null = null;
 
   idle = $derived(this.now - this.lastActivity);
@@ -46,7 +52,7 @@ class ChromeStore {
       labStore.showLabBrowser ||
       labStore.pendingSwitch !== null;
     const error = labStore.lastError !== null || labStore.providerStatus === "error";
-    return openMenu || activeDrag || focusedControl || modal || error;
+    return openMenu || activeDrag || focusedControl || modal || error || this.pointerOverChrome;
   });
   shouldHide = $derived(
     this.enabled && labStore.labRunning && this.idle > HIDE_AFTER_MS && !this.suppressed
@@ -90,16 +96,27 @@ class ChromeStore {
     this.hidden = false;
   }
 
-  // Reveals ONLY on proximity to the left edge (icon rail) or top edge (top
-  // bar) — the chrome surfaces that live there. This used to ALSO reveal on
-  // any pointer movement anywhere on screen: the unconditional
+  // Reveals on proximity to the left edge (icon rail) or top edge (top bar)
+  // — the chrome surfaces that live there — OR once the pointer is actually
+  // over a (now-revealed) chrome surface/menu/dialog. This used to ALSO
+  // reveal on any pointer movement anywhere on screen: the unconditional
   // setTimeout(reveal, POINTER_DEBOUNCE_MS) below fired ~250ms after every
   // single move regardless of position, so auto-hide effectively never held
   // — any mouse activity brought the chrome back. Found live ("hide chrome
   // works but appears any time mouse cursor appears").
+  //
+  // The edge check alone isn't enough: chrome surfaces are pointer-events:
+  // none while hidden (see .chrome-hidden in TopBar/IconRail/ResourceBar),
+  // so a hidden surface can never itself be the pointer's target — edge
+  // proximity is what brings it back initially. Once visible, pointerOverChrome
+  // takes over and holds it visible for as long as the pointer's target stays
+  // inside a chrome surface, independent of the idle timer (found live: chrome
+  // hid itself out from under a stationary cursor resting on the icon rail,
+  // since a non-moving pointer generates no further reveal-refreshing events).
   onPointerMove(event: PointerEvent) {
     this.pointerEpoch += 1;
-    if (event.clientX <= EDGE_PX || event.clientY <= EDGE_PX) this.reveal();
+    this.pointerOverChrome = isChromeTarget(event.target);
+    if (this.pointerOverChrome || event.clientX <= EDGE_PX || event.clientY <= EDGE_PX) this.reveal();
   }
 
   onPointerUp() {

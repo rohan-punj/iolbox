@@ -110,6 +110,12 @@
 
   onMount(() => {
     term = new Terminal({
+      // SearchAddon's match highlighting calls term.registerDecoration(), a
+      // proposed (unstable) xterm API that throws "You must set the
+      // allowProposedApi option to true" unless this is set — silently
+      // breaking every search (findNext/findPrevious never report a match)
+      // since the decoration call happens before the result count updates.
+      allowProposedApi: true,
       convertEol: true,
       fontFamily:
         '"Cascadia Code","JetBrains Mono",ui-monospace,"SF Mono",Consolas,monospace',

@@ -14,7 +14,20 @@
     ref,
     visible,
     focused,
-  }: { ref: PaneRef; visible: boolean; focused: boolean } = $props();
+    tiled = false,
+  }: { ref: PaneRef; visible: boolean; focused: boolean; tiled?: boolean } = $props();
+
+  // In tabs mode, the dock's tab strip is the only visible pane and already
+  // names it. In tiled/split mode multiple panes are on screen at once, but
+  // only the *focused* one is highlighted in that shared strip — every other
+  // tiled pane has no visible identity at all (no header, nothing in the
+  // pane itself), so users can't tell which console/capture/lens a given
+  // tile is without reading its scrollback content. Show a small label.
+  function paneTitle(): string {
+    if (ref.kind === "console") return nodeName(ref.node);
+    if (ref.kind === "capture") return captureTitle(ref.link);
+    return `Lens · ${captureTitle(ref.link)}`;
+  }
 
   function isToolNode(id: number): boolean {
     return labStore.lab.nodes.find((node) => node.id === id)?.kind === "tool";
@@ -75,6 +88,9 @@
 </script>
 
 <div class="pane-frame">
+  {#if tiled}
+    <div class="pane-title" title={paneTitle()}>{paneTitle()}</div>
+  {/if}
   {#if ref.kind === "console"}
     {#if isToolNode(ref.node)}
       <iframe
@@ -160,6 +176,26 @@
     min-height: 0;
     overflow: hidden;
     background: var(--term-bg);
+  }
+  /* Overlay, not layout — matches .find-bar/.native-hold below: identifies a
+     tiled pane without reflowing (and re-fitting) the terminal beneath it. */
+  .pane-title {
+    position: absolute;
+    top: 4px;
+    left: 6px;
+    z-index: 2;
+    max-width: calc(100% - 12px);
+    padding: 1px 7px;
+    font: 600 10px/1.6 var(--font-ui);
+    letter-spacing: 0.02em;
+    color: var(--text-secondary);
+    background: color-mix(in oklab, var(--bg-1) 78%, transparent);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
   }
   .tool-frame {
     display: block;
