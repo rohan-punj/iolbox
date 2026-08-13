@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+	"time"
 )
 
 // Decoder reads newline-delimited JSON requests from a stream.
@@ -89,6 +90,51 @@ func (e *Encoder) WriteResponse(resp *Response) error {
 // WriteEvent writes an event line.
 func (e *Encoder) WriteEvent(ev *Event) error {
 	return e.writeJSON(ev)
+}
+
+// deadlineWriter is the optional interface a network-backed writer satisfies
+// (net.Conn does; so does wsbridge's WebSocket text-frame adapter).
+type deadlineWriter interface {
+	SetWriteDeadline(time.Time) error
+}
+
+// WriteEventWithDeadline writes one event, bounding the write with a deadline
+// when the underlying writer supports one. Without a deadline a peer that has
+// stopped reading blocks the writing goroutine until the kernel's TCP
+// retransmit timeout, which is minutes.
+//
+// The deadline is set and cleared inside the encoder lock so a concurrent
+// WriteResponse on the same connection can never inherit a deadline that was
+// meant for an event, nor observe a half-configured one. The marshal happens
+// before the lock is taken so serialization cost is not serialized.
+func (e *Encoder) WriteEventWithDeadline(ev *Event, timeout time.Duration) error {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if d, ok := e.w.(deadlineWriter); ok {
+		if err := d.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+			return err
+		}
+		defer func() { _ = d.SetWriteDeadline(time.Time{}) }()
+	}
+	_, err = e.w.Write(b)
+	return err
+}
+
+// Close closes the wrapped stream when it owns a close operation, and is a
+// no-op otherwise. The broadcaster uses this to drop a subscriber: closing the
+// stream also unblocks the read loop on the same control connection, so the
+// client sees a disconnect and reconnects rather than sitting on a live socket
+// that will never receive another event.
+func (e *Encoder) Close() error {
+	if c, ok := e.w.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 func (e *Encoder) writeJSON(v any) error {

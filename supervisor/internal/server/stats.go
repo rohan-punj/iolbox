@@ -85,7 +85,11 @@ func (s *Server) statsLoop(ctx context.Context) {
 			if ll == nil {
 				continue
 			}
+			// Keep the background sampler from walking a static-tap plan while a
+			// serialized topology/lifecycle RPC is replacing it.
+			s.labMu.Lock()
 			fcur := s.fabricStats(ll)
+			s.labMu.Unlock()
 			for id := range flast {
 				if _, ok := fcur[id]; !ok {
 					delete(flast, id)

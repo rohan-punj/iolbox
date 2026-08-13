@@ -139,7 +139,12 @@ func (s *Server) syncPCNode(ll *loadedLab, id int) protocol.PCStateData {
 	state := s.previousPCState(ll, id)
 	ll.mu.Lock()
 	nr := ll.nodes[id]
-	n := ll.findNode(id)
+	// findNode takes ll.mu itself; calling it here was finding #12, a
+	// non-reentrant self-deadlock that hung every stop of a running PC/tool
+	// node (stopNode -> syncPCNode) with ll.mu — and the caller's s.labMu —
+	// held forever. Use the locked variant so nr and the node document are
+	// still read atomically under the one critical section.
+	n := ll.findNodeLocked(id)
 	ll.mu.Unlock()
 	if n == nil || n.Kind != lab.KindPC || nr == nil || nr.tool == nil {
 		data := protocol.PCStateData{Node: id, State: &state, Stale: true}

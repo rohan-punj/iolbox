@@ -20,8 +20,18 @@ package slowtee
 
 import (
 	"bytes"
+	"log"
 	"sync"
+	"time"
 )
+
+// closeDrainTimeout bounds how long Close waits for the forward goroutines to
+// return after the stop signal. Defense in depth only: the loops observe the
+// signal within the sockets' receive timeout (see the linux build). It exists
+// because Close runs inside the server's serialized control path
+// (teardownFabric -> handleLabLoad under Server.labMu), where a permanently
+// blocked Close wedges the entire control plane.
+const closeDrainTimeout = 3 * time.Second
 
 // slowProtoDst is the destination MAC of IEEE 802.3 slow-protocols frames
 // (LACP among them), EtherType 0x8809.
@@ -44,9 +54,15 @@ func isSlowProtocols(frame []byte) bool {
 type Tee struct {
 	mu sync.Mutex
 
-	// closer/wg are populated only by the linux implementation.
-	closer func()
-	wg     *sync.WaitGroup
+	// stopRead/closeFDs/wg are populated only by the linux implementation.
+	//
+	// The hooks are ordered: stopRead only SIGNALS the forward loops, closeFDs
+	// releases the sockets once they have returned. Closing a socket a loop is
+	// still parked in recvfrom on neither wakes it nor is safe against
+	// descriptor reuse.
+	stopRead func()
+	closeFDs func()
+	wg       *sync.WaitGroup
 }
 
 // Open binds a raw AF_PACKET socket to each of exactly two tap device names
@@ -65,19 +81,53 @@ func Open(devs []string) (*Tee, error) {
 }
 
 // Close stops the read goroutines and closes both sockets. Idempotent and
-// nil-safe (a stub / non-fabric Tee is nil).
+// nil-safe (a stub / non-fabric Tee is nil). Guaranteed to return within
+// closeDrainTimeout.
 func (t *Tee) Close() {
 	if t == nil {
 		return
 	}
+	if !t.closeDrain(closeDrainTimeout) {
+		log.Printf("slowtee: forward loops did not exit within %s; sockets left open", closeDrainTimeout)
+	}
+}
+
+// closeDrain signals the forward loops, waits up to timeout for them to return,
+// and releases the sockets only once they have. Reports whether they drained.
+func (t *Tee) closeDrain(timeout time.Duration) bool {
 	t.mu.Lock()
-	closer := t.closer
+	stopRead := t.stopRead
+	closeFDs := t.closeFDs
 	wg := t.wg
 	t.mu.Unlock()
-	if closer != nil {
-		closer()
+	if stopRead != nil {
+		stopRead()
 	}
-	if wg != nil {
+	if !waitTimeout(wg, timeout) {
+		return false
+	}
+	if closeFDs != nil {
+		closeFDs()
+	}
+	return true
+}
+
+// waitTimeout waits for wg with a hard bound, reporting whether it drained.
+func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	if wg == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
 		wg.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }

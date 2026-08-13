@@ -218,3 +218,23 @@ func TestRunPumpReportsNonCancellationError(t *testing.T) {
 		t.Fatal("runPump did not report the read error")
 	}
 }
+
+func TestRunPumpsStopsSiblingOnFirstError(t *testing.T) {
+	wantErr := errors.New("tap write boom")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := make(chan struct{})
+
+	err := runPumps(ctx, func() { close(stopped) },
+		func(_ context.Context, errs chan<- error) { errs <- wantErr },
+		func(ctx context.Context, _ chan<- error) { <-ctx.Done() },
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runPumps returned %v, want %v", err, wantErr)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("runPumps did not invoke stop after the first pump error")
+	}
+}

@@ -739,3 +739,7 @@ func (t *textFrameRWC) Write(p []byte) (int, error) {
 func (t *textFrameRWC) Close() error {
 	return t.conn.Close()
 }
+
+func (t *textFrameRWC) SetWriteDeadline(deadline time.Time) error {
+	return t.conn.SetWriteDeadline(deadline)
+}

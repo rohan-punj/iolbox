@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -152,7 +153,11 @@ func (ll *loadedLab) faultForLink(id int) (activeFault, bool) {
 // for native same-host IOL<->IOL links (confirmed in P0). Per-node NVRAM files
 // (nvram_<id>) also live here.
 func (ll *loadedLab) labDir() string {
-	return filepath.Join(ll.runDir, ll.doc.ID)
+	ll.mu.Lock()
+	id := ll.doc.ID
+	runDir := ll.runDir
+	ll.mu.Unlock()
+	return filepath.Join(runDir, id)
 }
 
 // workDir returns the working directory a node is spawned in.
@@ -173,6 +178,85 @@ func (ll *loadedLab) get(id int) *nodeRuntime {
 	ll.mu.Lock()
 	defer ll.mu.Unlock()
 	return ll.nodes[id]
+}
+
+// nodeIDs returns a stable snapshot of the loaded runtime map. Callers use it
+// for teardown loops instead of ranging over ll.nodes after get() has released
+// ll.mu.
+func (ll *loadedLab) nodeIDs() []int {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	ids := make([]int, 0, len(ll.nodes))
+	for id := range ll.nodes {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// cloneLabDoc makes a private document snapshot. The loaded document contains
+// slices, pointers, and config maps, so a shallow struct copy is not enough to
+// keep status/fabric readers from observing a concurrent topology edit.
+func cloneLabDoc(in *lab.Lab) *lab.Lab {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Nodes = make([]lab.Node, len(in.Nodes))
+	for i, n := range in.Nodes {
+		out.Nodes[i] = n
+		if n.Image != nil {
+			image := *n.Image
+			out.Nodes[i].Image = &image
+		}
+		if n.Config != nil {
+			out.Nodes[i].Config = make(map[string]json.RawMessage, len(n.Config))
+			for key, raw := range n.Config {
+				out.Nodes[i].Config[key] = append(json.RawMessage(nil), raw...)
+			}
+		}
+	}
+	out.Links = make([]lab.Link, len(in.Links))
+	for i, link := range in.Links {
+		out.Links[i] = link
+		out.Links[i].Endpoints = append([]lab.Endpoint(nil), link.Endpoints...)
+		if link.Capture != nil {
+			capture := *link.Capture
+			out.Links[i].Capture = &capture
+		}
+		out.Links[i].Fault = cloneLinkFault(link.Fault)
+	}
+	return &out
+}
+
+func (ll *loadedLab) docSnapshot() *lab.Lab {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	return cloneLabDoc(ll.doc)
+}
+
+func (ll *loadedLab) setLinkFault(id int, fault *lab.LinkFault) bool {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	for i := range ll.doc.Links {
+		if ll.doc.Links[i].ID == id {
+			ll.doc.Links[i].Fault = cloneLinkFault(fault)
+			return true
+		}
+	}
+	return false
+}
+
+func (ll *loadedLab) staticTapsSnapshot() map[int]map[string]ifaceTap {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	out := make(map[int]map[string]ifaceTap, len(ll.staticTaps))
+	for id, byIface := range ll.staticTaps {
+		out[id] = make(map[string]ifaceTap, len(byIface))
+		for iface, tap := range byIface {
+			out[id][iface] = tap
+		}
+	}
+	return out
 }
 
 // stopAll stops every running node.
@@ -210,10 +294,26 @@ func (ll *loadedLab) stopAll() {
 }
 
 // findNode returns the lab node document by id.
+//
+// It takes ll.mu, so it MUST NOT be called from inside an ll.mu critical
+// section — sync.Mutex is not reentrant, and doing so is a guaranteed
+// self-deadlock (findings #10 and #12). A caller already holding ll.mu uses
+// findNodeLocked instead.
 func (ll *loadedLab) findNode(id int) *lab.Node {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
+	return ll.findNodeLocked(id)
+}
+
+// findNodeLocked is findNode's lock-already-held variant: the caller MUST hold
+// ll.mu. Added for finding #12 (syncPCNode needed the node document and the
+// runtime record read atomically under one ll.mu section, and calling findNode
+// there deadlocked the stop path).
+func (ll *loadedLab) findNodeLocked(id int) *lab.Node {
 	for i := range ll.doc.Nodes {
 		if ll.doc.Nodes[i].ID == id {
-			return &ll.doc.Nodes[i]
+			n := cloneLabDoc(&lab.Lab{Nodes: []lab.Node{ll.doc.Nodes[i]}}).Nodes[0]
+			return &n
 		}
 	}
 	return nil
@@ -221,9 +321,12 @@ func (ll *loadedLab) findNode(id int) *lab.Node {
 
 // findLink returns the lab link document by id.
 func (ll *loadedLab) findLink(id int) *lab.Link {
+	ll.mu.Lock()
+	defer ll.mu.Unlock()
 	for i := range ll.doc.Links {
 		if ll.doc.Links[i].ID == id {
-			return &ll.doc.Links[i]
+			link := cloneLabDoc(&lab.Lab{Links: []lab.Link{ll.doc.Links[i]}}).Links[0]
+			return &link
 		}
 	}
 	return nil

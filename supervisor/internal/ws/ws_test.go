@@ -229,14 +229,19 @@ func TestWriteMessageRoundTrip(t *testing.T) {
 }
 
 func TestAcceptHandshake(t *testing.T) {
-	var gotConn *Conn
+	// Accept flushes the 101 response to the wire before it returns, so the
+	// client below can finish reading the handshake while the handler
+	// goroutine has not yet stored its Conn. Hand the Conn over a channel and
+	// wait for it instead of racing on a shared variable.
+	conns := make(chan *Conn, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := Accept(w, r)
 		if err != nil {
 			t.Errorf("Accept: %v", err)
+			close(conns)
 			return
 		}
-		gotConn = c
+		conns <- c
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -283,7 +288,12 @@ func TestAcceptHandshake(t *testing.T) {
 	if acceptHeader == "" || !bytes.Contains([]byte(acceptHeader), []byte(want)) {
 		t.Fatalf("Sec-WebSocket-Accept = %q, want containing %q", acceptHeader, want)
 	}
-	if gotConn == nil {
-		t.Fatal("Accept did not produce a Conn")
+	select {
+	case gotConn := <-conns:
+		if gotConn == nil {
+			t.Fatal("Accept did not produce a Conn")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Accept to produce a Conn")
 	}
 }

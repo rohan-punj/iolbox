@@ -121,15 +121,22 @@ func (s *Server) cancelFaultTimer(ll *loadedLab, linkID int) {
 
 func (s *Server) cancelFaultTimersForNode(ll *loadedLab, nodeID int) {
 	ll.mu.Lock()
-	for _, l := range ll.doc.Links {
+	doc := cloneLabDoc(ll.doc)
+	ll.mu.Unlock()
+	var linkIDs []int
+	for _, l := range doc.Links {
 		for _, ep := range l.Endpoints {
 			if ep.Node == nodeID {
-				cancelFaultTimerLocked(ll, l.ID)
+				linkIDs = append(linkIDs, l.ID)
 				break
 			}
 		}
 	}
-	ll.mu.Unlock()
+	for _, linkID := range linkIDs {
+		ll.mu.Lock()
+		cancelFaultTimerLocked(ll, linkID)
+		ll.mu.Unlock()
+	}
 }
 
 func (s *Server) emitLinkFault(ll *loadedLab, linkID int, reason string) {
@@ -161,14 +168,15 @@ func (ll *loadedLab) activateInitialFaults() []int {
 }
 
 func (s *Server) linkFaultSupported(ll *loadedLab, l *lab.Link) (bool, string) {
-	if !isFabricLink(l, fabricNodes(ll.doc)) {
+	doc := ll.docSnapshot()
+	if !isFabricLink(l, fabricNodes(doc)) {
 		return false, "link is not an Ethernet-realizable fabric link"
 	}
-	taps := ll.staticTaps
+	taps := ll.staticTapsSnapshot()
 	if len(taps) == 0 {
 		// Fault definitions may be edited after lab.load but before the first
 		// node.start, while the normal static-tap refresh has not run yet.
-		taps = computeStaticTaps(ll.doc, currentUID())
+		taps = computeStaticTaps(doc, currentUID())
 	}
 	for _, ep := range l.Endpoints {
 		n := ll.findNode(ep.Node)
@@ -189,6 +197,11 @@ func (s *Server) scheduleFaultExpiry(ll *loadedLab, linkID int, fault *lab.LinkF
 		return
 	}
 	t := time.AfterFunc(after, func() {
+		s.labMu.Lock()
+		defer s.labMu.Unlock()
+		if !s.isCurrentLab(ll) {
+			return
+		}
 		ll.mu.Lock()
 		current, ok := ll.linkFaults[linkID]
 		if !ok || current.Fault != fault {
@@ -198,9 +211,25 @@ func (s *Server) scheduleFaultExpiry(ll *loadedLab, linkID int, fault *lab.LinkF
 		current.Timer = nil
 		current.Active = false
 		ll.linkFaults[linkID] = current
-		link := ll.findLink(linkID)
 		ll.mu.Unlock()
+		// findLink takes ll.mu itself, so it MUST be called after the unlock:
+		// sync.Mutex is not reentrant and calling it inside the section above
+		// deadlocked this goroutine while it still held ll.mu and (via the
+		// deferred unlock) s.labMu, wedging the whole control plane.
+		link := ll.findLink(linkID)
 		if link == nil {
+			return
+		}
+		// isCurrentLab above only proves ll is still THIS server's lab. The tap
+		// and bridge names clearFaultEffect operates on are process-global and
+		// derived from the lab document alone, so another lab can legitimately own
+		// the devices behind those names by now (finding #9). Never rewire or
+		// clear qdiscs on someone else's device: drop this lab's own fault state
+		// (already done above) and leave the kernel alone.
+		if tap, foreign := linkTapClaimedElsewhere(ll, link); foreign {
+			log.Printf("fabric: link %d: scheduled fault restore skipped: tap %s is owned by another lab", linkID, tap)
+			notifyFaultTimerSkip(linkID, tap)
+			s.emitLinkFault(ll, linkID, "restored (devices are owned by another lab; kernel state left untouched)")
 			return
 		}
 		if err := s.clearFaultEffect(ll, link); err != nil {

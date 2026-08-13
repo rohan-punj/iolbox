@@ -124,3 +124,43 @@ func TestInstanceIDConsistentAcrossArgvNetmapNvram(t *testing.T) {
 		t.Fatalf("nvram filename = %q, want nvram_00001 (instance id)", fn)
 	}
 }
+
+// TestRefreshFabricDropsRemovedNodeTaps pins the finding-1 invariant that the
+// static-tap plan is recomputed from the current node set, not from stale
+// runtime history. A subsequent node start therefore cannot rebind a survivor
+// to an orphaned removed-node identity.
+func TestRefreshFabricDropsRemovedNodeTaps(t *testing.T) {
+	doc := &lab.Lab{
+		Version: 1,
+		ID:      "tap-plan",
+		Nodes:   []lab.Node{iolNode(1), iolNode(2), iolNode(3)},
+	}
+	s := newTestServer()
+	ll := newLoadedLab(doc, t.TempDir())
+	s.refreshFabric(ll)
+	initial := ll.staticTapsSnapshot()
+	if len(initial) != 3 {
+		t.Fatalf("initial static tap node count = %d, want 3", len(initial))
+	}
+
+	ll.mu.Lock()
+	ll.doc.Nodes = append(ll.doc.Nodes[:1], ll.doc.Nodes[2])
+	ll.mu.Unlock()
+	s.refreshFabric(ll)
+	current := ll.staticTapsSnapshot()
+	if len(current) != 2 {
+		t.Fatalf("current static tap node count = %d, want 2", len(current))
+	}
+	if _, ok := current[2]; ok {
+		t.Fatal("removed node 2 still has static taps")
+	}
+	seen := map[string]bool{}
+	for id, byIface := range current {
+		for iface, tap := range byIface {
+			if tap.tapName == "" || seen[tap.tapName] {
+				t.Fatalf("survivor %d %s has duplicate/empty tap identity: %+v", id, iface, tap)
+			}
+			seen[tap.tapName] = true
+		}
+	}
+}

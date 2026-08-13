@@ -15,6 +15,7 @@ import (
 // no kernel objects are created; these are no-ops.
 
 func (s *Server) startFabric(ll *loadedLab, ids []int) error          { ll.activateInitialFaults(); return nil }
+func (s *Server) evictStaticTaps(ll *loadedLab, names []string)       {}
 func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error   { return nil }
 func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error { return nil }
 func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link)         {}
@@ -41,6 +42,7 @@ func (s *Server) fabricLinkTapDevs(ll *loadedLab, l *lab.Link) []string {
 
 func (s *Server) fabricLinkEndpointDevs(ll *loadedLab, l *lab.Link) []endpointDev {
 	var out []endpointDev
+	staticTaps := ll.staticTapsSnapshot()
 	for endpointIndex, ep := range l.Endpoints {
 		n := ll.findNode(ep.Node)
 		switch {
@@ -55,7 +57,7 @@ func (s *Server) fabricLinkEndpointDevs(ll *loadedLab, l *lab.Link) []endpointDe
 				out = append(out, endpointDev{EndpointIndex: endpointIndex, Dev: tool.HostVethName(ep.Node)})
 			}
 		default:
-			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+			if t, ok := tapForEndpoint(staticTaps, ep); ok {
 				out = append(out, endpointDev{EndpointIndex: endpointIndex, Dev: t.tapName})
 			}
 		}

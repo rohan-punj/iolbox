@@ -39,15 +39,17 @@ type Process struct {
 	Spec    Spec
 	Machine *Machine
 
-	mu          sync.Mutex
-	cmd         *exec.Cmd
-	ptmx        *os.File     // pty master (IOL only); the node's console I/O flows through this
-	ln          net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
-	hub         *consoleHub  // multi-client console fan-out over ptmx (IOL only)
-	consoleConn io.Closer    // private AF_UNIX console source (PC only)
-	pgid        int          // process group id to kill on Stop (VPCS: the daemonized group)
-	done        chan struct{}
-	stopped     bool // true once Stop() has been called on THIS instance — see wait()/ReapDecision
+	mu           sync.Mutex
+	cmd          *exec.Cmd
+	ptmx         *os.File     // pty master (IOL only); the node's console I/O flows through this
+	ln           net.Listener // telnet console listener on Spec.ConsolePort (IOL only)
+	hub          *consoleHub  // multi-client console fan-out over ptmx (IOL only)
+	consoleConn  io.Closer    // private AF_UNIX console source (PC only)
+	pgid         int          // process group id to kill on Stop (VPCS: the daemonized group)
+	done         chan struct{}
+	waitDone     chan struct{}
+	waitDoneOnce sync.Once
+	stopped      bool // true once Stop() has been called on THIS instance — see wait()/ReapDecision
 }
 
 // Spawn launches the node described by spec, dispatching to the console model
@@ -133,13 +135,14 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 	}
 
 	p := &Process{
-		Spec:    spec,
-		Machine: m,
-		cmd:     cmd,
-		ptmx:    ptmx,
-		ln:      ln,
-		hub:     newConsoleHub(ptmx, spec.Name),
-		done:    make(chan struct{}),
+		Spec:     spec,
+		Machine:  m,
+		cmd:      cmd,
+		ptmx:     ptmx,
+		ln:       ln,
+		hub:      newConsoleHub(ptmx, spec.Name),
+		done:     make(chan struct{}),
+		waitDone: make(chan struct{}),
 	}
 	go p.serveConsole()
 	go p.wait()
@@ -191,17 +194,19 @@ func spawnVPCS(spec Spec, m *Machine) (*Process, error) {
 	pgid := cmd.Process.Pid // Setpgid makes the child its own group leader (pgid == pid)
 
 	p := &Process{
-		Spec:    spec,
-		Machine: m,
-		cmd:     cmd,
-		pgid:    pgid,
-		done:    make(chan struct{}),
+		Spec:     spec,
+		Machine:  m,
+		cmd:      cmd,
+		pgid:     pgid,
+		done:     make(chan struct{}),
+		waitDone: make(chan struct{}),
 	}
 
 	// Reap the launcher: vpcs daemonizes, so this returns almost immediately with
 	// success. Do NOT mark the node stopped/crashed on that reap — the real vpcs
 	// lives on in the process group. Readiness is decided by the console port.
 	go func() {
+		defer p.signalWaitDone()
 		_ = cmd.Wait()
 		// VPCS daemonizes, so Wait returns almost immediately and the real
 		// process lives on in the group; this registry entry is only for the
@@ -423,6 +428,7 @@ func (p *Process) serveConsole() {
 // stop-then-restart of the node races this reaper against the new spawn; see
 // ReapDecision's doc for why that makes the live-state check wrong).
 func (p *Process) wait() {
+	defer p.signalWaitDone()
 	err := p.cmd.Wait()
 	tool.Registry.Remove(p.cmd.Process.Pid)
 	p.mu.Lock()
@@ -432,6 +438,80 @@ func (p *Process) wait() {
 		p.Machine.To(st)
 	}
 	p.teardown()
+}
+
+// stopWaitTimeout bounds how long Stop blocks waiting for the killed process
+// to actually leave the system. It mirrors tool.endpointStopTimeout's shape:
+// long enough that a SIGKILLed process is always observed gone (reaping is
+// sub-millisecond in practice), short enough that a wedged uninterruptible
+// process cannot stall a whole-lab stop for more than a few seconds per node.
+const stopWaitTimeout = 3 * time.Second
+
+// signalWaitDone closes waitDone exactly once. Called from every goroutine that
+// owns a cmd.Wait for this Process; processes with no child (NewConsoleBridge,
+// NewProcessForTest) have a nil waitDone and never signal.
+func (p *Process) signalWaitDone() {
+	if p.waitDone != nil {
+		p.waitDoneOnce.Do(func() { close(p.waitDone) })
+	}
+}
+
+// waitForExit blocks until the owning cmd.Wait goroutine has reaped the child,
+// or the timeout expires. Reports whether the exit was observed.
+func (p *Process) waitForExit(timeout time.Duration) bool {
+	if p.waitDone == nil {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-p.waitDone:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// awaitTermination blocks until the just-killed process is genuinely gone from
+// the system, bounded by timeout. Reports whether termination was observed.
+//
+// The two console models need different evidence:
+//
+//   - IOL (pgid == 0): the spawned process IS the child, so the reaping
+//     goroutine's cmd.Wait return is authoritative — wait on waitDone.
+//   - VPCS (pgid > 0): the launcher was already reaped at spawn time (vpcs
+//     forks and setsid()s away), so waitDone closed seconds ago and proves
+//     nothing about the surviving daemon. The restart-relevant fact is instead
+//     that nothing still holds the node's console port — that bind is exactly
+//     what a fresh vpcs for the same node would fail on with "address already
+//     in use", which is the overlap this wait exists to prevent.
+func (p *Process) awaitTermination(pgid, consolePort int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	if pgid <= 0 {
+		return p.waitForExit(timeout)
+	}
+	for {
+		if !vpcsResidue(consolePort) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// vpcsResidue reports whether any process still holds the node's console port,
+// either as the listening socket's owner or as a vpcs argv carrying "-p port".
+// Both checks are the same evidence killVPCS uses to decide what to kill.
+func vpcsResidue(port int) bool {
+	if port <= 0 {
+		return false
+	}
+	if pid := pidListeningOn(port); pid > 0 {
+		return true
+	}
+	return len(pidsWithVPCSConsolePort(port)) > 0
 }
 
 // teardown closes the pty master, the console listener, and shuts down the
@@ -536,6 +616,13 @@ func (p *Process) PID() int {
 // pty + console listener. For a daemonized VPCS (pgid set) it kills the whole
 // process group so the detached vpcs child dies too; killing the launcher pid
 // alone would leave an orphan.
+//
+// Stop does not return until the killed process is observed gone (bounded by
+// stopWaitTimeout) — SIGKILL delivery is asynchronous, so returning right after
+// the signal let node.restart's immediate startNodes overlap the old and new
+// process for the same instance, racing them for the same NETIO socket
+// directory and console port. Callers (stopNode, and through it lab.stop and
+// node.restart) therefore get a genuine happens-before edge for free.
 func (p *Process) Stop() error {
 	p.mu.Lock()
 	cmd := p.cmd
@@ -556,5 +643,6 @@ func (p *Process) Stop() error {
 		err = cmd.Process.Kill()
 	}
 	p.teardown()
+	p.awaitTermination(pgid, p.Spec.ConsolePort, stopWaitTimeout)
 	return err
 }

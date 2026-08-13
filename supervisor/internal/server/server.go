@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -102,6 +103,14 @@ type Server struct {
 	mu     sync.Mutex
 	images map[string]image.Info // by id
 	lab    *loadedLab
+
+	// labMu serializes every control-plane operation that can observe or mutate
+	// the loaded lab. Dispatch runs one goroutine per connection, and fault
+	// timers plus the console/capture bridge call paths can enter the same state
+	// outside that dispatcher. Keeping one lock at this boundary prevents two
+	// lab lifecycles from interleaving kernel operations or publishing one lab
+	// before the previous lab has finished tearing down.
+	labMu sync.Mutex
 
 	// cacheMu serializes read-modify-write cycles on the sidecar image
 	// fingerprint cache in ImageDir (see imagescan.go).
@@ -204,37 +213,58 @@ func (s *Server) StopRuntime() {
 
 // register wires every verb to its handler.
 func (s *Server) register() {
-	s.disp.Handle("hello", s.handleHello)
-	s.disp.Handle("tool.listPacks", s.handleToolListPacks)
-	s.disp.Handle("pc.syncState", s.handlePCSyncState)
-	s.disp.Handle("image.list", s.handleImageList)
-	s.disp.Handle("image.register", s.handleImageRegister)
-	s.disp.Handle("lab.load", s.handleLabLoad)
-	s.disp.Handle("lab.saveDoc", s.handleLabSaveDoc)
-	s.disp.Handle("lab.listDocs", s.handleLabListDocs)
-	s.disp.Handle("lab.getDoc", s.handleLabGetDoc)
-	s.disp.Handle("lab.deleteDoc", s.handleLabDeleteDoc)
-	s.disp.Handle("lab.start", s.handleLabStart)
-	s.disp.Handle("lab.stop", s.handleLabStop)
-	s.disp.Handle("lab.wipe", s.handleLabWipe)
-	s.disp.Handle("lab.reap", s.handleLabReap)
-	s.disp.Handle("node.add", s.handleNodeAdd)
-	s.disp.Handle("node.remove", s.handleNodeRemove)
-	s.disp.Handle("node.start", s.handleNodeStart)
-	s.disp.Handle("node.stop", s.handleNodeStop)
-	s.disp.Handle("node.restart", s.handleNodeRestart)
-	s.disp.Handle("node.setImage", s.handleNodeSetImage)
-	s.disp.Handle("node.macs", s.handleNodeMACs)
-	s.disp.Handle("link.add", s.handleLinkAdd)
-	s.disp.Handle("link.remove", s.handleLinkRemove)
-	s.disp.Handle("link.setFault", s.handleLinkSetFault)
-	s.disp.Handle("capture.start", s.handleCaptureStart)
-	s.disp.Handle("capture.stop", s.handleCaptureStop)
-	s.disp.Handle("config.save", s.handleConfigExtract)
-	s.disp.Handle("config.extract", s.handleConfigExtract)
-	s.disp.Handle("painter.collect", s.handlePainterCollect)
-	s.disp.Handle("painter.stpVlans", s.handlePainterSTPVlans)
-	s.disp.Handle("status", s.handleStatus)
+	// The dispatcher is intentionally shared by all control connections. Wrap
+	// every handler, including reads, because several read handlers return
+	// pointers into loaded-lab runtime state and must not race a topology or
+	// lifecycle mutation halfway through a response. Non-lab operations are
+	// cheap and using the same wrapper keeps the registration audit-proof.
+	handle := func(op string, h protocol.Handler) { s.disp.Handle(op, s.serializedHandler(h)) }
+	handle("hello", s.handleHello)
+	handle("tool.listPacks", s.handleToolListPacks)
+	handle("pc.syncState", s.handlePCSyncState)
+	handle("image.list", s.handleImageList)
+	handle("image.register", s.handleImageRegister)
+	handle("lab.load", s.handleLabLoad)
+	handle("lab.saveDoc", s.handleLabSaveDoc)
+	handle("lab.listDocs", s.handleLabListDocs)
+	handle("lab.getDoc", s.handleLabGetDoc)
+	handle("lab.deleteDoc", s.handleLabDeleteDoc)
+	handle("lab.start", s.handleLabStart)
+	handle("lab.stop", s.handleLabStop)
+	handle("lab.wipe", s.handleLabWipe)
+	handle("lab.reap", s.handleLabReap)
+	handle("node.add", s.handleNodeAdd)
+	handle("node.remove", s.handleNodeRemove)
+	handle("node.start", s.handleNodeStart)
+	handle("node.stop", s.handleNodeStop)
+	handle("node.restart", s.handleNodeRestart)
+	handle("node.setImage", s.handleNodeSetImage)
+	handle("node.macs", s.handleNodeMACs)
+	handle("link.add", s.handleLinkAdd)
+	handle("link.remove", s.handleLinkRemove)
+	handle("link.setFault", s.handleLinkSetFault)
+	handle("capture.start", s.handleCaptureStart)
+	handle("capture.stop", s.handleCaptureStop)
+	handle("config.save", s.handleConfigExtract)
+	handle("config.extract", s.handleConfigExtract)
+	handle("painter.collect", s.handlePainterCollect)
+	handle("painter.stpVlans", s.handlePainterSTPVlans)
+	handle("status", s.handleStatus)
+}
+
+func (s *Server) serializedHandler(h protocol.Handler) protocol.Handler {
+	return func(raw json.RawMessage) (any, error) {
+		s.labMu.Lock()
+		defer s.labMu.Unlock()
+		return h(raw)
+	}
+}
+
+func (s *Server) isCurrentLab(ll *loadedLab) bool {
+	s.mu.Lock()
+	current := s.lab
+	s.mu.Unlock()
+	return current == ll
 }
 
 // Dispatcher exposes the verb dispatcher (used by tests).
@@ -245,6 +275,8 @@ func (s *Server) Dispatcher() *protocol.Dispatcher { return s.disp }
 // (internal/wsbridge) to dial the right local port for GET /console/{nodeId}.
 // ok is false if no lab is loaded or the node id is unknown.
 func (s *Server) ConsolePort(nodeID int) (port int, ok bool) {
+	s.labMu.Lock()
+	defer s.labMu.Unlock()
 	s.mu.Lock()
 	ll := s.lab
 	s.mu.Unlock()
@@ -267,6 +299,8 @@ func (s *Server) ConsolePort(nodeID int) (port int, ok bool) {
 // node.Process doc comment). Mirrors ConsolePort's existing precedent for
 // crossing the internal/node boundary into the server/wsbridge layer.
 func (s *Server) ConsoleSubscribe(nodeID int) *node.Subscription {
+	s.labMu.Lock()
+	defer s.labMu.Unlock()
 	s.mu.Lock()
 	ll := s.lab
 	s.mu.Unlock()
@@ -288,6 +322,8 @@ func (s *Server) ConsoleSubscribe(nodeID int) *node.Subscription {
 // lab's capture bookkeeping (ll.captures), which mirrors the relay's own
 // CapturePort().
 func (s *Server) CapturePort(linkID int) (port int, ok bool) {
+	s.labMu.Lock()
+	defer s.labMu.Unlock()
 	s.mu.Lock()
 	ll := s.lab
 	s.mu.Unlock()
@@ -410,6 +446,8 @@ func (s *Server) ServeConn(ctx context.Context, rwc io.ReadWriteCloser) {
 
 // shutdown stops all nodes and tears down the fabric on server exit.
 func (s *Server) shutdown() {
+	s.labMu.Lock()
+	defer s.labMu.Unlock()
 	s.mu.Lock()
 	ll := s.lab
 	s.mu.Unlock()

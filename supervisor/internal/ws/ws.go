@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 // magicGUID is the fixed GUID used to compute Sec-WebSocket-Accept (RFC 6455 §1.3).
@@ -142,6 +143,12 @@ func newConn(nc net.Conn, br *bufio.Reader) *Conn {
 
 // RemoteAddr returns the underlying connection's remote address.
 func (c *Conn) RemoteAddr() net.Addr { return c.nc.RemoteAddr() }
+
+// SetWriteDeadline bounds a server-to-client frame write. Event fan-out uses
+// this to evict a peer whose TCP receive window has stopped making progress.
+func (c *Conn) SetWriteDeadline(deadline time.Time) error {
+	return c.nc.SetWriteDeadline(deadline)
+}
 
 // Close closes the underlying TCP connection without a close handshake. Use
 // WriteClose to send a close frame first when a graceful shutdown is wanted.

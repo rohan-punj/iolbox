@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 )
 
 // Config configures one netio<->tap bridge: the IOL netio unix-domain socket on
@@ -129,5 +131,54 @@ func runPump(ctx context.Context, read func() ([]byte, error), write func([]byte
 			}
 			return
 		}
+	}
+}
+
+// runPumps owns the lifecycle boundary for two bridge directions. The first
+// pump error cancels its sibling and invokes stop so a blocking fd read cannot
+// leave the bridge half-alive. It is platform-independent so lifecycle tests
+// can use in-memory fakes instead of requiring /dev/net/tun.
+func runPumps(ctx context.Context, stop func(), pumps ...func(context.Context, chan<- error)) error {
+	pumpCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, len(pumps))
+	var wg sync.WaitGroup
+	wg.Add(len(pumps))
+	for _, pump := range pumps {
+		go func(p func(context.Context, chan<- error)) {
+			defer wg.Done()
+			p(pumpCtx, errs)
+		}(pump)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	var firstErr error
+	select {
+	case firstErr = <-errs:
+	case <-done:
+	case <-pumpCtx.Done():
+	}
+	cancel()
+	if stop != nil {
+		stop()
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		// A broken platform fd must not strand the supervisor forever.
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	select {
+	case err := <-errs:
+		return err
+	default:
+		return nil
 	}
 }

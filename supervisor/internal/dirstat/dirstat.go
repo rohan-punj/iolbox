@@ -23,10 +23,21 @@ package dirstat
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
 )
+
+// closeDrainTimeout bounds how long Close waits for the read goroutines to
+// return after the stop signal. It is defense in depth ONLY: the read loops use
+// a bounded socket receive timeout (see the linux build) so they observe the
+// stop signal within recvTimeout, which is an order of magnitude below this
+// budget. It exists because Close runs inside the server's serialized control
+// path (teardownFabric -> handleLabLoad under Server.labMu), where a permanently
+// blocked Close wedges the ENTIRE control plane for every client, not just this
+// link's stats.
+const closeDrainTimeout = 3 * time.Second
 
 // EndpointDev binds a tap device to the LAB DOCUMENT endpoint index it
 // belongs to. The device list is sparse: a stopped or not-yet-attached
@@ -133,10 +144,17 @@ type Classifier struct {
 	candidates map[int]attribCandidate
 	conflicts  []conflictMAC
 
-	// closer/wg are populated only by the linux implementation; the stub never
-	// sets them so its Close is a no-op.
-	closer func()
-	wg     *sync.WaitGroup
+	// stopRead/closeFDs/wg are populated only by the linux implementation; the
+	// stub never sets them so its Close is a no-op.
+	//
+	// The two hooks are deliberately separate and ordered: stopRead only
+	// SIGNALS the read loops, and closeFDs releases the sockets afterwards.
+	// closeFDs must never run while a read loop is still live — the loop would
+	// then be sitting in recvfrom on a descriptor number the kernel is free to
+	// hand back out for an unrelated file.
+	stopRead func()
+	closeFDs func()
+	wg       *sync.WaitGroup
 }
 
 func newClassifier(devs []EndpointDev) *Classifier {
@@ -406,15 +424,54 @@ func Direction(prev, cur Counters, secs float64, round func(float64) float64) (
 }
 
 // Close stops the read goroutines and closes the sockets. Idempotent and
-// nil-safe (a stub / non-fabric Classifier is nil).
+// nil-safe (a stub / non-fabric Classifier is nil). It is guaranteed to return
+// within closeDrainTimeout.
 func (c *Classifier) Close() {
 	if c == nil {
 		return
 	}
-	if c.closer != nil {
-		c.closer()
+	if !c.closeDrain(closeDrainTimeout) {
+		// Should be unreachable: the read loops poll the stop signal on a
+		// bounded receive timeout. Leaking the sockets is strictly better than
+		// either blocking the caller forever (it holds the server's lab lock)
+		// or closing a descriptor a live goroutine is still reading from.
+		log.Printf("dirstat: read loops did not exit within %s; sockets left open", closeDrainTimeout)
 	}
-	if c.wg != nil {
-		c.wg.Wait()
+}
+
+// closeDrain signals the read loops, waits up to timeout for them to return,
+// and releases the sockets only once they have. It reports whether the loops
+// actually drained. Split out of Close so the ordering guarantee is testable
+// without a real socket.
+func (c *Classifier) closeDrain(timeout time.Duration) bool {
+	if c.stopRead != nil {
+		c.stopRead()
+	}
+	if !waitTimeout(c.wg, timeout) {
+		return false
+	}
+	if c.closeFDs != nil {
+		c.closeFDs()
+	}
+	return true
+}
+
+// waitTimeout waits for wg with a hard bound, reporting whether it drained.
+func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	if wg == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }

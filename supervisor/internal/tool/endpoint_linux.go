@@ -426,7 +426,15 @@ func (e *Endpoint) endpointWatchLiveness() {
 }
 
 func (e *Endpoint) endpointStopLiveness() {
-	e.endpointLivenessOnce.Do(func() { close(e.endpointLivenessStop) })
+	e.endpointLivenessOnce.Do(func() {
+		// Guard the nil channel of a zero-value Endpoint: server tests build
+		// nodeRuntimes with &tool.Endpoint{} (no Start), and Stop on one must
+		// be a safe no-op rather than a close(nil) panic. A started endpoint
+		// always has the channel (set in Start).
+		if e.endpointLivenessStop != nil {
+			close(e.endpointLivenessStop)
+		}
+	})
 }
 
 func (e *Endpoint) endpointCageNeedsKill() bool {

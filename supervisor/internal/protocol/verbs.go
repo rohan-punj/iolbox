@@ -160,7 +160,17 @@ type StartedNode struct {
 
 // StartResult is the lab.start/node.start response payload.
 type StartResult struct {
-	Started []StartedNode `json:"started"`
+	Started []StartedNode  `json:"started"`
+	Failed  []StartFailure `json:"failed,omitempty"`
+}
+
+// StartFailure reports a node that was attempted but could not be started.
+// Bulk starts return successful and failed nodes together so one bad node does
+// not hide the progress made by the rest of the request.
+type StartFailure struct {
+	Node  int    `json:"node"`
+	State string `json:"state,omitempty"`
+	Error string `json:"error"`
 }
 
 // NodeArgs targets a single node in a lab.
@@ -170,42 +180,33 @@ type NodeArgs struct {
 }
 
 // NodeMACsArgs requests the current per-interface MAC facts for one node.
-// Learned is reserved for the opt-in learned-IOL display and defaults false.
 type NodeMACsArgs struct {
-	Node    int  `json:"node"`
-	Learned bool `json:"learned"`
+	Node int `json:"node"`
 }
 
 // NodeMAC is one interface's link-layer address for a node, with the PROVENANCE
 // that licenses reporting it. There is no reading of this struct that yields a
-// MAC the supervisor did not either compute from a flag it passed, read from the
-// kernel, or positively learn from observed traffic.
+// MAC the supervisor did not either compute from a flag it passed or read from
+// the node/runtime.
 //
 // Source:
 //
 //	"derived" - computed from an argument this supervisor passed to the node
 //	            (VPCS -m; see node.VPCSMAC). Valid even while the node is stopped.
-//	"read"    - read from the kernel for a device this supervisor created
-//	            (a netns node's GuestIface). Requires the node to be running.
-//	"learned" - observed as the single source MAC on this endpoint's tap
-//	            (P6 Batch 7's dirstat attribution). Requires traffic AND the
-//	            learned-MAC DISPLAY opt-in. The supervisor learns either way;
-//	            the opt-in gates only whether this handler reports it.
+//	"read"    - directly read from the running node/runtime: the kernel for a
+//	            device this supervisor created, or IOS console `show interfaces`
+//	            for an IOL node.
 //	""        - nothing is known; State says why.
 //
 // State:
 //
 //	"known"     - MAC is set and is the interface's address.
 //	"unknown"   - not knowable right now; Reason carries a short human phrase.
-//	"ambiguous" - the endpoint relays for other devices, so no single address can
-//	              be attributed to it (11b only; see P6 plan §7.3.2).
-//	"disabled"  - knowable in principle, but the learned-MAC display opt-in is
-//	              off (11b only). NOT a statement that learning is off.
 type NodeMAC struct {
 	Interface string `json:"interface"`        // the lab document's spelling: e0/0, eth0, eth1
 	MAC       string `json:"mac,omitempty"`    // lowercase colon-separated; set iff State=="known"
-	Source    string `json:"source,omitempty"` // "derived" | "read" | "learned"
-	State     string `json:"state"`            // "known" | "unknown" | "ambiguous" | "disabled"
+	Source    string `json:"source,omitempty"` // "derived" | "read"
+	State     string `json:"state"`            // "known" | "unknown"
 	Reason    string `json:"reason,omitempty"` // short phrase for the UI, e.g. "node not running"
 }
 

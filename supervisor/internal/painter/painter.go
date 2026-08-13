@@ -1,6 +1,7 @@
 // Package painter parses live IOS 17.x `show` output into structured,
 // canvas-mappable protocol-decision data for the Topology Painter overlays
-// (STP / OSPF / EIGRP / BGP). Everything here is a pure string->struct
+// (STP / OSPF / EIGRP / BGP) and other supervisor live-state features.
+// Everything here is a pure string->struct
 // transform with NO device I/O, so the parsers are unit-testable on every
 // platform without a running node. The device-touching console scrape that
 // feeds these parsers lives in the server package behind //go:build linux.

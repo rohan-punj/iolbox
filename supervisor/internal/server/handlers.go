@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rohanpunj/iolbox/supervisor/internal/dirstat"
 	"github.com/rohanpunj/iolbox/supervisor/internal/egress"
 	"github.com/rohanpunj/iolbox/supervisor/internal/extnet"
 	"github.com/rohanpunj/iolbox/supervisor/internal/image"
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
 	"github.com/rohanpunj/iolbox/supervisor/internal/netmap"
 	"github.com/rohanpunj/iolbox/supervisor/internal/node"
+	"github.com/rohanpunj/iolbox/supervisor/internal/painter"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
@@ -176,7 +176,6 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 
 	s.mu.Lock()
 	old := s.lab
-	s.lab = ll
 	s.mu.Unlock()
 
 	// Stop the outgoing lab's nodes BEFORE dropping the reference. Without this,
@@ -187,15 +186,25 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 	// release its console ports, and release its capture ports — the old lab is
 	// dropped without a rebuild, so nothing else would ever return those ports.
 	if old != nil {
-		for id := range old.nodes {
+		for _, id := range old.nodeIDs() {
 			s.stopNode(old, id)
 		}
 		s.teardownFabric(old)
-		for _, nr := range old.nodes {
-			s.consolePorts.Release(nr.consolePort)
+		for _, id := range old.nodeIDs() {
+			if nr := old.get(id); nr != nil {
+				s.consolePorts.Release(nr.consolePort)
+			}
 		}
 		s.releaseCaptures(old, false)
 	}
+
+	// Publish only after the outgoing lab has released its children and
+	// unscoped kernel objects. Tap/bridge names are not lab-scoped, so publishing
+	// earlier allowed a concurrent start of the new lab to have this teardown
+	// delete the new lab's devices by name.
+	s.mu.Lock()
+	s.lab = ll
+	s.mu.Unlock()
 
 	return protocol.LabLoadResult{LabID: doc.ID, Nodes: nodes, Warnings: warnings}, nil
 }
@@ -219,9 +228,14 @@ func (s *Server) tryAdoptLoad(doc *lab.Lab) (protocol.LabLoadResult, bool) {
 	s.mu.Lock()
 	ll := s.lab
 	s.mu.Unlock()
-	if ll == nil || ll.doc.ID != doc.ID {
+	if ll == nil {
 		return protocol.LabLoadResult{}, false
 	}
+	current := ll.docSnapshot()
+	if current.ID != doc.ID {
+		return protocol.LabLoadResult{}, false
+	}
+	ll.mu.Lock()
 	anyUp := false
 	for _, nr := range ll.nodes {
 		if nr.machine.State() != node.StateStopped {
@@ -229,10 +243,11 @@ func (s *Server) tryAdoptLoad(doc *lab.Lab) (protocol.LabLoadResult, bool) {
 			break
 		}
 	}
+	ll.mu.Unlock()
 	if !anyUp {
 		return protocol.LabLoadResult{}, false
 	}
-	if !sameTopology(ll.doc, doc) {
+	if !sameTopology(current, doc) {
 		return protocol.LabLoadResult{}, false
 	}
 
@@ -363,8 +378,9 @@ func (s *Server) currentLab(labID string) (*loadedLab, error) {
 	if ll == nil {
 		return nil, protocol.NewError(protocol.CodeNotLoaded, "no lab loaded")
 	}
-	if labID != "" && labID != ll.doc.ID {
-		return nil, protocol.Errorf(protocol.CodeNotLoaded, "lab %q is not loaded (current: %q)", labID, ll.doc.ID)
+	current := ll.docSnapshot()
+	if labID != "" && labID != current.ID {
+		return nil, protocol.Errorf(protocol.CodeNotLoaded, "lab %q is not loaded (current: %q)", labID, current.ID)
 	}
 	return ll, nil
 }
@@ -380,7 +396,7 @@ func (s *Server) handleLabStart(raw json.RawMessage) (any, error) {
 	}
 	ids := args.Nodes
 	if ids == nil {
-		for _, n := range ll.doc.Nodes {
+		for _, n := range ll.docSnapshot().Nodes {
 			ids = append(ids, n.ID)
 		}
 	}
@@ -390,7 +406,7 @@ func (s *Server) handleLabStart(raw json.RawMessage) (any, error) {
 	}
 	// Fault state is separate from link.stats and must be replayed even for an
 	// idle/admin-down link that will never generate a stats tick.
-	for _, l := range ll.doc.Links {
+	for _, l := range ll.docSnapshot().Links {
 		if l.Fault != nil {
 			s.emitLinkFault(ll, l.ID, "lab start")
 		}
@@ -410,7 +426,7 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 	all := args.Nodes == nil
 	ids := args.Nodes
 	if ids == nil {
-		for _, n := range ll.doc.Nodes {
+		for _, n := range ll.docSnapshot().Nodes {
 			ids = append(ids, n.ID)
 		}
 	}
@@ -432,7 +448,7 @@ func (s *Server) handleLabStop(raw json.RawMessage) (any, error) {
 		// impairment badge while the lab is stopped; the persisted definition is
 		// still present and will be replayed/applied again only when appropriate at
 		// the next lab.start.
-		for _, l := range ll.doc.Links {
+		for _, l := range ll.docSnapshot().Links {
 			if l.Fault != nil {
 				s.emitLinkFault(ll, l.ID, "lab stop")
 			}
@@ -453,7 +469,7 @@ func (s *Server) handleLabReap(_ json.RawMessage) (any, error) {
 	s.mu.Unlock()
 	reaped := 0
 	if ll != nil {
-		for id := range ll.nodes {
+		for _, id := range ll.nodeIDs() {
 			s.stopNode(ll, id)
 			reaped++
 		}
@@ -479,7 +495,7 @@ func (s *Server) handleLabWipe(raw json.RawMessage) (any, error) {
 	}
 	ids := args.Nodes
 	if ids == nil {
-		for _, n := range ll.doc.Nodes {
+		for _, n := range ll.docSnapshot().Nodes {
 			ids = append(ids, n.ID)
 		}
 	}
@@ -533,6 +549,12 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// stopNode is synchronous all the way down: node.Process.Stop and
+	// tool.Endpoint.Stop each block (bounded) until the killed process is
+	// observed gone, and teardownVPCS/extnet.Close release the tap and UDP
+	// ports before returning. So by the time startNodes runs, the old
+	// instance's NETIO socket dir, console port and tap are genuinely free —
+	// no old/new overlap for the same node id.
 	s.stopNode(ll, args.Node)
 	return s.startNodes(ll, []int{args.Node})
 }
@@ -579,9 +601,38 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 	for _, id := range ids {
 		nr := ll.get(id)
 		if nr == nil {
-			return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
+			err := protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
+			if len(ids) == 1 {
+				return nil, err
+			}
+			out.Failed = append(out.Failed, startFailure(id, nil, err))
+			continue
 		}
 		docNode := ll.findNode(id)
+		if docNode == nil {
+			err := protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
+			if len(ids) == 1 {
+				return nil, err
+			}
+			out.Failed = append(out.Failed, startFailure(id, nil, err))
+			continue
+		}
+		if docNode.Kind == lab.KindIOL || docNode.Kind == lab.KindVPCS {
+			state := nr.machine.State()
+			if nr.proc != nil && (state == node.StateStarting || state == node.StateRunning) {
+				out.Started = append(out.Started, protocol.StartedNode{
+					Node: id, ConsolePort: nr.consolePort, PID: nr.proc.PID(),
+					State: string(state),
+				})
+				continue
+			}
+			// An unexpected exit leaves the Process pointer in the runtime record
+			// until the next start. Do not mistake that stale handle for a live
+			// node; Spawn is allowed to advance crashed/stopped state to starting.
+			if nr.proc != nil {
+				nr.proc = nil
+			}
+		}
 
 		// A nat node is a supervisor-internal tap endpoint, not a spawned
 		// process: start an extnet.Endpoint that owns an fd instead of a
@@ -590,7 +641,11 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		if docNode.Kind == lab.KindNAT {
 			started, err := s.startExtnetNode(ll, docNode, nr)
 			if err != nil {
-				return nil, err
+				if len(ids) == 1 {
+					return nil, err
+				}
+				out.Failed = append(out.Failed, startFailure(id, nr, err))
+				continue
 			}
 			out.Started = append(out.Started, started)
 			continue
@@ -599,7 +654,11 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		if docNode.Kind == lab.KindTool {
 			started, err := s.startToolNode(ll, docNode, nr)
 			if err != nil {
-				return nil, err
+				if len(ids) == 1 {
+					return nil, err
+				}
+				out.Failed = append(out.Failed, startFailure(id, nr, err))
+				continue
 			}
 			out.Started = append(out.Started, started)
 			continue
@@ -608,7 +667,11 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		if docNode.Kind == lab.KindPC {
 			started, err := s.startPCNode(ll, docNode, nr)
 			if err != nil {
-				return nil, err
+				if len(ids) == 1 {
+					return nil, err
+				}
+				out.Failed = append(out.Failed, startFailure(id, nr, err))
+				continue
 			}
 			out.Started = append(out.Started, started)
 			continue
@@ -619,30 +682,66 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		// link time (hot-connect).
 		if docNode.Kind == lab.KindVPCS {
 			if err := s.setupVPCSFabric(ll, nr, docNode); err != nil {
-				return nil, err
+				if len(ids) == 1 {
+					return nil, err
+				}
+				out.Failed = append(out.Failed, startFailure(id, nr, err))
+				continue
 			}
 		}
 
 		spec, err := s.buildSpec(ll, docNode, nr)
 		if err != nil {
-			return nil, err
+			if nr.vtap != nil || nr.vtapName != "" {
+				s.teardownVPCS(nr)
+			}
+			if len(ids) == 1 {
+				return nil, err
+			}
+			out.Failed = append(out.Failed, startFailure(id, nr, err))
+			continue
 		}
 		proc, err := node.Spawn(spec, nr.machine)
 		if err != nil {
-			return nil, protocol.Errorf(protocol.CodeNodeSpawnFailed, "%v", err)
+			if nr.vtap != nil || nr.vtapName != "" {
+				s.teardownVPCS(nr)
+			}
+			spawnErr := protocol.Errorf(protocol.CodeNodeSpawnFailed, "%v", err)
+			if len(ids) == 1 {
+				return nil, spawnErr
+			}
+			out.Failed = append(out.Failed, startFailure(id, nr, spawnErr))
+			continue
 		}
 		nr.proc = proc
 		// The console listener is bound synchronously inside Spawn (before it
 		// returns), so ConsolePort is reachable the moment we get here: the
 		// pty->telnet bridge accepts clients immediately, buffering the live
 		// pty stream. Flip to running and announce the console.
-		nr.machine.To(node.StateRunning)
+		if !nr.machine.To(node.StateRunning) {
+			_ = proc.Stop()
+			nr.proc = nil
+			if nr.vtap != nil || nr.vtapName != "" {
+				s.teardownVPCS(nr)
+			}
+			out.Failed = append(out.Failed, startFailure(id, nr,
+				protocol.Errorf(protocol.CodeNodeSpawnFailed, "node %d exited before becoming running", id)))
+			continue
+		}
 		// Attach a fabric VPCS's tap to its link bridge now (its bridge was created
 		// by startFabric before this node started). No-op for IOL / legacy VPCS /
 		// an unlinked VPCS — link.add attaches it then.
 		if nr.vtap != nil {
 			if err := s.attachFabricForNode(ll, id); err != nil {
-				return nil, err
+				_ = proc.Stop()
+				nr.proc = nil
+				s.teardownVPCS(nr)
+				nr.machine.To(node.StateCrashed)
+				if len(ids) == 1 {
+					return nil, err
+				}
+				out.Failed = append(out.Failed, startFailure(id, nr, err))
+				continue
 			}
 		}
 		s.emit(protocol.EventNodeConsole, protocol.NodeConsoleData{Node: id, ConsolePort: nr.consolePort})
@@ -654,6 +753,14 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		})
 	}
 	return out, nil
+}
+
+func startFailure(id int, nr *nodeRuntime, err error) protocol.StartFailure {
+	failure := protocol.StartFailure{Node: id, Error: err.Error()}
+	if nr != nil && nr.machine != nil {
+		failure.State = string(nr.machine.State())
+	}
+	return failure
 }
 
 // startExtnetNode brings up a nat node's tap endpoint and flips its state
@@ -712,6 +819,13 @@ func (s *Server) startExtnetNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (p
 	// Attach this NAT to its link bridge now (created by startFabric before this
 	// node started). No-op if its link isn't drawn yet — link.add attaches it then.
 	if err := s.attachFabricForNode(ll, n.ID); err != nil {
+		_ = nr.extnet.Close()
+		nr.extnet = nil
+		if nr.natSubnet != 0 {
+			s.natSubnets.Release(nr.natSubnet)
+			nr.natSubnet = 0
+		}
+		nr.machine.To(node.StateCrashed)
 		return protocol.StartedNode{}, err
 	}
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
@@ -804,6 +918,9 @@ func (s *Server) startToolNode(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (pro
 	// A tool started after its bridge exists must hot-connect immediately; this
 	// is the same late-start seam used by the extnet endpoint.
 	if err := s.attachFabricForNode(ll, n.ID); err != nil {
+		_ = nr.tool.Stop()
+		nr.tool = nil
+		nr.machine.To(node.StateCrashed)
 		return protocol.StartedNode{}, err
 	}
 	return protocol.StartedNode{Node: n.ID, State: string(nr.machine.State())}, nil
@@ -1025,8 +1142,9 @@ func (s *Server) handleNodeAdd(raw json.RawMessage) (any, error) {
 	if ll.get(args.Node.ID) != nil {
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "node %d already exists", args.Node.ID)
 	}
-	candidate := *ll.doc
-	candidate.Nodes = append(append([]lab.Node{}, ll.doc.Nodes...), args.Node)
+	current := ll.docSnapshot()
+	candidate := *current
+	candidate.Nodes = append(append([]lab.Node{}, current.Nodes...), args.Node)
 	if err := candidate.Validate(); err != nil {
 		return nil, protocol.Errorf(protocol.CodeSchemaInvalid, "%v", err)
 	}
@@ -1045,8 +1163,10 @@ func (s *Server) handleNodeAdd(raw json.RawMessage) (any, error) {
 	if n.Kind == lab.KindIOL && n.Image != nil {
 		nr.imageID = n.Image.ID
 	}
+	ll.mu.Lock()
 	ll.doc.Nodes = append(ll.doc.Nodes, n)
 	ll.nodes[n.ID] = nr
+	ll.mu.Unlock()
 	s.emit(protocol.EventNodeConsole, protocol.NodeConsoleData{Node: n.ID, ConsolePort: port})
 	return protocol.NodeAddResult{Node: n.ID, ConsolePort: port}, nil
 }
@@ -1068,14 +1188,19 @@ func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
 	if nr == nil {
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", args.Node)
 	}
+	var orphanTaps []string
+	staticTaps := ll.staticTapsSnapshot()
+	for _, tap := range staticTaps[args.Node] {
+		orphanTaps = append(orphanTaps, tap.tapName)
+	}
 	s.stopNode(ll, args.Node)
 	s.consolePorts.Release(nr.consolePort)
-	delete(ll.nodes, args.Node)
 
-	fabricOK := fabricNodes(ll.doc)
-	kept := ll.doc.Links[:0]
-	for i := range ll.doc.Links {
-		l := &ll.doc.Links[i]
+	doc := ll.docSnapshot()
+	fabricOK := fabricNodes(doc)
+	kept := doc.Links[:0]
+	for i := range doc.Links {
+		l := &doc.Links[i]
 		touches := false
 		for _, ep := range l.Endpoints {
 			if ep.Node == args.Node {
@@ -1091,17 +1216,22 @@ func (s *Server) handleNodeRemove(raw json.RawMessage) (any, error) {
 			kept = append(kept, *l)
 		}
 	}
-	ll.doc.Links = kept
+	doc.Links = kept
 	var nodes []lab.Node
-	for _, n := range ll.doc.Nodes {
+	for _, n := range doc.Nodes {
 		if n.ID != args.Node {
 			nodes = append(nodes, n)
 		}
 	}
-	ll.doc.Nodes = nodes
+	doc.Nodes = nodes
+	ll.mu.Lock()
+	delete(ll.nodes, args.Node)
+	ll.doc = doc
+	ll.mu.Unlock()
+	s.evictStaticTaps(ll, orphanTaps)
 	s.refreshFabric(ll)
 	s.emit(protocol.EventNodeState, protocol.NodeStateData{Node: args.Node, State: "stopped"})
-	return protocol.NodeArgs{LabID: ll.doc.ID, Node: args.Node}, nil
+	return protocol.NodeArgs{LabID: doc.ID, Node: args.Node}, nil
 }
 
 func (s *Server) handleNodeSetImage(raw json.RawMessage) (any, error) {
@@ -1123,9 +1253,14 @@ func (s *Server) handleNodeSetImage(raw json.RawMessage) (any, error) {
 	}
 	nr.imageID = args.ImageID
 	// Reflect into the lab doc so status/config carry it.
-	if dn := ll.findNode(args.Node); dn != nil && dn.Image != nil {
-		dn.Image.ID = args.ImageID
+	ll.mu.Lock()
+	for i := range ll.doc.Nodes {
+		if ll.doc.Nodes[i].ID == args.Node && ll.doc.Nodes[i].Image != nil {
+			ll.doc.Nodes[i].Image.ID = args.ImageID
+			break
+		}
 	}
+	ll.mu.Unlock()
 	return protocol.NodeSetImageResult{
 		Node:    args.Node,
 		ImageID: args.ImageID,
@@ -1173,109 +1308,52 @@ func (s *Server) handleNodeMACs(raw json.RawMessage) (any, error) {
 			macs = append(macs, mac)
 		}
 	case lab.KindIOL:
-		// Learned attribution is an opt-in display path. The dirstat classifiers
-		// continue learning unconditionally for the Protocol Lens regardless of
-		// this request flag; with display disabled, do not even read their tables.
-		for _, iface := range interfaces {
-			macs = append(macs, protocol.NodeMAC{
-				Interface: iface,
-				State:     "disabled",
-				Reason:    "turn on learned-MAC display to see this",
-			})
-		}
-		if !args.Learned {
-			break
-		}
-
-		// Copy the classifier pointers under the same short lock used by the
-		// link-stats sampler. Attribution() owns the classifier lock and may
-		// expire entries, so never hold ll.mu while calling it.
-		ll.mu.Lock()
-		dcs := make(map[int]*dirstat.Classifier, len(ll.dirstats))
-		for linkID, dc := range ll.dirstats {
-			dcs[linkID] = dc
-		}
-		ll.mu.Unlock()
-
+		macs = make([]protocol.NodeMAC, len(interfaces))
 		rowForInterface := make(map[string]int, len(interfaces))
 		for i, iface := range interfaces {
-			rowForInterface[iface] = i
-			macs[i].State = "unknown"
-			macs[i].Reason = "no link on this interface"
-		}
-
-		for _, link := range ll.doc.Links {
-			var attrib []dirstat.EndpointAttrib
-			attributionLoaded := false
-			for endpointIndex, endpoint := range link.Endpoints {
-				if endpoint.Node != args.Node {
-					continue
+			macs[i] = protocol.NodeMAC{Interface: iface, State: "unknown"}
+			if parsed, parseErr := netmap.ParseIface(iface); parseErr == nil {
+				rowForInterface[parsed.String()] = i
+				if parsed.Type == netmap.Serial {
+					macs[i].Reason = "interface has no IEEE MAC address"
+				} else {
+					macs[i].Reason = "hardware address not reported by IOS"
 				}
-				row, ok := rowForInterface[endpoint.Interface]
-				if !ok {
-					continue
-				}
-				macs[row] = protocol.NodeMAC{Interface: endpoint.Interface, State: "unknown"}
-				if endpointIndex > 1 {
-					macs[row].Reason = "attribution covers two endpoints per link"
-					continue
-				}
-				if !attributionLoaded {
-					if dc := dcs[link.ID]; dc != nil {
-						attrib = dc.Attribution()
-					}
-					attributionLoaded = true
-				}
-				if attrib == nil {
-					macs[row].Reason = "per-endpoint attribution unavailable"
-					continue
-				}
-
-				// Read the PEER's bucket, not this node's own. A tap's "received"
-				// direction is whatever THAT SIDE'S process writes into it (see
-				// dirstat_linux.go's readLoop) — for this node's own static tap,
-				// that's everything IOL itself transmits out this port, which for
-				// an actively-switching node includes flooded/relayed traffic from
-				// its OTHER ports, not just the device wired to this one. The peer
-				// endpoint's bucket holds only what the peer itself originates
-				// (single MAC for a leaf, or legitimately ambiguous if the peer is
-				// itself relaying for further devices) — that's the answer to
-				// "what's attached to this port." Found live: every occupied IOL
-				// port read "this port relays for other devices" even with exactly
-				// one leaf device wired to it, because the switch's own control
-				// traffic + flooded broadcasts from its other ports were being
-				// attributed to the port instead of the connected device.
-				peerIndex := 1 - endpointIndex
-				var match *dirstat.EndpointAttrib
-				for i := range attrib {
-					if attrib[i].EndpointIndex == peerIndex {
-						match = &attrib[i]
-						break
-					}
-				}
-				if match == nil {
-					macs[row].Reason = "per-endpoint attribution unavailable"
-					continue
-				}
-				switch match.State {
-				case "single":
-					if match.MAC == "" {
-						macs[row].Reason = "per-endpoint attribution unavailable"
-						continue
-					}
-					macs[row].MAC = match.MAC
-					macs[row].Source = "learned"
-					macs[row].State = "known"
-				case "ambiguous":
-					macs[row].State = "ambiguous"
-					macs[row].Reason = "this port relays for other devices"
-				case "none":
-					macs[row].Reason = "no traffic seen yet"
-				default:
-					macs[row].Reason = "per-endpoint attribution unavailable"
-				}
+			} else {
+				macs[i].Reason = "hardware address not reported by IOS"
 			}
 		}
+
+		if nr.proc == nil || nr.machine == nil || nr.machine.State() != node.StateRunning {
+			for i := range macs {
+				macs[i].Reason = "node not running"
+			}
+			break
+		}
+		out, showErr := s.runShow(context.Background(), ll, args.Node,
+			"show interfaces | include ^[A-Za-z].* is |Hardware is .*address is")
+		if showErr != nil {
+			for i := range macs {
+				macs[i].Reason = "MAC unavailable (console busy or unreachable)"
+			}
+			break
+		}
+		for _, parsedMAC := range painter.ParseInterfaceMACs(out) {
+			parsedIface, parseErr := netmap.ParseIface(parsedMAC.Interface)
+			if parseErr != nil {
+				continue
+			}
+			row, ok := rowForInterface[parsedIface.String()]
+			if !ok {
+				continue
+			}
+			macs[row].MAC = parsedMAC.MAC
+			macs[row].Source = "read"
+			macs[row].State = "known"
+			macs[row].Reason = ""
+		}
+		break
+
 	case lab.KindNAT:
 		for _, iface := range interfaces {
 			macs = append(macs, protocol.NodeMAC{
@@ -1323,16 +1401,20 @@ func (s *Server) handleLinkAdd(raw json.RawMessage) (any, error) {
 	// refreshes all derive from ll.doc.Links, so a link that only lived in the
 	// GUI's copy would never be wired until the next lab.load.
 	replaced := false
-	for i := range ll.doc.Links {
-		if ll.doc.Links[i].ID == args.Link.ID {
-			ll.doc.Links[i] = args.Link
+	doc := ll.docSnapshot()
+	for i := range doc.Links {
+		if doc.Links[i].ID == args.Link.ID {
+			doc.Links[i] = args.Link
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		ll.doc.Links = append(ll.doc.Links, args.Link)
+		doc.Links = append(doc.Links, args.Link)
 	}
+	ll.mu.Lock()
+	ll.doc = doc
+	ll.mu.Unlock()
 
 	// The HOT-CONNECT path. Every interface already has its own static tap
 	// (created at boot, topology-independent NETMAP), so wiring this link is a
@@ -1361,7 +1443,8 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	// Detach the fabric link's taps + delete its bridge (the taps persist — the
 	// interfaces are unconnected again, still tap-ready for a future hot-connect).
 	// Classify from the CURRENT doc before we drop the link.
-	if isFabricLink(&args.Link, fabricNodes(ll.doc)) {
+	doc := ll.docSnapshot()
+	if isFabricLink(&args.Link, fabricNodes(doc)) {
 		s.detachFabricLink(ll, &args.Link)
 	}
 	ll.mu.Lock()
@@ -1369,13 +1452,16 @@ func (s *Server) handleLinkRemove(raw json.RawMessage) (any, error) {
 	ll.mu.Unlock()
 	// Mirror the removal into the loaded doc (see handleLinkAdd's upsert) so the
 	// wiring a later start/refresh derives never resurrects this link.
-	kept := ll.doc.Links[:0]
-	for _, l := range ll.doc.Links {
+	kept := doc.Links[:0]
+	for _, l := range doc.Links {
 		if l.ID != args.Link.ID {
 			kept = append(kept, l)
 		}
 	}
-	ll.doc.Links = kept
+	doc.Links = kept
+	ll.mu.Lock()
+	ll.doc = doc
+	ll.mu.Unlock()
 	s.refreshFabric(ll)
 	s.emit(protocol.EventLinkDown, protocol.LinkData{Link: args.Link.ID})
 	return protocol.LinkData{Link: args.Link.ID}, nil
@@ -1518,7 +1604,7 @@ func (s *Server) handleConfigExtract(raw json.RawMessage) (any, error) {
 	}
 	ids := args.Nodes
 	if ids == nil {
-		for _, n := range ll.doc.Nodes {
+		for _, n := range ll.docSnapshot().Nodes {
 			ids = append(ids, n.ID)
 		}
 	}
@@ -1590,12 +1676,13 @@ func (s *Server) handleStatus(raw json.RawMessage) (any, error) {
 	if ll == nil {
 		return protocol.StatusResult{Nodes: []protocol.StatusNode{}, Links: []protocol.StatusLink{}}, nil
 	}
+	doc := ll.docSnapshot()
 	res := protocol.StatusResult{
-		LabID: ll.doc.ID,
+		LabID: doc.ID,
 		Nodes: []protocol.StatusNode{},
 		Links: []protocol.StatusLink{},
 	}
-	for _, dn := range ll.doc.Nodes {
+	for _, dn := range doc.Nodes {
 		nr := ll.get(dn.ID)
 		sn := protocol.StatusNode{ID: dn.ID, State: string(node.StateStopped), RAM: dn.RAM}
 		if dn.Image != nil {
@@ -1614,7 +1701,7 @@ func (s *Server) handleStatus(raw json.RawMessage) (any, error) {
 		res.Nodes = append(res.Nodes, sn)
 	}
 	ll.mu.Lock()
-	for _, dl := range ll.doc.Links {
+	for _, dl := range doc.Links {
 		sl := protocol.StatusLink{ID: dl.ID}
 		if port, ok := ll.captures[dl.ID]; ok {
 			p := port
@@ -1641,5 +1728,5 @@ func intOr(p *int, def int) int {
 // (Linux prepareLabDir); the fabric must be refreshed first (prepareLabDir's
 // caller does that).
 func (s *Server) netmapFor(ll *loadedLab) string {
-	return netmap.BuildStatic(staticNetmapEntries(ll.staticTaps))
+	return netmap.BuildStatic(staticNetmapEntries(ll.staticTapsSnapshot()))
 }

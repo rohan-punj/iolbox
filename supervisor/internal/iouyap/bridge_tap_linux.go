@@ -34,6 +34,10 @@ type TapBridge struct {
 
 	unixConn *net.UnixConn
 	tap      *os.File
+	// Test-only hooks keep lifecycle tests independent of /dev/net/tun. They
+	// are nil for real bridges and never change production I/O behavior.
+	tapRead  func([]byte) (int, error)
+	tapWrite func([]byte) (int, error)
 
 	peerMu   sync.RWMutex
 	peerAddr *net.UnixAddr // learned from the first datagram IOL sends us
@@ -91,40 +95,10 @@ func (b *TapBridge) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
-
-	wg.Add(2)
-	go func() { defer wg.Done(); b.pumpNetioToTap(ctx, errs) }()
-	go func() { defer wg.Done(); b.pumpTapToNetio(ctx, errs) }()
-
-	// Unblock the read() calls promptly on cancellation: net.UnixConn reads
-	// don't respect ctx directly, so a watcher goroutine nudges its read
-	// deadline into the past on cancel/close, same as Bridge.Run. The tap fd
-	// read is unblocked by closing it in Close/here, since os.File reads
-	// have no deadline knob wired through syscall.Read on all kernels the
-	// way net.Conn does.
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		select {
-		case <-ctx.Done():
-		case <-b.closed:
-		}
-		deadline := time.Now().Add(-time.Second)
-		_ = b.unixConn.SetReadDeadline(deadline)
-	}()
-
-	wg.Wait()
-	cancel()
-	<-watchDone
-
-	select {
-	case err := <-errs:
-		return err
-	default:
-		return nil
-	}
+	return runPumps(ctx, func() { _ = b.Close() },
+		func(ctx context.Context, errs chan<- error) { b.pumpNetioToTap(ctx, errs) },
+		func(ctx context.Context, errs chan<- error) { b.pumpTapToNetio(ctx, errs) },
+	)
 }
 
 // pumpNetioToTap reads datagrams IOL sends on the netio unix socket, strips
@@ -159,7 +133,12 @@ func (b *TapBridge) pumpNetioToTap(ctx context.Context, errs chan<- error) {
 		}
 	}
 	write := func(frame []byte) error {
-		_, err := b.tap.Write(frame)
+		var err error
+		if b.tapWrite != nil {
+			_, err = b.tapWrite(frame)
+		} else {
+			_, err = b.tap.Write(frame)
+		}
 		return err
 	}
 	runPump(ctx, read, write, stripToUDP, errs)
@@ -182,7 +161,13 @@ func (b *TapBridge) pumpTapToNetio(ctx context.Context, errs chan<- error) {
 				return nil, errBridgeClosed
 			default:
 			}
-			n, err := b.tap.Read(buf)
+			var n int
+			var err error
+			if b.tapRead != nil {
+				n, err = b.tapRead(buf)
+			} else {
+				n, err = b.tap.Read(buf)
+			}
 			if err != nil {
 				// On shutdown (Close evicts the fd / ctx cancelled) exit cleanly.
 				select {

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
@@ -73,7 +74,7 @@ func (s *Server) handleLinkSetFault(raw json.RawMessage) (any, error) {
 		}
 	}
 
-	l.Fault = newFault
+	ll.setLinkFault(l.ID, newFault)
 	if newFault == nil {
 		ll.mu.Lock()
 		delete(ll.linkFaults, l.ID)
@@ -95,7 +96,7 @@ func (s *Server) handleLinkSetFault(raw json.RawMessage) (any, error) {
 		if err := s.applyActiveFault(ll, l); err != nil {
 			// Restore the prior document/runtime definition if tc or bridge
 			// realization rejected the new request.
-			l.Fault = oldDocFault
+			ll.setLinkFault(l.ID, oldDocFault)
 			ll.mu.Lock()
 			if hadOld {
 				ll.linkFaults[l.ID] = old
@@ -126,6 +127,11 @@ func (s *Server) handleLinkSetFault(raw json.RawMessage) (any, error) {
 
 func (s *Server) scheduleFaultActivation(ll *loadedLab, linkID int, fault *lab.LinkFault, after time.Duration, forSec float64) {
 	t := time.AfterFunc(after, func() {
+		s.labMu.Lock()
+		defer s.labMu.Unlock()
+		if !s.isCurrentLab(ll) {
+			return
+		}
 		ll.mu.Lock()
 		current, ok := ll.linkFaults[linkID]
 		if !ok || current.Fault != fault {
@@ -135,9 +141,27 @@ func (s *Server) scheduleFaultActivation(ll *loadedLab, linkID int, fault *lab.L
 		current.Active = true
 		current.Timer = nil
 		ll.linkFaults[linkID] = current
-		link := ll.findLink(linkID)
 		ll.mu.Unlock()
+		// findLink takes ll.mu itself; calling it inside the section above was a
+		// non-reentrant self-deadlock that stranded ll.mu and s.labMu forever.
+		link := ll.findLink(linkID)
 		if link == nil {
+			return
+		}
+		// Same process-global device-namespace guard as scheduleFaultExpiry
+		// (finding #9): applyActiveFault reaches EnsureBridge/Attach/Detach/tc on
+		// names another lab may now own. Roll our own activation back rather than
+		// impairing a device that is not ours.
+		if tap, foreign := linkTapClaimedElsewhere(ll, link); foreign {
+			ll.mu.Lock()
+			if current, ok := ll.linkFaults[linkID]; ok && current.Fault == fault {
+				current.Active = false
+				ll.linkFaults[linkID] = current
+			}
+			ll.mu.Unlock()
+			log.Printf("fabric: link %d: scheduled fault activation skipped: tap %s is owned by another lab", linkID, tap)
+			notifyFaultTimerSkip(linkID, tap)
+			s.emitLinkFault(ll, linkID, "skipped: link devices are owned by another lab")
 			return
 		}
 		if err := s.applyActiveFault(ll, link); err != nil {

@@ -127,6 +127,7 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 	// initially-down link still gets its bridge and an initially-impaired link
 	// is applied during the same start transaction.
 	ll.activateInitialFaults()
+	staticTaps := ll.staticTapsSnapshot()
 
 	// /tmp/netio<uid> must exist before iouyap binds a socket in it (and before
 	// IOL binds its own <instance> socket there). startBridges also ensures this;
@@ -135,7 +136,7 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "netio dir: %v", err)
 	}
 
-	for _, m := range ll.staticTaps {
+	for _, m := range staticTaps {
 		for _, t := range m {
 			// startFabric runs on EVERY node.start (via startNodes) over the
 			// WHOLE-lab static-tap set. Skip only taps that are FULLY realised —
@@ -179,8 +180,15 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 				delete(ll.tapBridges, path)
 			}
 			ll.mu.Unlock()
+			// The eviction above is scoped to THIS lab's tapBridges map, but tap
+			// names are a process-global kernel namespace: another lab (another
+			// *Server, or a lab whose teardown has not finished) can still hold a
+			// live pump on this exact device, and no per-lab map can see it. Close
+			// that foreign owner first or the TUNSETIFF below fails with "device or
+			// resource busy" — finding #9, the cross-lab instance of finding #1.
+			evictForeignTapClaim(t.tapName, ll)
 			existed := tapDeviceExists(t.tapName)
-			if err := mgr.EnsureTap(ctx, t.tapName, uid); err != nil {
+			if err := retryTransientFabric(func() error { return mgr.EnsureTap(ctx, t.tapName, uid) }); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric tap %s: %v", t.tapName, err)
 			}
 			// A static tap is unbridged until attachFabricLink wires it; if we
@@ -204,10 +212,20 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric iouyap %s: %v", t.netioPath, err)
 			}
 			c, cancel := context.WithCancel(context.Background())
-			go func(b *iouyap.TapBridge, ctx context.Context) { _ = b.Run(ctx) }(tb, c)
+			bridge := &labBridge{netioPath: t.netioPath, tapName: t.tapName, cancel: cancel, closer: tb}
 			ll.mu.Lock()
-			ll.tapBridges[t.netioPath] = &labBridge{netioPath: t.netioPath, tapName: t.tapName, cancel: cancel, closer: tb}
+			ll.tapBridges[t.netioPath] = bridge
 			ll.mu.Unlock()
+			// Publish ownership of the kernel device name process-wide, so a later
+			// lab evicts this pump instead of colliding with it (and so a stale
+			// fault timer can tell that the device is no longer its own).
+			claimTap(t.tapName, ll, bridge)
+			// Register before starting Run: a pump can fail immediately (for
+			// example when the tap disappeared between EnsureTap and openTap),
+			// and its eviction must not be beaten by this map insertion.
+			go func(path string, lb *labBridge, b *iouyap.TapBridge, ctx context.Context) {
+				s.evictTapBridge(ll, path, lb, b.Run(ctx))
+			}(t.netioPath, bridge, tb, c)
 		}
 	}
 
@@ -219,7 +237,7 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 	// still-live interface, producing the same "device or resource busy" this
 	// function otherwise guards against above.
 	livePaths := make(map[string]bool)
-	for _, m := range ll.staticTaps {
+	for _, m := range staticTaps {
 		for _, t := range m {
 			livePaths[t.netioPath] = true
 		}
@@ -246,9 +264,10 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 	// bridge capture for any fabric link that already has an armed capture port
 	// (doc capture.enabled auto-armed at lab start, or a capture that survived a
 	// hot-connect). The bridge exists now, so tcpdump can attach.
-	fabricOK := fabricNodes(ll.doc)
-	for i := range ll.doc.Links {
-		l := &ll.doc.Links[i]
+	doc := ll.docSnapshot()
+	fabricOK := fabricNodes(doc)
+	for i := range doc.Links {
+		l := &doc.Links[i]
 		if !isFabricLink(l, fabricOK) {
 			continue
 		}
@@ -292,6 +311,36 @@ func (s *Server) startFabric(ll *loadedLab, ids []int) error {
 		}
 	}
 	return nil
+}
+
+// evictStaticTaps closes pumps and deletes the tap devices belonging to nodes
+// removed from the loaded document. Their paths disappear on refreshFabric, so
+// teardownFabric cannot discover them after the fact.
+func (s *Server) evictStaticTaps(ll *loadedLab, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	want := make(map[string]bool, len(names))
+	for _, name := range names {
+		want[name] = true
+	}
+	var bridges []*labBridge
+	ll.mu.Lock()
+	for path, bridge := range ll.tapBridges {
+		if want[bridge.tapName] {
+			bridges = append(bridges, bridge)
+			delete(ll.tapBridges, path)
+		}
+	}
+	ll.mu.Unlock()
+	for _, bridge := range bridges {
+		_ = bridge.close()
+	}
+	mgr := fabric.NewManager()
+	ctx := context.Background()
+	for name := range want {
+		deleteTapVerified(mgr, ctx, name)
+	}
 }
 
 // linkTouchesAny reports whether l has an endpoint whose node id is in idSet.
@@ -397,6 +446,7 @@ func (s *Server) stopBridgeCapture(ll *loadedLab, linkID int) {
 func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 	mgr := fabric.NewManager()
 	ctx := context.Background()
+	staticTaps := ll.staticTapsSnapshot()
 	br, err := fabric.BridgeName(l.ID)
 	if err != nil {
 		return protocol.Errorf(protocol.CodeBadRequest, "fabric bridge name link %d: %v", l.ID, err)
@@ -456,12 +506,12 @@ func (s *Server) attachFabricLink(ll *loadedLab, l *lab.Link) error {
 			}
 		default:
 			// IOL: attach its static tap.
-			t, ok := tapForEndpoint(ll.staticTaps, ep)
+			t, ok := tapForEndpoint(staticTaps, ep)
 			if !ok {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed,
 					"fabric link %d: no static tap for node %d %s", l.ID, ep.Node, ep.Interface)
 			}
-			if err := mgr.Attach(ctx, br, t.tapName); err != nil {
+			if err := retryTransientFabric(func() error { return mgr.Attach(ctx, br, t.tapName) }); err != nil {
 				return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric attach %s->%s: %v", t.tapName, br, err)
 			}
 		}
@@ -531,6 +581,7 @@ func (s *Server) attachFabricEndpoint(ll *loadedLab, l *lab.Link, epIndex int, b
 	n := ll.findNode(ep.Node)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
+	staticTaps := ll.staticTapsSnapshot()
 	switch {
 	case n != nil && n.Kind == lab.KindNAT:
 		if nr := ll.get(ep.Node); nr != nil && nr.extnet != nil {
@@ -551,11 +602,11 @@ func (s *Server) attachFabricEndpoint(ll *loadedLab, l *lab.Link, epIndex int, b
 			}
 		}
 	default:
-		t, ok := tapForEndpoint(ll.staticTaps, ep)
+		t, ok := tapForEndpoint(staticTaps, ep)
 		if !ok {
 			return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric link %d: no static tap for node %d %s", l.ID, ep.Node, ep.Interface)
 		}
-		if err := mgr.Attach(ctx, br, t.tapName); err != nil {
+		if err := retryTransientFabric(func() error { return mgr.Attach(ctx, br, t.tapName) }); err != nil {
 			return protocol.Errorf(protocol.CodeNodeSpawnFailed, "fabric attach %s->%s: %v", t.tapName, br, err)
 		}
 	}
@@ -570,6 +621,7 @@ func (s *Server) detachFabricEndpoint(ll *loadedLab, l *lab.Link, epIndex int) {
 	n := ll.findNode(ep.Node)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
+	staticTaps := ll.staticTapsSnapshot()
 	switch {
 	case n != nil && n.Kind == lab.KindNAT:
 		if nr := ll.get(ep.Node); nr != nil && nr.extnet != nil {
@@ -584,7 +636,7 @@ func (s *Server) detachFabricEndpoint(ll *loadedLab, l *lab.Link, epIndex int) {
 			nr.tool.DetachBridge()
 		}
 	default:
-		if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+		if t, ok := tapForEndpoint(staticTaps, ep); ok {
 			_ = mgr.Detach(ctx, t.tapName)
 		}
 	}
@@ -734,9 +786,10 @@ func linkIsIOLToIOL(ll *loadedLab, l *lab.Link) bool {
 // participates in — used by startExtnetNode so a NAT that comes up after its
 // bridge already exists gets wired in. No-op if the node is on no fabric link.
 func (s *Server) attachFabricForNode(ll *loadedLab, nodeID int) error {
-	fabricOK := fabricNodes(ll.doc)
-	for i := range ll.doc.Links {
-		l := &ll.doc.Links[i]
+	doc := ll.docSnapshot()
+	fabricOK := fabricNodes(doc)
+	for i := range doc.Links {
+		l := &doc.Links[i]
 		if !isFabricLink(l, fabricOK) {
 			continue
 		}
@@ -776,6 +829,7 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 	s.closeLinkSlowTee(ll, l.ID)
 	mgr := fabric.NewManager()
 	ctx := context.Background()
+	staticTaps := ll.staticTapsSnapshot()
 	for _, ep := range l.Endpoints {
 		node := ll.findNode(ep.Node)
 		switch {
@@ -794,7 +848,7 @@ func (s *Server) detachFabricLink(ll *loadedLab, l *lab.Link) {
 				nr.tool.DetachBridge()
 			}
 		default:
-			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+			if t, ok := tapForEndpoint(staticTaps, ep); ok {
 				_ = mgr.Detach(ctx, t.tapName)
 			}
 		}
@@ -829,7 +883,7 @@ func (s *Server) setupVPCSFabric(ll *loadedLab, nr *nodeRuntime, n *lab.Node) er
 	mgr := fabric.NewManager()
 	ctx := context.Background()
 	existed := tapDeviceExists(tapName)
-	if err := mgr.EnsureTap(ctx, tapName, currentUID()); err != nil {
+	if err := retryTransientFabric(func() error { return mgr.EnsureTap(ctx, tapName, currentUID()) }); err != nil {
 		s.udpPorts.Release(vpcsBind)
 		s.udpPorts.Release(shimBind)
 		return protocol.Errorf(protocol.CodeNodeSpawnFailed, "vpcs %d tap %s: %v", n.ID, tapName, err)
@@ -932,6 +986,7 @@ func (s *Server) fabricLinkTapDevs(ll *loadedLab, l *lab.Link) []string {
 // dirstat and slowtee consumers see byte-identical slices through the wrapper.
 func (s *Server) fabricLinkEndpointDevs(ll *loadedLab, l *lab.Link) []endpointDev {
 	var devs []endpointDev
+	staticTaps := ll.staticTapsSnapshot()
 	for endpointIndex, ep := range l.Endpoints {
 		node := ll.findNode(ep.Node)
 		switch {
@@ -946,7 +1001,7 @@ func (s *Server) fabricLinkEndpointDevs(ll *loadedLab, l *lab.Link) []endpointDe
 				devs = append(devs, endpointDev{EndpointIndex: endpointIndex, Dev: tool.HostVethName(ep.Node)})
 			}
 		default:
-			if t, ok := tapForEndpoint(ll.staticTaps, ep); ok {
+			if t, ok := tapForEndpoint(staticTaps, ep); ok {
 				devs = append(devs, endpointDev{EndpointIndex: endpointIndex, Dev: t.tapName})
 			}
 		}

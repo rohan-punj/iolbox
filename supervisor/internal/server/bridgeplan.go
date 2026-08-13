@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,12 +22,34 @@ type labBridge struct {
 	closer    interface{ Close() error }
 }
 
+func (s *Server) evictTapBridge(ll *loadedLab, path string, bridge *labBridge, runErr error) {
+	ll.mu.Lock()
+	current, ok := ll.tapBridges[path]
+	if ok && current == bridge {
+		delete(ll.tapBridges, path)
+	}
+	ll.mu.Unlock()
+	if !ok || current != bridge {
+		return
+	}
+	if runErr != nil {
+		log.Printf("fabric: iouyap %s exited; evicting bridge: %v", path, runErr)
+	} else {
+		log.Printf("fabric: iouyap %s exited; evicting bridge", path)
+	}
+	_ = bridge.close()
+}
+
 // close cancels the bridge's pump loop and closes its sockets/socket file. Safe
-// to call once per bridge on stop.
+// to call once per bridge on stop. Every pump-removal path (startFabric's stale
+// /ghost eviction, the orphan sweep, evictTapBridge, evictStaticTaps,
+// teardownFabric) funnels through here, so this is also the single place the
+// process-global tap-name claim is released (see tapowner.go, finding #9).
 func (b *labBridge) close() error {
 	if b == nil {
 		return nil
 	}
+	releaseTap(b.tapName, b)
 	if b.cancel != nil {
 		b.cancel()
 	}
@@ -71,5 +94,9 @@ func realInstances(doc *lab.Lab) map[int]bool {
 // with no NETMAP re-read / node restart. Called before every (re)start and on
 // any node/link doc change.
 func (s *Server) refreshFabric(ll *loadedLab) {
-	ll.staticTaps = computeStaticTaps(ll.doc, currentUID())
+	doc := ll.docSnapshot()
+	taps := computeStaticTaps(doc, currentUID())
+	ll.mu.Lock()
+	ll.staticTaps = taps
+	ll.mu.Unlock()
 }

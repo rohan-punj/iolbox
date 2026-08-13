@@ -138,20 +138,20 @@ Hot-swap the image bound to a node (applied on next start).
 Read the current per-interface link-layer addresses for one node. This is a
 request/response snapshot made on demand; the result is not pushed as an event
 and is not part of `link.stats`.
-- args: `{ "node", "learned" }` where `learned` defaults to `false` and is the
-  opt-in for the learned-IOL display. With `false`, IOL rows are returned as
-  `disabled`; with `true`, they are resolved from the existing dirstat
-  attribution channel. VPCS/PC/tool rows are unaffected by this flag.
+- args: `{ "node" }`.
+- A running IOL is scraped once through its shared console with
+  `show interfaces | include ^[A-Za-z].* is |Hardware is .*address is`.
 - result: `{ "node", "macs":[{"interface","mac","source","state","reason"}] }`
 - `source` is `derived` for a VPCS address computed from the `-m` argument this
-  supervisor passes, `read` for a netns node's guest interface address read from
-  the kernel, and `learned` for a single source address positively attributed
-  from observed traffic. It is omitted when no address is known.
-- `state` is `known` when `mac` is set and is the interface's address, `unknown`
-  when the address is not knowable now (with a short `reason`), `ambiguous` when
-  an endpoint relays for other devices, and `disabled` when learned-MAC display
-  is opted out. `ambiguous` and `disabled` are reserved for the learned-IOL
-  path; `disabled` does not mean that supervisor-side learning is off.
+  supervisor passes, or `read` for a netns node's guest interface address read
+  from the kernel or an IOL interface address read from one live IOS console
+  `show interfaces` scrape. It is omitted when no address is known.
+- `state` is `known` when `mac` is set and is the interface's address, or
+  `unknown` when the address is not knowable now (with a short `reason`). IOL
+  reads require a running, console-reachable node, include unlinked Ethernet
+  interfaces, and preserve inventory rows for Serial interfaces even when IOS
+  reports no IEEE MAC. Console failures and partial output degrade to
+  per-interface `unknown` rows rather than failing the whole request.
 
 ### `link.add` / `link.remove`
 Wire/unwire two endpoints at runtime. The link is UPSERTED into (or removed

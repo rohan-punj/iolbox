@@ -2,13 +2,140 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/lab"
+	"github.com/rohanpunj/iolbox/supervisor/internal/node"
 	"github.com/rohanpunj/iolbox/supervisor/internal/protocol"
 )
 
+type testBridgeCloser struct{ closed bool }
+
+func (c *testBridgeCloser) Close() error {
+	c.closed = true
+	return nil
+}
+
+func TestEvictTapBridgeOnPumpFailure(t *testing.T) {
+	s := newTestServer()
+	ll := newLoadedLab(&lab.Lab{ID: "bridge-lab"}, t.TempDir())
+	closer := &testBridgeCloser{}
+	bridge := &labBridge{netioPath: "/tmp/netio/501", tapName: "iol1_0", closer: closer}
+	ll.tapBridges[bridge.netioPath] = bridge
+	s.evictTapBridge(ll, bridge.netioPath, bridge, errors.New("tap write boom"))
+	if _, ok := ll.tapBridges[bridge.netioPath]; ok {
+		t.Fatal("failed tap bridge remained in tapBridges")
+	}
+	if !closer.closed {
+		t.Fatal("failed tap bridge was not closed")
+	}
+}
+
 func newTestServer() *Server {
 	return New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: "/run/iolbox", Version: "test"})
+}
+
+// TestConcurrentLabReadsAndTopologyEdits is the regression for the
+// cross-connection map/document race. The dispatcher invokes handlers from
+// independent connection goroutines in production; this deliberately mixes
+// status, an empty lab.start (fabric/document path without a process spawn),
+// and repeated node add/remove operations.
+func TestConcurrentLabReadsAndTopologyEdits(t *testing.T) {
+	s := newTestServer()
+	load := json.RawMessage(`{"lab":{"version":1,"id":"race-lab","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":0,"y":0}],"links":[]}}`)
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "load", Op: "lab.load", Args: load}); !resp.OK {
+		t.Fatalf("lab.load: %+v", resp.Error)
+	}
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				dispatch(t, s, "status", protocol.LabSelectArgs{LabID: "race-lab"})
+				dispatch(t, s, "lab.start", protocol.LabSelectArgs{LabID: "race-lab", Nodes: []int{}})
+				id := 100 + worker
+				add := protocol.NodeAddArgs{LabID: "race-lab", Node: lab.Node{ID: id, Kind: lab.KindVPCS, Name: "PC", X: float64(i), Y: 0}}
+				dispatch(t, s, "node.add", add)
+				dispatch(t, s, "node.remove", protocol.NodeArgs{LabID: "race-lab", Node: id})
+			}
+		}(worker)
+	}
+	wg.Wait()
+}
+
+// TestStartNodesReportsFailureAndContinues verifies the bulk-start contract:
+// a buildSpec failure for one node is reported in StartResult.failed while a
+// later already-running node is still returned in StartResult.started. The
+// latter also pins the IOL/VPCS idempotence guard without needing a Linux IOL
+// image or a real child process in the control-plane test.
+func TestStartNodesReportsFailureAndContinues(t *testing.T) {
+	doc := &lab.Lab{
+		Version: 1,
+		ID:      "start-partial",
+		Name:    "start-partial",
+		Nodes: []lab.Node{
+			{ID: 0, Kind: lab.KindIOL, Name: "missing-image"},
+			{ID: 1, Kind: lab.KindVPCS, Name: "already-up"},
+		},
+	}
+	s := newTestServer()
+	ll := newLoadedLab(doc, t.TempDir())
+	// Including an IOL node means startNodes provisions real static kernel
+	// taps for it (fabric.go's computeStaticTaps runs for every IOL node in
+	// the doc, independent of whether that node's own start later fails) —
+	// on Linux with CAP_NET_ADMIN this is not a no-op, and without teardown
+	// the taps outlive the test and collide with the next run.
+	t.Cleanup(func() { s.teardownFabric(ll) })
+	badMachine := node.NewMachine(nil)
+	goodMachine := node.NewMachine(nil)
+	goodMachine.To(node.StateStarting)
+	goodMachine.To(node.StateRunning)
+	ll.nodes[0] = &nodeRuntime{id: 0, consolePort: 9000, machine: badMachine}
+	ll.nodes[1] = &nodeRuntime{
+		id: 1, consolePort: 9001, machine: goodMachine,
+		proc: &node.Process{Spec: node.Spec{NodeID: 1}, Machine: goodMachine},
+	}
+
+	got, err := s.startNodes(ll, []int{0, 1})
+	if err != nil {
+		t.Fatalf("startNodes returned an RPC error: %v", err)
+	}
+	result, ok := got.(protocol.StartResult)
+	if !ok {
+		t.Fatalf("startNodes result type = %T, want protocol.StartResult", got)
+	}
+	if len(result.Started) != 1 || result.Started[0].Node != 1 {
+		t.Fatalf("started = %+v, want node 1 despite node 0 failure", result.Started)
+	}
+	if len(result.Failed) != 1 || result.Failed[0].Node != 0 {
+		t.Fatalf("failed = %+v, want node 0 buildSpec failure", result.Failed)
+	}
+	if result.Failed[0].Error == "" {
+		t.Fatal("failed node must include a useful error")
+	}
+}
+
+func TestBulkStartReportsAllNodeFailures(t *testing.T) {
+	s := newTestServer()
+	load := json.RawMessage(`{"lab":{"version":1,"id":"partial-lab","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":0,"y":0}],"links":[]}}`)
+	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "load", Op: "lab.load", Args: load}); !resp.OK {
+		t.Fatalf("lab.load: %+v", resp.Error)
+	}
+	resp := dispatch(t, s, "lab.start", protocol.LabSelectArgs{LabID: "partial-lab", Nodes: []int{99, 100}})
+	if !resp.OK {
+		t.Fatalf("bulk start must return a partial result: %+v", resp.Error)
+	}
+	var result protocol.StartResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Started) != 0 || len(result.Failed) != 2 {
+		t.Fatalf("bulk start result = %+v, want two reported failures", result)
+	}
 }
 
 func dispatch(t *testing.T, s *Server, op string, args any) *protocol.Response {
