@@ -117,6 +117,23 @@ func (s *Session) SyncPrompt(ctx context.Context, read ReadFunc) (priv bool, err
 	if err := s.Write([]byte("\r")); err != nil {
 		return false, err
 	}
+	return s.awaitPrompt(ctx, read)
+}
+
+// awaitPrompt reads (via read) until an exec prompt appears at the end of the
+// accumulated buffer, WITHOUT writing anything itself — unlike SyncPrompt,
+// which always probes with its own bare CR first. Use this after the caller
+// has already written a command that is expected to produce its own
+// prompt-terminated reply (e.g. "enable\r", "terminal length 0\r"): calling
+// SyncPrompt there would fire a second, superfluous bare CR whose reply the
+// caller never explicitly waits for. That extra reply just sits queued
+// behind the command's own reply, and the NEXT phase's read — after its
+// Reset() clears the local buffer but can't drain an already-queued chunk —
+// ends up consuming that stale leftover instead of its own command's real
+// reply, silently corrupting one phase for every phase after it. Requires
+// the caller to have Reset() before writing its command, so this doesn't
+// short-circuit on a leftover prompt suffix from an earlier phase.
+func (s *Session) awaitPrompt(ctx context.Context, read ReadFunc) (priv bool, err error) {
 	for {
 		if _, p, ok := HasPromptSuffix(s.String()); ok {
 			return p, nil
@@ -166,10 +183,15 @@ func (s *Session) ensureEnable(ctx context.Context, read ReadFunc) (config bool,
 	// default config), so `enable` drops straight to "#"; if a password is
 	// prompted we never reach "#" and the sync times out -> empty result
 	// (prior behavior preserved).
+	//
+	// Reset() first so awaitPrompt's prompt check starts from a clean buffer
+	// instead of short-circuiting on the "R1>" suffix already sitting there
+	// from the SyncPrompt call above.
+	s.Reset()
 	if err := s.Write([]byte("enable\r")); err != nil {
 		return false, err
 	}
-	if _, err := s.SyncPrompt(ctx, read); err != nil {
+	if _, err := s.awaitPrompt(ctx, read); err != nil {
 		return false, err
 	}
 	prompt, _, _ = HasPromptSuffix(s.String())
@@ -204,7 +226,7 @@ func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (strin
 	if err := s.Write([]byte(prefix + "terminal length 0\r")); err != nil {
 		return "", err
 	}
-	if _, err := s.SyncPrompt(ctx, read); err != nil {
+	if _, err := s.awaitPrompt(ctx, read); err != nil {
 		return "", err
 	}
 

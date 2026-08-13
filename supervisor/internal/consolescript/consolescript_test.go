@@ -99,19 +99,20 @@ func TestSessionSyncPrompt(t *testing.T) {
 func TestSessionRunExec(t *testing.T) {
 	f := &fakeConsole{}
 	f.sess = New(f.write)
-	// The Session's buffer is a running accumulator that is only Reset()
-	// explicitly between the "enable" and "terminal length 0" phases (see
-	// RunExec) — critically, SyncPrompt.HasPromptSuffix matches ANY trailing
-	// prompt char ('>' or '#'), not a *specific* target prompt, so once the
-	// first bare-CR sync sees a (non-priv) "R1>" tail, the very next
-	// SyncPrompt call (after writing "enable\r", with NO reset in between)
-	// already satisfies its own exit condition from that same stale buffer
-	// tail without reading anything new. This is the original inline
-	// consoleSession behavior, unchanged by the Phase 0 extraction — so only
-	// ONE read is consumed across the first two sync phases combined.
+	// Each phase (initial sync, enable, terminal length 0, show) Reset()s the
+	// buffer before writing its own command and waits ONLY for that command's
+	// own reply (awaitPrompt — no extra probing bare CR once a command is
+	// already in flight): one scripted chunk per phase, consumed in order.
+	// (An earlier version of this fix path fired a redundant bare-CR sync
+	// after "enable\r"/"terminal length 0\r", whose reply was never read here
+	// and instead corrupted the FOLLOWING phase's capture — see
+	// supervisor/internal/server/painter_linux_test.go's
+	// TestNodeMACsReadsIOLShowInterfaces, which caught it as an
+	// order-dependent failure when run alongside other tests.)
 	f.chunks = [][]byte{
-		[]byte("\r\nR1>"), // response to the initial bare CR (unprivileged) — also satisfies the immediately-following enable-sync's stale-buffer check
-		[]byte("\r\nR1#"), // response after Reset()+"terminal length 0\r"+bare CR
+		[]byte("\r\nR1>"),                              // response to the initial bare CR (unprivileged)
+		[]byte("enable\r\nR1#"),                         // response after Reset()+"enable\r"
+		[]byte("terminal length 0\r\nR1#"),               // response after Reset()+"terminal length 0\r"
 		[]byte("show clock\r\n*12:00:00.000 UTC\r\nR1#"), // response after Reset()+the show command
 	}
 
@@ -124,8 +125,9 @@ func TestSessionRunExec(t *testing.T) {
 		t.Fatalf("got %q, want %q", out, want)
 	}
 
-	// Verify the write sequence: CR, "enable\r", CR (next syncPrompt), "terminal length 0\r", CR, "show clock\r".
-	wantWrites := []string{"\r", "enable\r", "\r", "terminal length 0\r", "\r", "show clock\r"}
+	// Verify the write sequence: CR, "enable\r", "terminal length 0\r", "show clock\r" — no
+	// redundant bare-CR probe once a command's own reply is already expected.
+	wantWrites := []string{"\r", "enable\r", "terminal length 0\r", "show clock\r"}
 	if len(f.written) != len(wantWrites) {
 		t.Fatalf("write count = %d, want %d: %q", len(f.written), len(wantWrites), f.written)
 	}

@@ -57,17 +57,26 @@ func (p *fakeIOSPty) Write(b []byte) (int, error) {
 	if priv {
 		prompt = p.name + "#"
 	}
-	go func() {
-		if line == "" {
-			_, _ = p.w.Write([]byte("\r\n" + prompt))
-			return
-		}
-		payload := line + "\r\n"
-		if output != "" {
-			payload += strings.TrimRight(output, "\r\n") + "\r\n"
-		}
-		_, _ = p.w.Write([]byte(payload + prompt))
-	}()
+	// Reply synchronously, on the caller's own goroutine: consolescript issues
+	// writes back-to-back (e.g. ensureEnable's direct "enable\r" immediately
+	// followed by SyncPrompt's own bare-CR write) without waiting for the
+	// prior reply to be fully drained. A reply fired on its own goroutine (the
+	// prior shape here) races the NEXT call's reply goroutine for the same
+	// io.PipeWriter — whichever loses becomes a straggler that lands its
+	// bytes on a LATER, unrelated read step, corrupting that step's captured
+	// output. p.w.Write is safe to call synchronously here: the hub's
+	// readLoop goroutine (started in newConsoleHub) is always independently
+	// looping on Reads, so this cannot deadlock, and doing it inline
+	// guarantees replies are delivered in the exact order commands were sent.
+	if line == "" {
+		_, _ = p.w.Write([]byte("\r\n" + prompt))
+		return len(b), nil
+	}
+	payload := line + "\r\n"
+	if output != "" {
+		payload += strings.TrimRight(output, "\r\n") + "\r\n"
+	}
+	_, _ = p.w.Write([]byte(payload + prompt))
 	return len(b), nil
 }
 
