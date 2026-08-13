@@ -525,8 +525,8 @@
         x: pos.x,
         y: pos.y,
         ram: 1024,
-        ethernet: 1,
-        serial: 1,
+        ethernet: 2,
+        serial: 0,
         image: img ? { id: img.id, filename: img.filename, class: img.class } : undefined,
       };
     }
@@ -772,6 +772,7 @@
     // WS1: while an action is in flight on this node, disable sibling actions
     // (Console stays enabled — it's client-side, no WS).
     const locked = labStore.nodeLocks[nid] != null;
+    const isIol = labStore.lab.nodes.find((n) => n.id === nid)?.kind === "iol";
     return [
       {
         id: "node-start",
@@ -810,6 +811,24 @@
           void labStore.wipeNode(nid);
         },
       },
+      ...(isIol
+        ? [
+            {
+              id: "node-save-config",
+              label: "Save config from NVRAM",
+              disabled: nodeState !== "running",
+              title: "Extracts the node's saved NVRAM startup-config into the lab. Do write memory on the node first.",
+              action: () => void labStore.saveNodeConfig(nid),
+            } satisfies MenuItem,
+            {
+              id: "node-export-config",
+              label: "Export config…",
+              disabled: nodeState !== "running",
+              title: "Extracts the node's saved NVRAM startup-config and downloads it as a .txt file. Do write memory on the node first.",
+              action: () => void labStore.exportNodeConfig(nid),
+            } satisfies MenuItem,
+          ]
+        : []),
       { id: "node-separator-actions", separator: true, label: "sep1", action: () => {} },
       {
         id: "node-edit",

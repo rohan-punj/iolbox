@@ -216,6 +216,7 @@
               class="tab-label"
               role="tab"
               aria-selected={isFocused(ref)}
+              onmousedown={(event) => event.preventDefault()}
               onclick={() => selectConsole(nodeId)}
             >
               {nodeName(nodeId)}

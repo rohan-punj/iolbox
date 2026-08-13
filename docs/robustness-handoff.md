@@ -792,3 +792,74 @@ not automatic). Not yet exercised: item 5's tight `node.restart` loop and item 6
 deliberately-wedged-subscriber scenario specifically (the general "does the control plane
 stay responsive under real use" property they exist for was exercised broadly above, but
 not those two exact scenarios).
+
+### 2026-08-12 — items 1-12 + IOL MAC read committed and deployed; four follow-up GUI fixes
+
+Items 1-12 above, plus the IOL-MAC `show interfaces` read feature (see
+`docs/iol-mac-show-interfaces-plan.md`) and the toast-notification feature (see
+`docs/toast-notifications-plan.md`), were committed as two commits (`eec2954`
+backend, `8af5530` frontend) and deployed to `192.168.111.154` — see those docs for
+detail. Four small follow-up GUI items landed in the same session, live-verified in
+the dev server (`localhost:1420`, mock transport) but **not yet committed or deployed**:
+
+1. **Serial interfaces don't work in this fabric — removed from node defaults.**
+   `computeStaticTaps` (`supervisor/internal/server/fabric.go:74-78,106`) hardcodes
+   `serialGroups=0` when allocating taps ("serial-interface taps are a later
+   refinement") and the frontend already rejects serial link-fault endpoints
+   (`CanvasInner.svelte:985-993`, `docs/protocol.md:175`) — serial adapters were
+   inventory-only, never wired into the fabric. Changed the Router/Switch (IOL) node
+   default from `ethernet: 1, serial: 1` to `ethernet: 2, serial: 0` in
+   `buildDroppedNode()` (`app/src/lib/components/CanvasInner.svelte:527-529`) and the
+   Inspector's fallback-when-missing defaults to match
+   (`app/src/lib/components/Inspector.svelte:184,189`). Serial is still fully
+   available as a manual override (min/max unchanged) for anyone who wants inventory
+   rows without traffic. Live-verified: a freshly dropped router now shows Ethernet=2/
+   Serial=0 in the Inspector.
+
+2. **Console dock: switching tabs needed two clicks to type.** Root cause: clicking
+   the `<button class="tab-label">` in `Console.svelte` gave the *button* browser
+   focus by default (on mousedown, before the click handler runs), which raced with
+   `ConsoleTerm.svelte`'s own `$effect` that calls `term.focus()` when the pane
+   becomes focused (`ConsoleTerm.svelte:197-204`) — the button's default focus won,
+   so the first click only switched the *visible* pane and a second click was needed
+   to actually focus the terminal for typing. Fixed with
+   `onmousedown={(event) => event.preventDefault()}` on the tab button
+   (`Console.svelte:215-222`), which suppresses the browser's default focus-on-click
+   for that button so `term.focus()` is the only thing that moves focus. Verified via
+   a scripted single mousedown+mouseup+click on each tab in the dev server:
+   `document.activeElement` was the `xterm-helper-textarea` immediately after, for
+   both tabs, confirming one click is now enough.
+
+3. **"Save config from NVRAM" and "Export config…" added to the IOL right-click
+   context menu**, so both no longer require opening the Edit dialog or hovering
+   the node's quick-action toolbar. "Save config from NVRAM" calls the existing
+   `labStore.saveNodeConfig(nodeId)` (same handler the Edit dialog's button and the
+   quick-action toolbar already used) to extract NVRAM into the lab doc.
+   "Export config…" is new: `labStore.exportNodeConfig(nodeId)`
+   (`labStore.svelte.ts`, next to `saveNodeConfig`) reuses the same `configExtract`
+   NVRAM-read path and then downloads the result as `<node>-startup-config.txt` via
+   the same Blob/anchor pattern as `downloadCapture`. Both wired into
+   `buildNodeMenuItems()` in `CanvasInner.svelte`, IOL-only, enabled only while the
+   node is running (same gating as the existing quick-action button).
+
+4. **Auto-save toggle** (Settings → Lab → "Auto-save lab", on by default).
+   `scheduleAutosave()` (`labStore.svelte.ts:1040-1047`) already debounce-saved after
+   almost every mutating action unconditionally (gated only on the real-supervisor
+   transport) — there was no way to turn it off. Added `autoSaveEnabled` state
+   persisted to `localStorage["iolbox.autosave.enabled"]` (default `true` if unset),
+   gated `scheduleAutosave()` on it, and added the toggle row to
+   `SettingsDialog.svelte`, following the existing `chromeStore`
+   localStorage-toggle pattern. Manual Save (the toolbar button /
+   `saveLab(notify=true)`) is unaffected — this only gates the automatic debounced
+   path, including config exports/extractions and every other place that already
+   calls `scheduleAutosave()`.
+
+Verification for all four: `npm run check` clean (0 errors/warnings) after each
+change; all four live-verified in the dev server (`localhost:1420`, mock transport).
+#3: right-clicked a stopped IOL node — "Export config…" present and disabled with
+the expected tooltip; started the node, re-opened the menu — enabled; clicking it
+fired a real anchor download (`blob:` URL, filename `R0-startup-config.txt`). #4:
+toggled off in Settings → Lab, confirmed `localStorage["iolbox.autosave.enabled"]`
+flipped to `"false"` and survived a page reload, then reset to `"true"`. None of
+this session's four items are committed or deployed yet — build/deploy with
+`build-release.sh` the same way as the rest of this session's work once reviewed.

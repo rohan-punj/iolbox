@@ -60,6 +60,21 @@
     </section>
 
     <section>
+      <h4>Lab</h4>
+      <label class="row toggle-row">
+        <span class="row-copy">
+          <span class="row-label">Auto-save lab</span>
+          <span class="row-hint">Persist edits, exported configs, and other lab changes automatically</span>
+        </span>
+        <input
+          type="checkbox"
+          checked={labStore.autoSaveEnabled}
+          onchange={() => labStore.toggleAutoSaveEnabled()}
+        />
+      </label>
+    </section>
+
+    <section>
       <h4>Canvas</h4>
       <div class="row">
         <span class="row-label">Link layout</span>

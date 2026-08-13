@@ -56,6 +56,17 @@ interface CaptureSession {
   subscribers: Set<CaptureSubscriber>;
 }
 
+const AUTOSAVE_STORAGE_KEY = "iolbox.autosave.enabled";
+
+function readAutoSaveEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+    return raw === null ? true : raw === "true";
+  } catch {
+    return true;
+  }
+}
+
 class LabStore {
   lab = $state<LabDocument>(emptyLab("Untitled lab"));
   selectedNodeId = $state<number | null>(null);
@@ -194,6 +205,10 @@ class LabStore {
   private savedDocIds = new Set<string>();
   lastSavedAt = $state<number | null>(null);
   private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** User-facing toggle (Settings dialog) for scheduleAutosave — on by
+   *  default so lab/node edits, exported configs, etc. are preserved
+   *  without an explicit Save click. Persisted so it survives a reload. */
+  autoSaveEnabled = $state(readAutoSaveEnabled());
   private toastQueue: ToastNotification[] = [];
   private toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private toastExitTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1039,11 +1054,29 @@ class LabStore {
    *  seed. Debounced so a burst of edits/drags coalesces into one save. */
   scheduleAutosave() {
     if (this.transportKind !== "ws") return;
+    if (!this.autoSaveEnabled) return;
     if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
     this.autosaveTimer = setTimeout(() => {
       this.autosaveTimer = null;
       void this.saveLab(false);
     }, 1200);
+  }
+
+  setAutoSaveEnabled(value: boolean) {
+    this.autoSaveEnabled = value;
+    try {
+      localStorage.setItem(AUTOSAVE_STORAGE_KEY, String(value));
+    } catch {
+      /* localStorage may be unavailable (private mode) */
+    }
+    if (this.autosaveTimer) {
+      clearTimeout(this.autosaveTimer);
+      this.autosaveTimer = null;
+    }
+  }
+
+  toggleAutoSaveEnabled() {
+    this.setAutoSaveEnabled(!this.autoSaveEnabled);
   }
 
   // ---- live-capture console tabs (feature 1) ----
@@ -1876,6 +1909,35 @@ class LabStore {
       const node = this.lab.nodes.find((n) => n.id === c.node);
       if (node) node.startupConfig = c.startupConfig;
     }
+  }
+
+  /** Extract NVRAM startup-config for one node (same as saveNodeConfig) and
+   *  trigger a browser download of it as a .txt file — for pulling a config
+   *  out of the lab entirely, not just into the doc. */
+  async exportNodeConfig(nodeId: number) {
+    const nodeName = this.resolveNodeName(nodeId);
+    const ok = await this.guarded(`export config for node ${nodeId}`, async () => {
+      const res = await this.client.configExtract(this.lab.id, [nodeId]);
+      this.applyExtractedConfigs(res.configs);
+    });
+    this.scheduleAutosave();
+    if (!ok) return;
+    const node = this.lab.nodes.find((n) => n.id === nodeId);
+    const text = node?.startupConfig ?? "";
+    const blob = new Blob([text], { type: "text/plain" });
+    const fname = `${nodeName}-startup-config.txt`.replace(/[^\w.\-]+/g, "_");
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+    this.enqueueToast({ severity: "success", message: `Config exported — ${nodeName}` });
   }
 
   /** Push a node's in-memory edits (config.pack, config.net, ram, ethernet,

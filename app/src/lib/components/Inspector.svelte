@@ -181,12 +181,12 @@
       <div class="field-row">
         <label class="field">
           <span class="label">Ethernet adapters</span>
-          <input type="number" min="0" max="16" value={node.ethernet ?? 1} oninput={updateEthernet} />
+          <input type="number" min="0" max="16" value={node.ethernet ?? 2} oninput={updateEthernet} />
           {#if ethWarn}<span class="warn">≥ {minEth} needed — links use e{minEth - 1}/x</span>{/if}
         </label>
         <label class="field">
           <span class="label">Serial adapters</span>
-          <input type="number" min="0" max="16" value={node.serial ?? 1} oninput={updateSerial} />
+          <input type="number" min="0" max="16" value={node.serial ?? 0} oninput={updateSerial} />
           {#if serWarn}<span class="warn">≥ {minSer} needed — links use s{minSer - 1}/x</span>{/if}
         </label>
       </div>

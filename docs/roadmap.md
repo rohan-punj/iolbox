@@ -58,6 +58,12 @@ TCP, so:
 Result: **one frontend, three shells** — Tauri desktop, browser tab, and the mock
 demo — differing only in transport. No UI fork.
 
+## Backlog / small TODOs
+
+| Item | Scope | Status |
+|---|---|---|
+| **Auto-save toggle** ✅ | Settings → Lab → "Auto-save lab" (on by default); gates the existing debounced `scheduleAutosave()` so lab edits, exported configs, etc. keep persisting automatically unless turned off. See `docs/robustness-handoff.md` 2026-08-12 entry | Implemented, `svelte-check` clean, live-verified (toggle + localStorage persistence across reload); not yet deployed |
+
 ## Recommended sequencing
 
 1. **Now:** kick off **D1 + D2** (Sonnet + Opus in parallel), then D3–D5, then D6.
