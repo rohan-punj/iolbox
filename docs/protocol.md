@@ -1,22 +1,51 @@
 # Supervisor control protocol (contract)
 
-The GUI (Windows) talks to the **supervisor** (inside the Linux runtime) over a
-single TCP connection. This is the seam that makes the runtime provider pluggable:
-the GUI never knows whether the supervisor is in WSL2, a VMware VM, a remote box,
+The GUI (a browser tab, same-origin with the supervisor) talks to the
+**supervisor** (inside the Linux runtime) over **WebSocket**: one `/control`
+connection per session, plus one `/console/{nodeId}` connection per open
+console tab and one `/capture/{linkId}` connection per live capture view —
+see "WebSocket bridge endpoints" below, which is what every shipped client
+actually uses (verified against `app/src/lib/transportSelect.ts` and
+`consoleTransport.ts`). The exact same JSON verb/event shapes documented
+below also flow over a secondary, non-browser interface: a raw TCP
+NDJSON control port plus raw telnet console ports and a raw pcapng capture
+stream (see "Non-browser TCP interface" below) — useful for scripting or a
+non-web client, but not what the GUI itself dials. Either way, this
+protocol is the seam that makes the runtime provider pluggable: a client
+never knows whether the supervisor is in WSL2, a VMware VM, a remote box,
 or QEMU.
 
 ## Transport
 
-- **Control**: newline-delimited JSON (NDJSON), one request or event per line,
-  UTF-8. Request/response are correlated by `id`. Server may also push unsolicited
-  `event` messages. Bound to `127.0.0.1` inside the runtime; the provider exposes
-  it to Windows localhost (WSL forwarding / host-only IP:port / ssh tunnel).
-- **Consoles**: raw TCP telnet, one port per node (allocated at start, reported in
-  status). GUI connects an xterm.js session per port.
-- **Capture**: raw TCP pcapng byte stream, one port per capturing link (allocated
-  on capture-start). The Windows helper pipes it into `wireshark -k -i -`. The
-  WebSocket bridge also re-exposes this stream to browsers at
-  `GET /capture/{linkId}` (see below).
+**Browser (the shipped GUI) — WebSocket, same origin as the page:**
+
+- **Control**: `GET /control` — the framing below (Request/Response/Event),
+  one JSON object per WebSocket **text frame** (no trailing newline; not
+  NDJSON over this transport). Request/response are correlated by `id`;
+  the server may also push unsolicited `event` messages on the same
+  connection.
+- **Consoles**: `GET /console/{nodeId}` — binary WS frames carry raw
+  terminal bytes (post telnet-IAC negotiation) in both directions; a
+  `{"resize":{"cols":C,"rows":R}}` **text** frame requests a NAWS
+  window-size update instead of being sent as terminal data.
+- **Capture**: `GET /capture/{linkId}` — binary WS frames carry the raw
+  pcapng byte stream for a live capture view.
+
+See "WebSocket bridge endpoints" below for exact semantics (404 behavior,
+who does the telnet/pcapng plumbing server-side, etc).
+
+**Non-browser TCP interface (secondary, same JSON shapes):**
+
+- **Control**: newline-delimited JSON (NDJSON) on a plain TCP socket, one
+  request or event per line, UTF-8. Bound to `127.0.0.1` inside the
+  runtime; the provider exposes it to Windows localhost (WSL forwarding /
+  host-only IP:port / ssh tunnel).
+- **Consoles**: raw TCP telnet, one port per node (allocated at start,
+  reported in status).
+- **Capture**: raw TCP pcapng byte stream, one port per capturing link
+  (allocated on capture-start) — e.g. the Windows capture-helper pipes it
+  into `wireshark -k -i -`, or `-capture-bind 0.0.0.0` lets a native
+  Wireshark dial it directly (see `capture.start`/`capture.stop` below).
 
 Default control port: **4000**. Console base: **9000+**. Capture base: **5500+**.
 All configurable; actual allocations always come back in `status`/responses.
@@ -273,13 +302,18 @@ Full snapshot.
   link has no traffic.
 - `log` `{level,message,node?}`
 
-## WebSocket bridge endpoints (browser transport)
+## WebSocket bridge endpoints (the shipped GUI's actual transport)
 
-The supervisor's WS bridge (default `:4001`) re-exposes the control protocol and
-per-node/per-link byte streams to browsers, which cannot open raw TCP sockets:
+The supervisor's WS bridge (default `:4001`, same listener that serves the
+embedded GUI's static assets) exposes the control protocol and per-node/
+per-link byte streams as WebSocket endpoints. This is what the browser GUI
+connects to — a browser can't open a raw TCP socket, and the WS bridge is
+not a fallback for it, it's the only transport it ever uses:
 
-- `GET /control` — the NDJSON control protocol, one JSON object per text frame,
-  dispatched through the same handler core as the TCP control listener.
+- `GET /control` — the same verb/event JSON shapes as the TCP control
+  listener, one JSON object per text frame (no NDJSON newline framing needed
+  — the frame boundary already delimits each message), dispatched through
+  the same handler core as the TCP control listener.
 - `GET /console/{nodeId}` — the node's telnet console as binary WS frames (after
   server-side IAC negotiation); a `{"resize":{"cols":C,"rows":R}}` text frame
   propagates a NAWS window-size update.
