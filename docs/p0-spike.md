@@ -35,9 +35,9 @@ cd tools/capture-helper && GOOS=windows GOARCH=amd64 go build -o capture-helper.
 | 9 | `config.save` R1; stop; start; `config.extract` | startup-config round-trips through NVRAM | NVRAM codec |
 | 10 | Repeat step 1–7 under the **wsl2** provider | same results | provider abstraction holds across backends |
 
-## Known assumptions to confirm here (from the build agents)
+## Known assumptions to confirm here
 
-These were flagged during the parallel build as needing a real image — P0 is where
+These were flagged during the initial build as needing a real image — P0 is where
 they get confirmed or corrected. Each has a clearly-marked spot in the code:
 
 - **IOL netio header** (layout + which side of the bridge carries it) —

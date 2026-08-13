@@ -1,9 +1,13 @@
 # iolbox — learning-friendly feature & GUI ideas (plan / idea backlog)
 
-Status: **idea backlog, not yet scoped or approved for implementation.** Generated
-2026-08-11 from a brainstorming pass with `codex sol-medium`, grounded in the
-current architecture (single Go supervisor binary, browser-first Svelte 5 +
-Svelte Flow GUI, tool-node packs = one static Go binary each, no Docker, no DB).
+Status: **idea backlog.** Several of these (netprobe, link faults/impairment,
+Protocol Lens, next-free-interface suggestion, the tiled/floating console
+workspace, per-node MAC list) have since shipped — see each pack/feature's
+own code and `README.md`'s Status section for current state. The remaining
+ideas below (named baselines/config-diff, guided checkpoints/workbook,
+`bgppeer`) are still unscoped backlog. Grounded in the current architecture
+(single Go supervisor binary, browser-first Svelte 5 + Svelte Flow GUI,
+tool-node packs = one static Go binary each, no Docker, no DB).
 
 Existing tool-node packs for reference: `aaa` (RADIUS+TACACS+), `webserver`,
 `httpclient`, `syslog`, `secbench` (18 Go-ported attack/recon modules).

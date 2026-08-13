@@ -1,9 +1,9 @@
 # iolbox design brief — "Bench & Glass"
 
-The improved brief for the frontend redesign. It replaces the placeholder
-GitHub-dark scaffold with a deliberate visual identity and specifies the four
-interaction changes the user asked for. Hand this (plus `docs/roadmap.md`) to the
-build agents.
+The design brief behind the shipped frontend redesign: it replaced the
+placeholder GitHub-dark scaffold with the "Bench" (dark) and "Glass" (light)
+visual identity and the interaction changes now live in the product's
+Settings dialog (Appearance → Theme).
 
 ## The problem with what we have
 
@@ -63,10 +63,9 @@ its audience instead of like a generic dashboard. It's the signature.
 ## The four interaction requirements (precise specs)
 
 ### 1. Changeable icons
-- Each node has an `icon` field (already in the schema). Ship a bundled SVG icon
-  set (reuse the licence-clean pack at `J:\Claude code\network-icons`; avoid
-  Cisco-brand marks). Default icon derives from image class (L3→router, L2→switch,
-  vpcs→PC); user overrides per node.
+- Each node has an `icon` field (already in the schema). Ship a bundled,
+  license-clean SVG icon set (avoid Cisco-brand marks). Default icon derives
+  from image class (L3→router, L2→switch, vpcs→PC); user overrides per node.
 - **Icon picker**: right-click node → "Change icon…" and an Inspector control open
   a popover grid of glyphs; click swaps live. Allow "Import SVG…" for custom.
 - Icons are tintable via `currentColor` so they inherit theme + status.
