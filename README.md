@@ -3,7 +3,7 @@
 
 **A lightweight, Windows-native lab for Cisco IOL and VPCS.** Draw topologies,
 console into every node, and live-capture any link straight into Wireshark. No
-login, no database, no web server — a single small app.
+login, no database — a single small app with a browser-based GUI on localhost.
 
 > ⚠️ **iolbox ships no Cisco software.** It runs IOL/IOU images *you* supply and
 > hold licenses for. See [Legal](#legal).
@@ -11,9 +11,9 @@ login, no database, no web server — a single small app.
 ## Why
 
 Existing options for running IOL on Windows are heavy (PNetLab/EVE/CML VMs) and
-most break nested virtualization or fight with VMware Workstation. iolbox keeps the
-GUI native and pushes only the tiny Linux execution layer into whatever hypervisor
-you already have.
+most break nested virtualization or fight with VMware Workstation. iolbox keeps
+the GUI a plain browser tab and pushes only the tiny Linux execution layer into
+whatever hypervisor you already have.
 
 ## How it works
 
@@ -51,7 +51,7 @@ targets:
 
 | Situation | Artifact |
 |---|---|
-| Windows desktop, simplest path | `iolbox-disk-*.qcow2` + the `iolbox-launcher.exe` bundle |
+| Windows desktop, simplest path | `iolbox-launcher-*-windows.zip` (launcher + disk + bundled QEMU) |
 | VMware Workstation / ESXi / VirtualBox | `iolbox-appliance-*.ova` (or the `.vmdk`+`.vmx`) |
 | WSL2 box | `iolbox-rootfs.tar` |
 | Proxmox homelab | `iolbox-ct-*.tar.zst` |
@@ -62,26 +62,34 @@ trusted network). **You supply your own IOL images.**
 
 ## Status
 
-**v0.4.0 — validated end-to-end on real IOL 17.18.02.** Full stack works through
-the real supervisor (register → load → start → console → native wiring → capture)
-across every runtime provider; the six release artifacts are built and smoke-tested.
-See [docs/INSTALL.md](docs/INSTALL.md) to get started.
+**v0.5.2 — live-verified against real IOL images across many sessions of use,
+not just a one-time smoke test.** The GUI is browser-first now: a single Go
+supervisor binary embeds the built Svelte frontend and serves it over HTTP —
+no native Windows app to install. The `app/src-tauri` shell from an earlier
+design is no longer the shipped product (the Windows deliverable is the plain
+`tools/iolab-launcher` exe); see `.github/workflows/release.yml`'s notes.
 
 | Component | State |
 |---|---|
-| Supervisor (Go) | ✅ builds linux/amd64, `go test`/`vet`/`fmt` clean, stdlib-only |
-| Runtime (rootfs + WSL/VMware appliance) | ✅ build scripts authored, `bash -n` clean |
+| Supervisor (Go) | ✅ builds linux/amd64, `go test`/`vet`/`fmt`/`-race` clean, live-deployed |
+| Runtime (rootfs + WSL/VMware/OVA/QEMU/LXC/native) | ✅ six packaging targets, all release-built |
 | Capture helper (Wireshark bridge) | ✅ builds windows/amd64 |
-| GUI (Tauri + Svelte Flow) | ✅ frontend verified interactive (mock backend); native compile in CI |
-| End-to-end (real IOL 17.18.02) | ✅ validated across VMware/WSL/LXC/native/QEMU; v0.4.0 artifacts smoke-tested |
+| GUI (browser-first Svelte 5, embedded in the supervisor) | ✅ live-verified in the browser against a real deployed appliance |
+| End-to-end (real IOL images) | ✅ full lab lifecycles (load/start/console/capture/stop) repeatedly verified live on a deployed VM, across sessions |
 
-See [PLAN.md](PLAN.md) for the roadmap and [docs/p0-spike.md](docs/p0-spike.md) for
-the exact next steps.
+See [PLAN.md](PLAN.md) for the original design (its GUI section predates the
+browser-first pivot — the architecture above is current) and
+[docs/](docs/) for detailed design/session notes.
 
 ## Build from source
 
-Prereqs: Windows 10/11, Node 18+, Rust (MSVC), Go 1.22+, and one runtime
-(VMware Workstation/Player, or WSL2). See [docs/build.md](docs/build.md).
+Prereqs: Windows 10/11, Node 20+ (Vite needs a recent Node), Go 1.26, and one
+runtime (VMware Workstation/Player, or WSL2). Rust/MSVC is only needed for the
+legacy Tauri shell under `app/src-tauri`, not for building the shipped
+product — see `build-release.sh` (supervisor + embedded GUI) and
+`tools/iolab-launcher` (the plain-Go Windows deliverable). Full build steps:
+[docs/build.md](docs/build.md) — note this predates the browser-first pivot in
+places and is due for a refresh.
 
 ## Legal
 
