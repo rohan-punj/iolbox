@@ -75,6 +75,7 @@ Thumbs.db
 # Session scratch dirs (agent prompt batches, throwaway build caches)
 /.tmp-p2-prompts/
 /.tmp-secbench-gocache/
+/scratch/
 
 # Historical/point-in-time docs — kept on disk for local reference, not
 # committed. Live reference docs (INSTALL, architecture, protocol, build,
