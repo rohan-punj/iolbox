@@ -6,12 +6,31 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/relay"
 	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
+
+// closeWaitTimeout bounds how long Close() will block on the tcpdump
+// process's exit. Found live (finding #13): Close() killed only the `sudo`
+// wrapper (cmd.Process), never the tcpdump grandchild it execs — tcpdump
+// survived as an orphan still holding the inherited stdout pipe open, so
+// cmd.Wait() (which Go's os/exec blocks on until that pipe reaches EOF)
+// hung forever. That hang happened while handleCaptureStop held the
+// server's single serializedHandler mutex, wedging every other control-plane
+// request behind it — including a fresh page reload's hello handshake,
+// which is why the GUI showed "Connecting" forever with no way to recover
+// short of a process restart. Setpgid below fixes the root cause (the whole
+// sudo+tcpdump process group is killed together, not just sudo); this
+// timeout is the self-heal backstop so a future variant of the same failure
+// mode can never wedge the control plane again — it leaks the goroutine
+// waiting on the process instead of blocking the caller.
+const closeWaitTimeout = 3 * time.Second
 
 // Capture runs tcpdump against a Linux bridge fabric link and re-serves its
 // frames as a live pcapng TCP stream, while classifying and counting them.
@@ -42,6 +61,12 @@ func Start(bridgeName, bind string, port int) (*Capture, error) {
 	}
 
 	cmd := exec.Command("sudo", "-n", "tcpdump", "-i", bridgeName, "-w", "-", "-U", "-s", "0", "-n")
+	// New process group so Close() can kill sudo AND the tcpdump child it
+	// execs in one signal (-pid) — sudo forks tcpdump rather than exec'ing
+	// over itself, and without this the two share iolbox-supervisor's own
+	// process group, so killing only cmd.Process (sudo) leaves tcpdump
+	// running as an orphan. See closeWaitTimeout's doc comment.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		server.Close()
@@ -117,10 +142,29 @@ func (c *Capture) Close() error {
 
 	var killErr error
 	if c.cmd.Process != nil {
-		killErr = c.cmd.Process.Kill()
+		// Negative pid signals the whole process group (sudo + tcpdump),
+		// set up via Setpgid in Start — see its comment. Falls back to
+		// killing just cmd.Process if the group signal itself errors (e.g.
+		// the group already reaped), same as the pre-existing behavior.
+		if err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			killErr = c.cmd.Process.Kill()
+		}
 	}
-	_ = c.cmd.Wait()
-	tool.Registry.Remove(c.cmd.Process.Pid)
+
+	waitDone := make(chan struct{})
+	go func() {
+		_ = c.cmd.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(closeWaitTimeout):
+		log.Printf("bcap: tcpdump on %s did not exit within %s after kill — leaking the wait, not blocking the caller", c.bridge, closeWaitTimeout)
+	}
+
+	if c.cmd.Process != nil {
+		tool.Registry.Remove(c.cmd.Process.Pid)
+	}
 	c.server.Close()
 	return killErr
 }
