@@ -9,7 +9,7 @@ import { consoleUiStore } from "./consoleUiStore.svelte";
 import { CaptureTransport } from "./captureTransport";
 import { encodePcapng, PcapngParser, type CapturedPacket, type ParsedPacket } from "./pcapng";
 import { appendLensEvents, type EndpointAttribView, type LensAttribution, type LensEvent } from "./lens";
-import type { StatusResult, SupervisorEvent, ToolPackInfo } from "./protocol";
+import type { LabStartResult, StatusResult, SupervisorEvent, ToolPackInfo } from "./protocol";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
 export type ProviderStatus = "unknown" | "connecting" | "connected" | "error";
@@ -20,6 +20,29 @@ export interface LogLine {
   message: string;
   node?: number;
 }
+
+/** "danger" is visually red like "error" (a deactivating/destructive action —
+ *  stop, wipe, force-clean) but is a normal completion, not a failure: it
+ *  keeps role="status"/aria-live="polite" instead of "error"'s assertive
+ *  interrupt, which is reserved for actual RPC failures (see ToastStack). */
+export type ToastSeverity = "success" | "info" | "warning" | "danger" | "error";
+
+export interface ToastNotification {
+  id: string;
+  key?: string;
+  severity: ToastSeverity;
+  message: string;
+  createdAt: number;
+  duration: number;
+  count?: number;
+  dismissing?: boolean;
+}
+
+type ToastInput = Pick<ToastNotification, "severity" | "message"> & {
+  key?: string;
+  duration?: number;
+  count?: number;
+};
 
 export interface CaptureSubscriber {
   onReset?(): void;
@@ -79,6 +102,7 @@ class LabStore {
   toolPacksLoading = $state(false);
   toolPacksError = $state<string | null>(null);
   logs = $state<LogLine[]>([]);
+  toasts = $state<ToastNotification[]>([]);
   /** Last user-visible failure (start/stop/load); shown in the top bar until
    *  the next successful action clears it. Never silently swallow errors. */
   lastError = $state<string | null>(null);
@@ -170,6 +194,19 @@ class LabStore {
   private savedDocIds = new Set<string>();
   lastSavedAt = $state<number | null>(null);
   private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private toastQueue: ToastNotification[] = [];
+  private toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private toastExitTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private toastTimerStartedAt = new Map<string, number>();
+  private toastRemaining = new Map<string, number>();
+  private toastPauseCounts = new Map<string, number>();
+  private toastId = 0;
+  private captureBursts = new Map<
+    "started" | "stopped",
+    { links: Set<number>; timer: ReturnType<typeof setTimeout> }
+  >();
+  private labStopPending = false;
+  private labStopSuppressedUntil = 0;
   /** One parser and one WebSocket per open capture link. CaptureTerm and the
    *  Lens subscribe to this session instead of opening parallel streams. */
   private captureSessions = new Map<number, CaptureSession>();
@@ -208,6 +245,193 @@ class LabStore {
   /** Only meaningful when transportKind === "mock"; null under a real ws transport. */
   get mockTransport(): MockTransport | null {
     return this.mock;
+  }
+
+  private toastDuration(severity: ToastSeverity): number {
+    switch (severity) {
+      case "success":
+        return 4_000;
+      case "info":
+        return 4_500;
+      case "warning":
+        return 6_000;
+      case "danger":
+        return 6_000;
+      case "error":
+        return 8_000;
+    }
+  }
+
+  enqueueToast(input: ToastInput): string {
+    const now = Date.now();
+    const duration = input.duration ?? this.toastDuration(input.severity);
+    const existingIndex = input.key
+      ? this.toasts.findIndex((toast) => toast.key === input.key)
+      : -1;
+    const queuedIndex = input.key
+      ? this.toastQueue.findIndex((toast) => toast.key === input.key)
+      : -1;
+
+    if (existingIndex >= 0 || queuedIndex >= 0) {
+      const visible = existingIndex >= 0;
+      const existing = visible ? this.toasts[existingIndex] : this.toastQueue[queuedIndex];
+      const updated: ToastNotification = {
+        ...existing,
+        severity: input.severity,
+        message: input.message,
+        createdAt: now,
+        duration,
+        count: input.count,
+        dismissing: false,
+      };
+      this.clearToastExitTimer(existing.id);
+      this.toastRemaining.set(existing.id, duration);
+      this.clearToastTimer(existing.id);
+      if (visible) {
+        this.toasts = this.toasts.map((toast, index) => (index === existingIndex ? updated : toast));
+        if (!this.toastPauseCounts.get(existing.id)) this.startToastTimer(existing.id);
+      } else {
+        this.toastQueue[queuedIndex] = updated;
+      }
+      return existing.id;
+    }
+
+    const toast: ToastNotification = {
+      id: `toast-${now}-${++this.toastId}`,
+      key: input.key,
+      severity: input.severity,
+      message: input.message,
+      createdAt: now,
+      duration,
+      count: input.count,
+    };
+    while (this.toasts.length + this.toastQueue.length >= 20 && this.toastQueue.length > 0) {
+      const dropIndex = this.toastQueue.findIndex((queued) => queued.severity !== "error");
+      if (dropIndex < 0 && toast.severity !== "error") return toast.id;
+      const [dropped] = this.toastQueue.splice(dropIndex >= 0 ? dropIndex : 0, 1);
+      if (dropped) this.toastRemaining.delete(dropped.id);
+    }
+    this.toastRemaining.set(toast.id, duration);
+    if (this.toasts.length < 4) {
+      this.toasts = [toast, ...this.toasts];
+      this.startToastTimer(toast.id);
+    } else {
+      this.toastQueue.push(toast);
+    }
+    return toast.id;
+  }
+
+  dismissToast(id: string) {
+    const visibleIndex = this.toasts.findIndex((toast) => toast.id === id);
+    if (visibleIndex < 0) {
+      const queuedIndex = this.toastQueue.findIndex((toast) => toast.id === id);
+      if (queuedIndex >= 0) this.toastQueue.splice(queuedIndex, 1);
+      return;
+    }
+    const toast = this.toasts[visibleIndex];
+    if (toast.dismissing) return;
+    this.clearToastTimer(id);
+    this.toastPauseCounts.delete(id);
+    this.toasts = this.toasts.map((item, index) =>
+      index === visibleIndex ? { ...item, dismissing: true } : item
+    );
+    this.clearToastExitTimer(id);
+    this.toastExitTimers.set(
+      id,
+      setTimeout(() => {
+        this.toastExitTimers.delete(id);
+        this.toasts = this.toasts.filter((item) => item.id !== id);
+        this.toastRemaining.delete(id);
+        this.promoteToast();
+      }, 120)
+    );
+  }
+
+  pauseToast(id: string) {
+    const toast = this.toasts.find((item) => item.id === id);
+    if (!toast || toast.dismissing) return;
+    const count = this.toastPauseCounts.get(id) ?? 0;
+    this.toastPauseCounts.set(id, count + 1);
+    if (count > 0) return;
+    const startedAt = this.toastTimerStartedAt.get(id);
+    if (startedAt !== undefined) {
+      const remaining = this.toastRemaining.get(id) ?? toast.duration;
+      this.toastRemaining.set(id, Math.max(0, remaining - (Date.now() - startedAt)));
+    }
+    this.clearToastTimer(id);
+  }
+
+  resumeToast(id: string) {
+    const count = this.toastPauseCounts.get(id) ?? 0;
+    if (count === 0) return;
+    if (count <= 1) this.toastPauseCounts.delete(id);
+    else this.toastPauseCounts.set(id, count - 1);
+    if (count > 1) return;
+    const toast = this.toasts.find((item) => item.id === id);
+    if (toast && !toast.dismissing) this.startToastTimer(id);
+  }
+
+  resolveNodeName(id: number): string {
+    return this.lab.nodes.find((node) => node.id === id)?.name ?? `Node ${id}`;
+  }
+
+  private clearToastTimer(id: string) {
+    const timer = this.toastTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.toastTimers.delete(id);
+    this.toastTimerStartedAt.delete(id);
+  }
+
+  private clearToastExitTimer(id: string) {
+    const timer = this.toastExitTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.toastExitTimers.delete(id);
+  }
+
+  private startToastTimer(id: string) {
+    const toast = this.toasts.find((item) => item.id === id);
+    if (!toast || toast.dismissing || this.toastPauseCounts.get(id)) return;
+    this.clearToastTimer(id);
+    const remaining = this.toastRemaining.get(id) ?? toast.duration;
+    if (remaining <= 0) {
+      this.dismissToast(id);
+      return;
+    }
+    this.toastTimerStartedAt.set(id, Date.now());
+    this.toastTimers.set(id, setTimeout(() => this.dismissToast(id), remaining));
+  }
+
+  private promoteToast() {
+    while (this.toasts.length < 4 && this.toastQueue.length > 0) {
+      const next = this.toastQueue.shift()!;
+      this.toasts = [...this.toasts, next];
+      this.startToastTimer(next.id);
+    }
+  }
+
+  private coalesceCapture(kind: "started" | "stopped", linkId: number) {
+    if (kind === "stopped" && this.labStopReplaySuppressed()) return;
+    const existing = this.captureBursts.get(kind);
+    if (existing) {
+      existing.links.add(linkId);
+      return;
+    }
+    const links = new Set([linkId]);
+    const timer = setTimeout(() => {
+      this.captureBursts.delete(kind);
+      const count = links.size;
+      const word = kind === "started" ? "started" : "stopped";
+      this.enqueueToast({
+        severity: "info",
+        message: count === 1 ? `Capture ${word} — link ${[...links][0]}` : `${count} captures ${word}`,
+        count: count > 1 ? count : undefined,
+      });
+    }, 750);
+    this.captureBursts.set(kind, { links, timer });
+  }
+
+  private labStopReplaySuppressed(): boolean {
+    return this.labStopPending || Date.now() < this.labStopSuppressedUntil;
   }
 
   async connect() {
@@ -472,6 +696,13 @@ class LabStore {
         // running/crashed event (or the 60s safety timeout). Only "running",
         // "stopped", and "crashed" are terminal; "starting" must NOT release.
         if (evt.data.state !== "starting" && !this.nodeLocks[evt.data.node]?.holdUntilSettled) this.releaseNodeLock(evt.data.node);
+        if (evt.data.state === "crashed") {
+          this.enqueueToast({
+            key: `node-crashed:${evt.data.node}`,
+            severity: "error",
+            message: `${this.resolveNodeName(evt.data.node)} crashed`,
+          });
+        }
         break;
       case "node.console":
         this.consolePorts = { ...this.consolePorts, [evt.data.node]: evt.data.consolePort };
@@ -483,11 +714,13 @@ class LabStore {
       }
       case "capture.started":
         this.capturePorts = { ...this.capturePorts, [evt.data.link]: evt.data.capturePort };
+        this.coalesceCapture("started", evt.data.link);
         break;
       case "capture.stopped": {
         const next = { ...this.capturePorts };
         delete next[evt.data.link];
         this.capturePorts = next;
+        this.coalesceCapture("stopped", evt.data.link);
         break;
       }
       case "link.stats":
@@ -524,6 +757,19 @@ class LabStore {
         if (link) {
           if (evt.data.fault) link.fault = { ...evt.data.fault };
           else delete link.fault;
+        }
+        if (evt.data.active && evt.data.fault) {
+          this.enqueueToast({
+            key: `link-fault:${evt.data.link}`,
+            severity: "warning",
+            message: `Link ${evt.data.link} impairment active`,
+          });
+        } else if (!evt.data.active && !evt.data.fault && !this.labStopReplaySuppressed()) {
+          this.enqueueToast({
+            key: `link-fault:${evt.data.link}`,
+            severity: "success",
+            message: `Link ${evt.data.link} restored`,
+          });
         }
         break;
       }
@@ -661,7 +907,8 @@ class LabStore {
   }
 
   /** Persist the current doc, stamping `modified`. Returns true on success. */
-  async saveLab(): Promise<boolean> {
+  async saveLab(notify = true): Promise<boolean> {
+    const labName = this.lab.name;
     this.lab.modified = new Date().toISOString();
     let ok = false;
     await this.guarded("save lab", async () => {
@@ -677,6 +924,7 @@ class LabStore {
       this.lastSavedAt = Date.now();
       ok = true;
     });
+    if (ok && notify) this.enqueueToast({ severity: "success", message: `Lab saved — ${labName}` });
     return ok;
   }
 
@@ -687,11 +935,12 @@ class LabStore {
     return res.labs;
   }
 
-  async deleteLab(labId: string) {
-    await this.guarded("delete lab", async () => {
+  async deleteLab(labId: string, labName = labId) {
+    const ok = await this.guarded("delete lab", async () => {
       await this.client.labDeleteDoc(labId);
       this.savedDocIds.delete(labId);
     });
+    if (ok) this.enqueueToast({ severity: "info", message: `Lab deleted — ${labName}` });
   }
 
   /** Clone a stored lab under a fresh id + " (copy)" name and persist the copy,
@@ -700,7 +949,7 @@ class LabStore {
    *  names get a numeric suffix so repeated clones don't collide. */
   async cloneLab(source: LabDocument): Promise<LabDocument | null> {
     let out: LabDocument | null = null;
-    await this.guarded("clone lab", async () => {
+    const ok = await this.guarded("clone lab", async () => {
       const now = new Date().toISOString();
       const existing = new Set((await this.client.labListDocs()).labs.map((l) => l.name));
       let name = `${source.name} (copy)`;
@@ -716,6 +965,8 @@ class LabStore {
       this.savedDocIds.add(copy.id);
       out = copy;
     });
+    const copy = out as LabDocument | null;
+    if (ok && copy) this.enqueueToast({ severity: "success", message: `Lab copy created — ${copy.name}` });
     return out;
   }
 
@@ -791,7 +1042,7 @@ class LabStore {
     if (this.autosaveTimer) clearTimeout(this.autosaveTimer);
     this.autosaveTimer = setTimeout(() => {
       this.autosaveTimer = null;
-      void this.saveLab();
+      void this.saveLab(false);
     }, 1200);
   }
 
@@ -997,6 +1248,10 @@ class LabStore {
   }
 
   async startLab() {
+    if (this.lab.nodes.length === 0) {
+      this.enqueueToast({ severity: "info", message: "Lab has no nodes to start" });
+      return;
+    }
     // Pre-flight what the supervisor would reject anyway, with a message that
     // names the node instead of an opaque image_not_found.
     const missing = this.lab.nodes.find(
@@ -1007,9 +1262,26 @@ class LabStore {
       this.pushLog("error", this.lastError);
       return;
     }
-    await this.guarded("start lab", async () => {
-      await this.client.labStart(this.lab.id);
+    let result: LabStartResult | undefined;
+    const ok = await this.guarded("start lab", async () => {
+      result = await this.client.labStart(this.lab.id);
     });
+    if (ok && result) {
+      const failedCount = result.failed?.length ?? 0;
+      if (failedCount > 0) {
+        this.enqueueToast({
+          severity: "error",
+          message: `Lab start incomplete — ${failedCount} of ${this.lab.nodes.length} nodes failed`,
+        });
+      } else if (result.started.length > 0) {
+        const count = result.started.length;
+        this.enqueueToast({
+          severity: "success",
+          message: `Lab started — ${count} ${count === 1 ? "node" : "nodes"} running`,
+        });
+      }
+    }
+    this.reportStartFailures("start lab", result);
   }
 
   /** Force-clean orphaned runtime state: ask the supervisor to stop every
@@ -1017,8 +1289,10 @@ class LabStore {
    *  reset local runtime state so the GUI matches. Use when nodes still show
    *  running or host CPU stays high after a normal stop. */
   async forceClean() {
-    await this.guarded("force clean", async () => {
+    let reapedCount = 0;
+    const ok = await this.guarded("force clean", async () => {
       const res = await this.client.labReap();
+      reapedCount = res?.reaped ?? 0;
       // Reset local runtime view: everything is stopped now.
       const states: Record<number, NodeState> = {};
       for (const n of this.lab.nodes) states[n.id] = "stopped";
@@ -1034,22 +1308,60 @@ class LabStore {
       this.lensEvents = {};
       this.linkStats = {};
       this.linkFaults = {};
-      this.pushLog("info", `force clean: stopped ${res?.reaped ?? 0} node(s) and all relays`);
+      this.pushLog("info", `force clean: stopped ${reapedCount} node(s) and all relays`);
     });
+    if (ok) {
+      this.enqueueToast({
+        severity: "danger",
+        message: `Force clean complete — stopped ${reapedCount} ${reapedCount === 1 ? "node" : "nodes"} and cleared relays`,
+      });
+    }
   }
 
   async stopLab() {
-    await this.guarded("stop lab", async () => {
-      await this.client.labStop(this.lab.id);
-      this.openConsoleTabs = [];
-      this.activeConsoleTab = null;
-    });
+    const nodeCount = this.lab.nodes.length;
+    this.labStopPending = true;
+    let ok = false;
+    try {
+      ok = await this.guarded("stop lab", async () => {
+        await this.client.labStop(this.lab.id);
+        this.openConsoleTabs = [];
+        this.activeConsoleTab = null;
+      });
+    } finally {
+      this.labStopPending = false;
+    }
+    if (ok) {
+      this.labStopSuppressedUntil = Date.now() + 1_500;
+      this.enqueueToast({
+        severity: "danger",
+        message: nodeCount === 0
+          ? "Lab stopped — no nodes were running"
+          : `Lab stopped — all ${nodeCount} ${nodeCount === 1 ? "node" : "nodes"} stopped`,
+      });
+    }
   }
 
   async setLinkFault(linkId: number, fault: LinkFault | null, afterSec?: number, forSec?: number) {
-    await this.guarded(`set fault on link ${linkId}`, () =>
+    const ok = await this.guarded(`set fault on link ${linkId}`, () =>
       this.client.linkSetFault(this.lab.id, linkId, fault, afterSec, forSec)
     );
+    if (!ok) return;
+    if (fault) {
+      this.enqueueToast({
+        key: `link-fault:${linkId}`,
+        severity: afterSec && afterSec > 0 ? "info" : "warning",
+        message: afterSec && afterSec > 0
+          ? `Link ${linkId} impairment scheduled`
+          : `Link ${linkId} impairment active`,
+      });
+    } else {
+      this.enqueueToast({
+        key: `link-fault:${linkId}`,
+        severity: "success",
+        message: `Link ${linkId} restored`,
+      });
+    }
   }
 
   /** Takes a link administratively down until explicitly resumed — a
@@ -1084,24 +1396,46 @@ class LabStore {
    *  mock transport lab.wipe isn't implemented, so a rejection here is logged
    *  and swallowed rather than surfaced as a hard error. */
   async wipeLab() {
-    await this.guarded("wipe lab", () => this.client.labWipe(this.lab.id, null));
+    let wipedCount = 0;
+    const ok = await this.guarded("wipe lab", async () => {
+      const result = await this.client.labWipe(this.lab.id, null);
+      wipedCount = result.wiped.length;
+    });
+    if (ok) {
+      this.enqueueToast({
+        severity: "danger",
+        message: `Lab wiped — saved state cleared for ${wipedCount} ${wipedCount === 1 ? "node" : "nodes"}`,
+      });
+    }
   }
 
   /** Wipe saved configs/state for a single node. Destructive — the caller (UI)
    *  must confirm with the user first. Mirrors wipeLab: mock lab.wipe isn't
    *  implemented, so a rejection is logged + swallowed via guarded(). */
   async wipeNode(nodeId: number) {
+    const nodeName = this.resolveNodeName(nodeId);
+    let wiped = false;
     // RPC-ack only (no driving node.state) → release when the awaited call
     // settles (guarded never rethrows, so the finally always runs).
     if (!this.acquireNodeLock(nodeId, "wiping")) return;
     try {
-      await this.guarded(`wipe node ${nodeId}`, () => this.client.labWipe(this.lab.id, [nodeId]));
+      const ok = await this.guarded(`wipe node ${nodeId}`, async () => {
+        const result = await this.client.labWipe(this.lab.id, [nodeId]);
+        wiped = result.wiped.includes(nodeId);
+      });
+      if (ok && wiped) {
+        this.enqueueToast({
+          severity: "danger",
+          message: `${nodeName} wiped — saved state cleared`,
+        });
+      }
     } finally {
       this.releaseNodeLock(nodeId);
     }
   }
 
   async startNode(nodeId: number) {
+    const nodeName = this.resolveNodeName(nodeId);
     // Lock the node until its next node.state event (released in handleEvent) —
     // that's the success path, left exactly as before. But when the RPC itself
     // is REJECTED (e.g. a fabric-prep error that never reaches this node's own
@@ -1110,37 +1444,61 @@ class LabStore {
     // release explicitly on that path only, same as wipeNode/restartNode below.
     if (!this.acquireNodeLock(nodeId, "starting")) return;
     let rpcRejected = false;
-    await this.guarded(`start node ${nodeId}`, async () => {
+    let result: LabStartResult | undefined;
+    const ok = await this.guarded(`start node ${nodeId}`, async () => {
       try {
-        await this.client.nodeStart(this.lab.id, nodeId);
+        result = await this.client.nodeStart(this.lab.id, nodeId);
       } catch (e) {
         rpcRejected = true;
         throw e;
       }
     });
     if (rpcRejected) this.releaseNodeLock(nodeId);
+    if (ok && result?.started.some((started) => started.node === nodeId) &&
+      !result.failed?.some((failure) => failure.node === nodeId)) {
+      this.enqueueToast({ severity: "success", message: `${nodeName} started` });
+    }
+    this.reportStartFailures(`start node ${nodeId}`, result);
+    if (result?.failed?.some((failure) => failure.node === nodeId)) this.releaseNodeLock(nodeId);
+  }
+
+  private reportStartFailures(action: string, result: LabStartResult | undefined) {
+    if (!result?.failed?.length) return;
+    const details = result.failed.map((failure) => `node ${failure.node}: ${failure.error}`).join("; ");
+    this.lastError = `${action}: ${result.failed.length} node(s) failed — ${details}`;
+    this.pushLog("error", this.lastError);
   }
 
   async stopNode(nodeId: number) {
+    const nodeName = this.resolveNodeName(nodeId);
     if (!this.acquireNodeLock(nodeId, "stopping")) return;
-    await this.guarded(`stop node ${nodeId}`, async () => {
+    const ok = await this.guarded(`stop node ${nodeId}`, async () => {
       await this.client.nodeStop(this.lab.id, nodeId);
       this.openConsoleTabs = this.openConsoleTabs.filter((id) => id !== nodeId);
       if (this.activeConsoleTab === nodeId) {
         this.activeConsoleTab = this.openConsoleTabs[0] ?? null;
       }
     });
+    if (ok) this.enqueueToast({ severity: "danger", message: `${nodeName} stopped` });
   }
 
   async restartNode(nodeId: number) {
+    const nodeName = this.resolveNodeName(nodeId);
     if (!this.acquireNodeLock(nodeId, "restarting", { holdUntilSettled: true })) return;
+    let result: LabStartResult | undefined;
+    let ok = false;
     try {
-      await this.guarded(`restart node ${nodeId}`, async () => {
-        await this.client.nodeRestart(this.lab.id, nodeId);
+      ok = await this.guarded(`restart node ${nodeId}`, async () => {
+        result = await this.client.nodeRestart(this.lab.id, nodeId);
       });
     } finally {
       this.releaseNodeLock(nodeId);
     }
+    if (ok && result?.started.some((started) => started.node === nodeId) &&
+      !result.failed?.some((failure) => failure.node === nodeId)) {
+      this.enqueueToast({ severity: "success", message: `${nodeName} restarted` });
+    }
+    this.reportStartFailures(`restart node ${nodeId}`, result);
   }
 
   // ---- per-node action lock (WS1) ----
@@ -1173,13 +1531,15 @@ class LabStore {
 
   /** Run a supervisor action; surface failure in the top bar + log instead of
    *  letting the rejection vanish into an unhandled promise. */
-  private async guarded(what: string, fn: () => Promise<unknown>) {
+  private async guarded(what: string, fn: () => Promise<unknown>): Promise<boolean> {
     try {
       await fn();
       this.lastError = null;
+      return true;
     } catch (e) {
       this.lastError = `${what} failed: ${(e as Error).message}`;
       this.pushLog("error", this.lastError);
+      return false;
     }
   }
 
@@ -1480,11 +1840,13 @@ class LabStore {
   /** Extract NVRAM startup-config for one node into node.startupConfig. Runs on
    *  the node's SAVED config, so the user must `write memory` first. */
   async saveNodeConfig(nodeId: number) {
-    await this.guarded(`save config for node ${nodeId}`, async () => {
+    const nodeName = this.resolveNodeName(nodeId);
+    const ok = await this.guarded(`save config for node ${nodeId}`, async () => {
       const res = await this.client.configExtract(this.lab.id, [nodeId]);
       this.applyExtractedConfigs(res.configs);
     });
     this.scheduleAutosave();
+    if (ok) this.enqueueToast({ severity: "success", message: `Config saved — ${nodeName}` });
   }
 
   /** Extract startup-configs for every running IOL node into the doc. */
@@ -1496,11 +1858,17 @@ class LabStore {
       this.pushLog("warn", "no running IOL nodes to extract config from");
       return;
     }
-    await this.guarded("save configs", async () => {
+    const ok = await this.guarded("save configs", async () => {
       const res = await this.client.configExtract(this.lab.id, targets);
       this.applyExtractedConfigs(res.configs);
     });
     this.scheduleAutosave();
+    if (ok) {
+      this.enqueueToast({
+        severity: "success",
+        message: `Configs saved — ${targets.length} ${targets.length === 1 ? "node" : "nodes"}`,
+      });
+    }
   }
 
   private applyExtractedConfigs(configs: { node: number; startupConfig: string }[]) {

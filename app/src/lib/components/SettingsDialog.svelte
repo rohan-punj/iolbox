@@ -10,7 +10,6 @@
   import { labStore } from "../labStore.svelte";
   import { chromeStore } from "../chromeStore.svelte";
   import { themeStore } from "../themeStore.svelte";
-  import { macUiStore } from "../macUiStore.svelte";
   import { consoleUiStore, FONT_MIN, FONT_MAX } from "../consoleUiStore.svelte";
 
   let { onClose }: { onClose: () => void } = $props();
@@ -75,13 +74,6 @@
           <span class="row-hint">Snap dragged nodes to the 20px canvas grid</span>
         </span>
         <input type="checkbox" checked={labStore.lab.canvas?.snapGrid ?? false} onchange={toggleSnapGrid} />
-      </label>
-      <label class="row toggle-row">
-        <span class="row-copy">
-          <span class="row-label">Detect IOL MAC addresses</span>
-          <span class="row-hint">Infer IOL addresses from observed live traffic (VPCS/PC addresses always show directly)</span>
-        </span>
-        <input type="checkbox" checked={macUiStore.learnIol} onchange={() => macUiStore.toggleLearnIol()} />
       </label>
     </section>
 

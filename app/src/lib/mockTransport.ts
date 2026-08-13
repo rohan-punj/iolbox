@@ -376,7 +376,6 @@ export class MockTransport implements Transport {
         }
 
         const running = this.nodes.get(nid)?.state === "running";
-        const learned = args?.learned === true;
         const macs: NodeMACsResult["macs"] = interfaces.map((iface, index) => {
           if (node.kind === "vpcs") {
             return { interface: iface, mac: "02:00:00:00:00:01", source: "derived", state: "known" };
@@ -387,14 +386,17 @@ export class MockTransport implements Transport {
               : { interface: iface, state: "unknown", reason: "node not running" };
           }
           if (node.kind === "iol") {
-            if (!learned) {
-              return { interface: iface, state: "disabled", reason: "turn on learned-MAC display to see this" };
+            if (!running) {
+              return { interface: iface, state: "unknown", reason: "node not running" };
+            }
+            if (iface.startsWith("s")) {
+              return { interface: iface, state: "unknown", reason: "interface has no IEEE MAC address" };
             }
             const suffix = (index + 1).toString(16).padStart(2, "0");
             return {
               interface: iface,
               mac: `02:00:00:10:00:${suffix}`,
-              source: "learned",
+              source: "read",
               state: "known",
             };
           }

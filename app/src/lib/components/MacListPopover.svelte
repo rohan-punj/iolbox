@@ -30,7 +30,7 @@
   onMount(() => {
     let alive = true;
     void labStore.client
-      .nodeMACs(nodeId, false)
+      .nodeMACs(nodeId)
       .then((response) => {
         if (alive) result = response;
       })

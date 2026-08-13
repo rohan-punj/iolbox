@@ -193,6 +193,7 @@ export interface NodeRuntimeStatus {
 
 export interface LabStartResult {
   started: NodeRuntimeStatus[];
+  failed?: { node: number; state?: NodeState; error: string }[];
 }
 
 export interface LabWipeResult {
@@ -208,8 +209,8 @@ export interface NodeSetImageResult {
 export interface NodeMAC {
   interface: string;
   mac?: string;
-  source?: "derived" | "read" | "learned";
-  state: "known" | "unknown" | "ambiguous" | "disabled";
+  source?: "derived" | "read";
+  state: "known" | "unknown";
   reason?: string;
 }
 

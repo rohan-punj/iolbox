@@ -90,7 +90,7 @@
   async function remove(doc: LabDocument, ev: MouseEvent) {
     ev.stopPropagation();
     if (!confirm(`Delete "${doc.name}" from the store? This cannot be undone.`)) return;
-    await labStore.deleteLab(doc.id);
+    await labStore.deleteLab(doc.id, doc.name);
     await refresh();
   }
 

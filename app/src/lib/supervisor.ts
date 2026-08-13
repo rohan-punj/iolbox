@@ -20,7 +20,6 @@ import type {
 } from "./protocol";
 import type { LabDocument, LabLink, LabNode, LinkFault } from "./labTypes";
 import type { PainterProto, PainterResult, StpVlansResult } from "./painterTypes";
-import { macUiStore } from "./macUiStore.svelte";
 import { labToYaml, labFromText } from "./yaml";
 import { uuid } from "./uid";
 import { isEvent, isResponse, type Transport } from "./transport";
@@ -198,15 +197,8 @@ export class SupervisorClient {
     return this.call<NodeSetImageResult>("node.setImage", { labId, node, imageId });
   }
 
-  nodeMACs(node: number, learned = false) {
-    // Batch 11a's popover predates the learned-IOL preference and passes its
-    // placeholder value explicitly. Keep that caller untouched while making
-    // the shared client request reflect the display preference. An explicit
-    // learned=true remains supported for future callers.
-    return this.call<NodeMACsResult>("node.macs", {
-      node,
-      learned: learned || macUiStore.learnIol,
-    });
+  nodeMACs(node: number) {
+    return this.call<NodeMACsResult>("node.macs", { node });
   }
 
   linkAdd(labId: string, link: LabLink) {

@@ -54,6 +54,7 @@
   --statusbar-h: 26px;
   --transition-fast: 120ms ease;
   --transition-base: 180ms ease;
+  --toast-blur: saturate(180%) blur(20px);
 
   /* Semantic stacking scale. Values preserve the bands already in use. */
   --z-canvas: 1;
@@ -90,6 +91,11 @@
   --panel-2: #151d28;
   --panel-solid: #10161f;
   --panel-elevated: #1a2430;
+  /* A near-ground tone at 30% alpha (the original value) blends almost
+     invisibly into --ground (#0a0e14) — same dark family, so the fill read
+     as an outline with nothing behind it. Use a lighter slate so the glass
+     panel is visibly distinct from the canvas at a still-translucent 55%. */
+  --toast-surface: rgba(32, 44, 61, 0.55);
 
   /* Borders */
   --border: #223041;
@@ -173,6 +179,10 @@
   --panel-2: rgba(255, 255, 255, 0.8);
   --panel-solid: #ffffff;
   --panel-elevated: rgba(255, 255, 255, 0.9);
+  /* Same fix as the dark theme: white at 30% over --ground (#eef1f6, already
+     near-white) barely separated from the canvas. 55% reads as a real
+     frosted card while staying translucent. */
+  --toast-surface: rgba(255, 255, 255, 0.55);
 
   --border: rgba(16, 26, 42, 0.1);
   --border-strong: rgba(16, 26, 42, 0.18);

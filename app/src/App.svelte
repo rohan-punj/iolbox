@@ -27,6 +27,7 @@
   import SplitPane from "./lib/components/SplitPane.svelte";
   import WatcherPanel from "./lib/components/WatcherPanel.svelte";
   import PainterPanel from "./lib/components/PainterPanel.svelte";
+  import ToastStack from "./lib/components/ToastStack.svelte";
 
   let inspectorWidth = $state(300);
   let tasksWidth = $state(360);
@@ -349,6 +350,8 @@
   </div>
   <ResourceBar />
 </div>
+
+<ToastStack />
 
 {#if showConsole && consoleUiStore.placement === "float"}
   <FloatingConsoleLayer />
