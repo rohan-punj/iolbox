@@ -1,0 +1,318 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type darwinOptions struct {
+	Command     string
+	Profile     string
+	Machine     string
+	AssetsDir   string
+	Limactl     string
+	Tarball     string
+	BootTimeout time.Duration
+	NoBrowser   bool
+	Bind        string
+	GUIPort     int
+}
+
+func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
+	opts := darwinOptions{
+		Command:     "start",
+		Profile:     os.Getenv("IOLBOX_PROFILE"),
+		Machine:     os.Getenv("IOLBOX_MACHINE"),
+		Limactl:     os.Getenv("LIMACTL"),
+		Tarball:     os.Getenv("IOLBOX_TARBALL"),
+		BootTimeout: 6 * time.Minute,
+		Bind:        os.Getenv("IOLBOX_BIND"),
+		GUIPort:     4001,
+	}
+	if opts.Bind == "" {
+		opts.Bind = "all"
+	}
+	if value := os.Getenv("IOLBOX_GUI_PORT"); value != "" {
+		port, err := strconv.Atoi(value)
+		if err != nil || port < 1 || port > 65535 {
+			return darwinOptions{}, fmt.Errorf("invalid IOLBOX_GUI_PORT %q", value)
+		}
+		opts.GUIPort = port
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		opts.Command = args[0]
+		args = args[1:]
+	}
+	validCommands := map[string]bool{"start": true, "stop": true, "status": true, "diagnose": true, "upgrade": true}
+	if !validCommands[opts.Command] {
+		return darwinOptions{}, fmt.Errorf("unknown command %q", opts.Command)
+	}
+	fs := flag.NewFlagSet("iolbox-launcher", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&opts.Profile, "profile", opts.Profile, "profile name")
+	fs.StringVar(&opts.Machine, "machine", opts.Machine, "Lima machine name")
+	fs.StringVar(&opts.AssetsDir, "assets-dir", "", "M1 macOS asset root")
+	fs.StringVar(&opts.Limactl, "limactl", opts.Limactl, "limactl executable")
+	fs.StringVar(&opts.Tarball, "tarball", opts.Tarball, "payload tarball")
+	fs.DurationVar(&opts.BootTimeout, "boot-timeout", opts.BootTimeout, "readiness timeout")
+	fs.BoolVar(&opts.NoBrowser, "no-browser", false, "do not open the browser")
+	if err := fs.Parse(args); err != nil {
+		return darwinOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return darwinOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	return opts, nil
+}
+
+func resolveAssetRoot(explicit string) (string, error) {
+	if explicit != "" {
+		if _, err := os.Stat(filepath.Join(explicit, "lima", "profiles.env")); err != nil {
+			return "", fmt.Errorf("assets directory is missing lima/profiles.env: %s", explicit)
+		}
+		return filepath.Abs(explicit)
+	}
+	var candidates []string
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "packaging", "macos"), cwd)
+	}
+	if executable, err := os.Executable(); err == nil {
+		dir := filepath.Dir(executable)
+		candidates = append(candidates, filepath.Join(dir, "packaging", "macos"), filepath.Join(dir, "..", "..", "packaging", "macos"), dir)
+	}
+	for _, candidate := range candidates {
+		candidate, _ = filepath.Abs(candidate)
+		if _, err := os.Stat(filepath.Join(candidate, "lima", "profiles.env")); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("could not resolve macOS asset root; use --assets-dir")
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return exitOK
+	}
+	var coded *launcherError
+	if errors.As(err, &coded) {
+		return coded.code
+	}
+	return exitUsage
+}
+
+func runDarwinCLI(args []string) int {
+	opts, err := parseDarwinArgs(args, os.Stderr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+		return exitUsage
+	}
+	assetRoot, err := resolveAssetRoot(opts.AssetsDir)
+	if err != nil {
+		if opts.Command == "diagnose" {
+			fmt.Println("iolbox diagnose")
+			fmt.Println("  assets:", err)
+			return exitOK
+		}
+		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+		return exitUsage
+	}
+	table, profile, err := loadMacOSProfile(assetRoot, opts.Profile)
+	if err != nil {
+		if opts.Command == "diagnose" {
+			fmt.Println("iolbox diagnose")
+			fmt.Println("  profile:", err)
+			return exitOK
+		}
+		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+		return exitCode(err)
+	}
+	if opts.Machine == "" {
+		opts.Machine = "iolbox-" + profile.Name
+	}
+	facts := collectHostFacts(context.Background())
+	if opts.Command == "diagnose" {
+		return runDiagnose(opts, table, profile, facts)
+	}
+	if opts.Command == "start" || opts.Command == "upgrade" {
+		if facts.System != "Darwin" || facts.Arch != "arm64" {
+			fmt.Fprintf(os.Stderr, "Apple Silicon macOS is required; detected %s/%s\n", facts.System, facts.Arch)
+			return exitPreflight
+		}
+		if facts.Product == "" || facts.Build == "" {
+			fmt.Fprintln(os.Stderr, "could not read macOS product/build with sw_vers")
+			return exitPreflight
+		}
+	}
+	qualification := qualificationFor(table, profile.Name, facts.Product, facts.Build)
+	fmt.Printf("profile=%s role=%s guest=%s qualification=%s\n", profile.Name, profile.Role, profile.GuestLabel, qualification.String())
+	limactlPath, err := discoverLimactl(opts.Limactl, os.Getenv("LIMACTL"), nil)
+	if err != nil {
+		if opts.Command == "status" {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		return exitPreflight
+	}
+	client, info, err := limaClientFor(context.Background(), limactlPath, nil)
+	if err != nil {
+		return exitCode(err)
+	}
+	switch opts.Command {
+	case "start", "upgrade":
+		if facts.FreeDiskErr != nil || facts.FreeDiskKB < minFreeDiskGiB*1024*1024 {
+			fmt.Fprintf(os.Stderr, "free disk is below the %d GiB minimum\n", minFreeDiskGiB)
+			return exitPreflight
+		}
+		payload, err := selectPayload(opts.Tarball, assetRoot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return exitCode(err)
+		}
+		err = runProvision(context.Background(), client, opts.Machine, profile, facts, payload, lifecycleConfig{
+			Bind: opts.Bind, GUIPort: opts.GUIPort, BootTimeout: opts.BootTimeout, Upgrade: opts.Command == "upgrade",
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+			return exitCode(err)
+		}
+		if opts.Command == "start" && !opts.NoBrowser {
+			openBrowser(fmt.Sprintf("http://127.0.0.1:%d/", opts.GUIPort))
+		}
+		return exitOK
+	case "stop":
+		machines, err := client.list(context.Background())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return exitPreflight
+		}
+		state, _ := findMachine(machines, opts.Machine)
+		if err := stopMachine(context.Background(), client, opts.Machine, state, opts.BootTimeout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return exitCode(err)
+		}
+		return exitOK
+	case "status":
+		return runStatus(client, opts, table, profile, facts, info)
+	default:
+		return exitUsage
+	}
+}
+
+func runStatus(client *limaClient, opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts, info limaInfo) int {
+	machines, err := client.list(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitPreflight
+	}
+	state, exists := findMachine(machines, opts.Machine)
+	fmt.Println("iolbox status")
+	q := qualificationFor(table, profile.Name, facts.Product, facts.Build)
+	fmt.Printf("  profile: %s\n  role: %s\n  guest: %s\n  kernel pin: %s\n  macOS: %s\n  host_arch: %s\n  qualification: %s\n  lima: %s (%s)\n  machine: %s\n  state: %s\n", profile.Name, profile.Role, profile.GuestLabel, profile.ExpectedUnameR, hostMACOSString(facts), facts.Arch, q.String(), info.Version, info.Path, opts.Machine, map[bool]string{true: state, false: "not created"}[exists])
+	fmt.Println("  last canary:")
+	for _, line := range strings.Split(readCanaryState(opts.Machine), "\n") {
+		fmt.Println("    " + line)
+	}
+	if !exists || !strings.EqualFold(state, "running") {
+		fmt.Println("  guest kernel: unavailable (machine is not running)")
+		return exitOK
+	}
+	fmt.Println("  guest kernel:", guestValue(context.Background(), client, opts.Machine, "uname", "-r"))
+	fmt.Println("  guest arch:", guestValue(context.Background(), client, opts.Machine, "uname", "-m"))
+	fmt.Println("  Rosetta binfmt:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "cat", "/proc/sys/fs/binfmt_misc/rosetta"))
+	fmt.Println("  supervisor service:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "systemctl", "is-active", "iolbox-supervisor.service"))
+	fmt.Println("  GET /:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "curl", "--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/", opts.GUIPort)))
+	return exitOK
+}
+
+func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts) int {
+	fmt.Println("iolbox diagnose")
+	q := qualificationFor(table, profile.Name, facts.Product, facts.Build)
+	fmt.Printf("profile: %s (%s)\nguest: %s\nkernel pin: %s\nqualification: %s\nmacOS product/build: %s\nhost arch: %s\nexecution=rosetta-amd64\nguest_arch=aarch64\n", profile.Name, profile.Role, profile.GuestLabel, profile.ExpectedUnameR, q.String(), hostMACOSString(facts), facts.Arch)
+	if facts.FreeDiskErr != nil {
+		fmt.Println("free disk: unavailable (", facts.FreeDiskErr, ")")
+	} else {
+		fmt.Printf("free disk: %.2f GiB\n", float64(facts.FreeDiskKB)/1048576)
+	}
+	path, err := discoverLimactl(opts.Limactl, os.Getenv("LIMACTL"), nil)
+	if err != nil {
+		fmt.Println("lima executable: unavailable (", err, ")")
+		printDiagnosticRemediation(opts.Machine)
+		return exitOK
+	}
+	client, info, err := limaClientFor(context.Background(), path, nil)
+	if err != nil {
+		fmt.Println("lima:", err)
+		return exitOK
+	}
+	fmt.Printf("lima executable: %s\nlima raw version: %s\nlima version: %s\nIOLBOX_HOST_LIMA=%s\n", info.Path, strings.TrimSpace(info.RawVersion), info.Version, info.Version)
+	machines, err := client.list(context.Background())
+	if err != nil {
+		fmt.Println("machine listing: unavailable (", err, ")")
+	} else {
+		fmt.Println("machine listing:")
+		for _, machine := range machines {
+			fmt.Printf("  %s|%s\n", machine.Name, machine.State)
+		}
+		state, exists := findMachine(machines, opts.Machine)
+		if !exists {
+			fmt.Println("selected machine: not created")
+		} else {
+			fmt.Println("selected machine state:", state)
+			if strings.EqualFold(state, "running") {
+				fmt.Println("guest kernel:", guestValue(context.Background(), client, opts.Machine, "uname", "-r"))
+				fmt.Println("guest arch:", guestValue(context.Background(), client, opts.Machine, "uname", "-m"))
+				fmt.Println("Rosetta binfmt:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "cat", "/proc/sys/fs/binfmt_misc/rosetta"))
+				fmt.Println("supervisor service:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "systemctl", "is-active", "iolbox-supervisor.service"))
+				fmt.Println("GET /:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "curl", "--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/", opts.GUIPort)))
+				attestationPath, _ := hostAttestationPath(opts.Machine)
+				if err := requireAttestation(attestationPath, profile, facts, info.Version); err != nil {
+					fmt.Println("host attestation: INVALID (", err, ")")
+				} else {
+					fmt.Println("host attestation: valid")
+				}
+				fmt.Println("guest structural-gate drop-in:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "cat", expectedCanaryDropIn))
+				env := guestEnvironment(profile, facts, info.Version, opts.Machine, "unknown.tar.gz", lifecycleConfig{Bind: opts.Bind, GUIPort: opts.GUIPort})
+				canaryOut, canaryErr := client.shell(context.Background(), opts.Machine, guestStepArgs("30-canary.sh", env, "--quiet")...)
+				if canaryErr != nil {
+					fmt.Printf("live canary: FAIL (%v): %s\n", canaryErr, strings.TrimSpace(string(canaryOut)))
+				} else {
+					fmt.Println("live canary: PASS")
+				}
+				control, helloErr := dialNDJSON(context.Background(), "127.0.0.1:4000", 3*time.Second)
+				if helloErr != nil {
+					fmt.Println("supervisor hello: unavailable (", helloErr, ")")
+				} else {
+					defer control.Close()
+					hello, helloErr := control.hello(context.Background())
+					if helloErr != nil {
+						fmt.Println("supervisor hello: unavailable (", helloErr, ")")
+					} else {
+						fmt.Printf("supervisor=%s runtime=%s arch=%s features=%v egress=%s\n", hello.Supervisor, hello.Runtime, hello.Arch, hello.Features, hello.Egress)
+					}
+				}
+			}
+		}
+	}
+	printDiagnosticRemediation(opts.Machine)
+	return exitOK
+}
+
+func printDiagnosticRemediation(machine string) {
+	fmt.Println("last canary:")
+	fmt.Println("  " + readCanaryState(machine))
+	if warning, ok := hostAgentWarningText(machine); ok {
+		fmt.Println("hostagent Rosetta warning:")
+		fmt.Println(warning)
+	} else {
+		fmt.Println("hostagent Rosetta warning: none found or log unavailable")
+	}
+	fmt.Println("remediation: brew reinstall lima")
+	fmt.Println("brew upgrade lima may be a no-op when the current version is already installed; Lima READY is not proof Rosetta was mounted")
+}

@@ -17,7 +17,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -47,7 +46,7 @@ type launchOpts struct {
 	labsDir   string
 }
 
-func main() {
+func windowsMain() {
 	var (
 		// mem/smp defaults mirror runtime/resources.env (IOLBOX_RAM_MB=4096,
 		// IOLBOX_VCPUS=4), the single source of truth for vCPU/RAM across every
@@ -167,17 +166,6 @@ func printDetection(d detection, chosen backend) {
 // logf writes a timestamped line to stderr (plain console UX).
 func logf(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "[iolbox] "+format+"\n", a...)
-}
-
-// openBrowser opens the default browser at url via cmd /c start. Non-fatal.
-func openBrowser(url string) {
-	logf("Opening %s in your browser...", url)
-	// `cmd /c start "" <url>` — the empty "" is the window title arg so a URL
-	// with special chars isn't mistaken for the title.
-	cmd := exec.Command("cmd", "/c", "start", "", url)
-	if err := cmd.Start(); err != nil {
-		logf("  (could not auto-open the browser: %v — open %s manually)", err, url)
-	}
 }
 
 // quoteArgs renders an argv for display (verbose mode), quoting args with spaces.
