@@ -302,8 +302,13 @@ func waitForMachineState(ctx context.Context, l *limaClient, machine, wanted str
 func stageFiles(ctx context.Context, l *limaClient, machine string, p macOSProfile, payloadPath, payloadBase string) error {
 	const stageDir = "/tmp/iolbox-provision-stage"
 	const stagePayload = "/tmp/iolbox-payload.tar.gz"
+	const newDir = "/tmp/iolbox-provision-new"
 	const provisionDir = "/opt/iolbox-provision"
-	if _, err := l.shell(ctx, machine, "sudo", "-n", "rm", "-rf", stageDir, provisionDir); err != nil {
+
+	// Build and validate a full replacement tree under newDir before touching
+	// provisionDir, so a failed copy/flatten never leaves the live directory
+	// the structural canary gate depends on empty or partial.
+	if _, err := l.shell(ctx, machine, "sudo", "-n", "rm", "-rf", stageDir, newDir); err != nil {
 		return codedError(exitPreflight, "clear guest staging: %v", err)
 	}
 	if err := l.copy(ctx, p.GuestDir, machine+":"+stageDir); err != nil {
@@ -312,18 +317,29 @@ func stageFiles(ctx context.Context, l *limaClient, machine string, p macOSProfi
 	if err := l.copy(ctx, payloadPath, machine+":"+stagePayload); err != nil {
 		return codedError(exitPreflight, "copy payload: %v", err)
 	}
-	if _, err := l.shell(ctx, machine, "sudo", "-n", "mkdir", "-p", provisionDir+"/payload"); err != nil {
-		return codedError(exitPreflight, "create guest provision directory: %v", err)
+	if _, err := l.shell(ctx, machine, "sudo", "-n", "mkdir", "-p", newDir+"/payload"); err != nil {
+		return codedError(exitPreflight, "create guest staging tree: %v", err)
 	}
-	flatten := "set -e; src=\"$(find '" + stageDir + "' -name 'lib.sh' -print -quit)\"; [ -n \"$src\" ]; src=\"$(dirname \"$src\")\"; cp -f \"$src\"/*.sh '" + provisionDir + "/'; chmod 0755 '" + provisionDir + "'/*.sh; rm -rf '" + stageDir + "'"
+	flatten := "set -e; src=\"$(find '" + stageDir + "' -name 'lib.sh' -print -quit)\"; [ -n \"$src\" ]; src=\"$(dirname \"$src\")\"; cp -f \"$src\"/*.sh '" + newDir + "/'; chmod 0755 '" + newDir + "'/*.sh; rm -rf '" + stageDir + "'"
 	if _, err := l.shell(ctx, machine, "sudo", "-n", "sh", "-c", flatten); err != nil {
 		return codedError(exitPreflight, "flatten guest scripts: %v", err)
 	}
-	if _, err := l.shell(ctx, machine, "sudo", "-n", "mv", stagePayload, provisionDir+"/payload/"+payloadBase); err != nil {
+	if _, err := l.shell(ctx, machine, "sudo", "-n", "mv", stagePayload, newDir+"/payload/"+payloadBase); err != nil {
 		return codedError(exitPreflight, "install guest payload: %v", err)
 	}
+	if _, err := l.shell(ctx, machine, "sudo", "-n", "test", "-f", newDir+"/30-canary.sh"); err != nil {
+		return codedError(exitUsage, "staging failed: %s/30-canary.sh is missing", newDir)
+	}
+
+	// Only now, with a fully validated replacement in hand, swap it into
+	// place. rm+mv run as a single guest command to minimize the window
+	// during which provisionDir is absent.
+	swap := "set -e; rm -rf '" + provisionDir + "'; mv '" + newDir + "' '" + provisionDir + "'"
+	if _, err := l.shell(ctx, machine, "sudo", "-n", "sh", "-c", swap); err != nil {
+		return codedError(exitPreflight, "install guest provision directory: %v", err)
+	}
 	if _, err := l.shell(ctx, machine, "sudo", "-n", "test", "-f", provisionDir+"/30-canary.sh"); err != nil {
-		return codedError(exitUsage, "staging failed: %s/30-canary.sh is missing", provisionDir)
+		return codedError(exitUsage, "staging failed: %s/30-canary.sh is missing after install", provisionDir)
 	}
 	return nil
 }

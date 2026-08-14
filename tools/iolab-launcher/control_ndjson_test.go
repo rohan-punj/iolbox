@@ -91,8 +91,20 @@ func TestNDJSONOversizedFrameAndTypedProtocolContracts(t *testing.T) {
 	result, err := client.request(t.Context(), "large", map[string]any{})
 	client.Close()
 	if err != nil || len(result) < 70*1024 {
-		t.Fatalf("large result length/error = %d/%v", len(result), err)
+		t.Fatalf("frame larger than the reader buffer but under the limit: length/error = %d/%v", len(result), err)
 	}
+
+	t.Run("frame exceeding maxNDJSONFrame is rejected", func(t *testing.T) {
+		oversized := strings.Repeat("x", maxNDJSONFrame+1)
+		client := serveNDJSONOnce(t, func(conn net.Conn, request map[string]any) error {
+			return writeNDJSON(conn, responseFor(request, true, map[string]string{"blob": oversized}))
+		})
+		defer client.Close()
+		_, err := client.request(t.Context(), "oversized", map[string]any{})
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("expected frame-size rejection, got err = %v", err)
+		}
+	})
 
 	t.Run("YAML save and list", func(t *testing.T) {
 		client := serveNDJSONOnce(t, func(conn net.Conn, request map[string]any) error {
