@@ -1,0 +1,33 @@
+# iolbox Debian 13/trixie Lima template; render before passing to Lima.
+#
+# Debian 13 is BLOCKED on the measured macOS 13.5 baseline.  Its 6.12 kernel
+# is expected to emit AT_RSEQ_ALIGN, which that Rosetta build aborts on.  This
+# is an inference from the measured 6.8 failure and the 6.3 threshold, not a
+# hardware execution of this image.  Run tests/canary-probe.sh --profile
+# debian13 on the target Mac to change the answer; never guess from a macOS
+# version number.  The approximately 337 MB image buys little over bookworm's
+# approximately 342 MB and carries the kernel constraint, so it is not a
+# candidate today.
+
+images:
+  - location: "@IOLBOX_DEBIAN13_IMAGE_URL@"
+    arch: aarch64
+    digest: "sha256:@IOLBOX_DEBIAN13_IMAGE_SHA256@"
+
+vmType: "vz"
+rosetta:
+  enabled: true
+  binfmt: true
+
+# Keep the explicit M0 geometry for a clean profile comparison.
+cpus: @CPUS@
+memory: "@MEMORY@"
+disk: "@DISK@"
+
+mountType: "virtiofs"
+mounts:
+  - location: "~"
+    writable: false
+
+# No provision scripts or readiness probes; the host selects the shared
+# lifecycle and the generic Debian guest steps.
