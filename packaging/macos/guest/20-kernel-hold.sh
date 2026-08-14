@@ -7,9 +7,9 @@
 #   3. pins HWE kernel packages below apt's install threshold; and
 #   4. records the complete, inspectable policy with host/Lima provenance.
 #
-# Linux >= 6.3 emits auxv type 28 (AT_RSEQ_ALIGN). The Rosetta build measured
-# on macOS 13.5 aborts on that auxv entry, so the macOS version which fixes it
-# remains UNVERIFIED and this guest stays on 5.15. --verify is read-only.
+# This hold preserves the 5.15 series for M0 comparability. It is not a
+# universal Rosetta-safety rule: the executable canary is the authority, and
+# newer kernels pass on measured newer macOS hosts. --verify is read-only.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 
 IOLBOX_KERNEL_PREFS="${IOLBOX_KERNEL_PREFS:-/etc/apt/preferences.d/99-iolbox-kernel-hold}"
-IOLBOX_PROVISION_DATE="${IOLBOX_PROVISION_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+IOLBOX_PROVISION_DATE="${IOLBOX_PROVISION_DATE:-}"
+IOLBOX_PROFILE="${IOLBOX_PROFILE:-jammy}"
 
 usage() {
     cat <<EOF
@@ -34,10 +35,7 @@ running_kernel_series() {
 }
 
 assert_qualified_kernel() {
-    local series
-    series="$(running_kernel_series)"
-    [ "$series" = "$IOLBOX_KERNEL_SERIES" ] || die "$IOLBOX_EXIT_PREFLIGHT" \
-        "guest kernel series '$series' is outside qualified '$IOLBOX_KERNEL_SERIES'; Linux >= 6.3 emits auxv type 28 (AT_RSEQ_ALIGN), which the measured macOS/Rosetta pair aborts on"
+    assert_kernel_qualification "$IOLBOX_EXIT_PREFLIGHT"
 }
 
 package_is_installed() {
@@ -56,7 +54,7 @@ installed_kernel_packages() {
         "linux-image-$(uname -r)"
     )
 
-    for package in "${candidates[@]}"; do
+    for package in ${candidates[@]+"${candidates[@]}"}; do
         if package_is_installed "$package"; then
             printf '%s\n' "$package"
         fi
@@ -70,7 +68,7 @@ get_kernel_packages() {
     while IFS= read -r package; do
         [ -n "$package" ] && packages+=("$package")
     done < <(installed_kernel_packages)
-    printf '%s\n' "${packages[@]}"
+    printf '%s\n' ${packages[@]+"${packages[@]}"}
 }
 
 hold_installed_kernels() {
@@ -85,7 +83,7 @@ hold_installed_kernels() {
         log "no supported kernel package is installed; nothing to hold"
         return 0
     fi
-    if apt-mark hold "${packages[@]}"; then
+    if apt-mark hold ${packages[@]+"${packages[@]}"}; then
         log "held installed kernel packages: ${packages[*]}"
     else
         rc=$?
@@ -97,7 +95,7 @@ hold_installed_kernels() {
 write_if_changed() {
     local destination="$1" mode="$2" tmp="$3"
 
-    chmod "$mode" -- "$tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
+    chmod "$mode" "$tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
         "could not set permissions on temporary file for $destination"
     if cmp -s -- "$destination" "$tmp" 2>/dev/null; then
         rm -f -- "$tmp"
@@ -115,12 +113,10 @@ write_kernel_preferences() {
     tmp="$(mktemp "${IOLBOX_KERNEL_PREFS}.iolbox-tmp.XXXXXX")" || \
         die "$IOLBOX_EXIT_PREFLIGHT" "could not create kernel preferences temporary file"
     printf '%s\n' \
-        '# iolbox kernel policy: keep the guest on the qualified Jammy 5.15 series.' \
+        '# iolbox kernel policy: preserve Jammy 5.15 for M0 comparability.' \
         '#' \
-        '# Linux >= 6.3 emits auxv type 28 (AT_RSEQ_ALIGN). The Rosetta build' \
-        '# qualified with macOS 13.5 aborts when it sees that entry, so an HWE' \
-        '# upgrade to a 6.x kernel would make every amd64 payload executable' \
-        '# fail before main(). The macOS version that fixes this is UNVERIFIED.' \
+        '# This is a reproducibility hold, not a universal Rosetta safety rule.' \
+        '# The executable canary is the authority for the exact host/kernel pair.' \
         '#' \
         '# This negative pin complements apt-mark holds on packages installed now.' \
         'Package: linux-*-hwe-22.04*' \
@@ -130,7 +126,7 @@ write_kernel_preferences() {
 }
 
 write_policy_file() {
-    local tmp held_list package
+    local tmp held_list package provision_date
     local -a packages=()
 
     while IFS= read -r package; do
@@ -140,6 +136,12 @@ write_policy_file() {
     if [ "${#packages[@]}" -gt 0 ]; then
         held_list="${packages[*]}"
     fi
+    provision_date=''
+    if [ -f "$IOLBOX_POLICY_FILE" ]; then
+        provision_date="$(sed -n 's/^provisioned_at=//p' "$IOLBOX_POLICY_FILE" | head -n1)"
+    fi
+    [ -n "$provision_date" ] || provision_date="$IOLBOX_PROVISION_DATE"
+    [ -n "$provision_date" ] || provision_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     install -d -m 0755 -- "$(dirname "$IOLBOX_POLICY_FILE")" || \
         die "$IOLBOX_EXIT_PREFLIGHT" "could not create policy directory"
@@ -147,15 +149,21 @@ write_policy_file() {
         die "$IOLBOX_EXIT_PREFLIGHT" "could not create policy temporary file"
     printf '%s\n' \
         'iolbox macOS/Lima guest kernel policy' \
-        "provisioned_at=$IOLBOX_PROVISION_DATE" \
+        'purpose=reproducibility' \
+        'canary_is_authority=true' \
+        "profile=$IOLBOX_PROFILE" \
+        "profile_status=$IOLBOX_PROFILE_STATUS" \
+        "provisioned_at=$provision_date" \
         "host_macos=$IOLBOX_HOST_MACOS" \
         "host_lima=$IOLBOX_HOST_LIMA" \
         "machine=$IOLBOX_MACHINE" \
         "qualified_kernel_series=$IOLBOX_KERNEL_SERIES" \
-        'why=macOS Rosetta aborts on auxv type 28 (AT_RSEQ_ALIGN), emitted by Linux kernels >= 6.3; the macOS version that fixes this is UNVERIFIED' \
+        "qualified_kernel=$(iolbox_kernel_qualification jammy)" \
+        "image_qualification=$(iolbox_image_qualification jammy)" \
         "held_kernel_packages=$held_list" \
+        'security_update_tradeoff=holding the installed kernel and rejecting HWE kernels delays kernel security updates; this is deliberate for reproducibility' \
         'check_holds=apt-mark showhold' \
-        'intentional_lift=qualify the exact macOS/Rosetta and guest-kernel pair first, then run apt-mark unhold <package-list>, remove /etc/apt/preferences.d/99-iolbox-kernel-hold, and reboot deliberately' \
+        'deliberate_requalification=run the executable canary on the exact host/kernel pair, review the policy and security updates, then apt-mark unhold the listed packages, remove the preferences pin, update, and reboot deliberately' \
         > "$tmp"
     write_if_changed "$IOLBOX_POLICY_FILE" 0644 "$tmp"
 }
@@ -171,7 +179,7 @@ assert_holds() {
     fi
     while IFS= read -r package; do
         [ -n "$package" ] || continue
-        if ! printf '%s\n' "$holds" | grep -Fxq -- "$package"; then
+        if ! text_contains_exact_line "$holds" "$package"; then
             die "$IOLBOX_EXIT_VERIFY" "hold assertion: installed kernel package is not held: $package"
         fi
     done < <(get_kernel_packages)
@@ -187,6 +195,20 @@ verify_end_state() {
         die "$IOLBOX_EXIT_VERIFY" "preferences assertion: negative HWE pin is missing"
     [ -f "$IOLBOX_POLICY_FILE" ] || die "$IOLBOX_EXIT_VERIFY" \
         "policy assertion: missing $IOLBOX_POLICY_FILE"
+    grep -Fqx 'purpose=reproducibility' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: purpose=reproducibility is missing'
+    grep -Fqx 'canary_is_authority=true' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: canary_is_authority=true is missing'
+    grep -Fqx "profile=$IOLBOX_PROFILE" "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" "policy assertion: profile=$IOLBOX_PROFILE is missing"
+    grep -Fqx "qualified_kernel=$(iolbox_kernel_qualification jammy)" "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: Jammy kernel qualification is missing'
+    grep -Fqx "image_qualification=$(iolbox_image_qualification jammy)" "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: image qualification is missing'
+    grep -Fq 'security_update_tradeoff=' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: security-update tradeoff is missing'
+    grep -Fq 'deliberate_requalification=' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: deliberate requalification steps are missing'
     assert_holds
 }
 

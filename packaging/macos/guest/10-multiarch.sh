@@ -3,7 +3,8 @@
 #
 # In order, this step:
 #   1. proves this is the Jammy guest this provisioner qualifies;
-#   2. backs up and pins existing one-line apt sources to arm64;
+#   2. backs up and pins existing one-line Ubuntu apt sources to exactly
+#      arch=arm64, replacing any pre-existing architecture restriction;
 #   3. adds amd64-only Ubuntu archive/security sources;
 #   4. enables dpkg's amd64 foreign architecture and installs the measured
 #      libc6/libssl3 runtime set; and
@@ -34,12 +35,12 @@ EOF
 
 # pin_sources_text < input > output
 #
-# Add an arch option only to deb/deb-src entries which have no arch option.
-# Existing option blocks (for example [signed-by=...]) must remain one apt
-# option block, so arch=arm64 is appended inside that block rather than adding
-# a second block.  Lines already carrying arch= are byte-for-byte unchanged.
+# Every active pre-existing Ubuntu one-line source must be arm64-only. When an
+# option block already contains arch= (including arch=amd64 or
+# arch=arm64,amd64), replace only that token and preserve unrelated options
+# such as signed-by.
 pin_sources_text() {
-    local line option_text prefix suffix
+    local line option_text prefix suffix normalised_options
 
     while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" =~ ^([[:space:]]*deb(-src)?[[:space:]]+)\[([^]]*)\](.*)$ ]]; then
@@ -49,16 +50,40 @@ pin_sources_text() {
             option_text="${BASH_REMATCH[3]}"
             suffix="${BASH_REMATCH[4]}"
             if [[ "$option_text" =~ (^|[[:space:]])arch[[:space:]]*= ]]; then
-                printf '%s\n' "$line"
+                normalised_options="$(printf '%s\n' "$option_text" | sed -E 's/(^|[[:space:]])arch[[:space:]]*=[[:space:]]*[^[:space:]]+/\1arch=arm64/g')"
             else
-                printf '%s[arch=arm64 %s]%s\n' \
-                    "$prefix" "$option_text" "$suffix"
+                normalised_options="arch=arm64 $option_text"
             fi
+            printf '%s[%s]%s\n' "$prefix" "$normalised_options" "$suffix"
         elif [[ "$line" =~ ^([[:space:]]*deb(-src)?[[:space:]]+)(.*)$ ]]; then
             printf '%s[arch=arm64] %s\n' \
                 "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
         else
             printf '%s\n' "$line"
+        fi
+    done
+}
+
+reject_unsupported_deb822_sources() {
+    local path line active
+    local -a deb822_files=()
+
+    [ -d "$SOURCES_LIST_DIR" ] || return 0
+    shopt -s nullglob
+    deb822_files=("$SOURCES_LIST_DIR"/*.sources)
+    shopt -u nullglob
+    for path in ${deb822_files[@]+"${deb822_files[@]}"}; do
+        active=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                ''|[[:space:]]*'#'*) continue ;;
+                'Enabled:'[[:space:]]*'no') continue ;;
+                *) active=1; break ;;
+            esac
+        done < "$path"
+        if [ "$active" -eq 1 ]; then
+            die "$IOLBOX_EXIT_PREFLIGHT" \
+                "Ubuntu deb822 source layout is not safely normalisable: $path; convert it to one-line sources or remove it before provisioning"
         fi
     done
 }
@@ -96,12 +121,15 @@ pin_existing_sources() {
     local path
     local -a source_files=()
 
+    if ! reject_unsupported_deb822_sources; then
+        return 1
+    fi
     pin_sources_file "$SOURCES_LIST"
     if [ -d "$SOURCES_LIST_DIR" ]; then
         shopt -s nullglob
         source_files=("$SOURCES_LIST_DIR"/*.list)
         shopt -u nullglob
-        for path in "${source_files[@]}"; do
+        for path in ${source_files[@]+"${source_files[@]}"}; do
             # This file is generated below, not cloud-init input.  Skipping it
             # avoids creating a needless backup of our own managed output on
             # the second run.
@@ -111,15 +139,42 @@ pin_existing_sources() {
     fi
 }
 
-source_line_has_arch() {
-    local line="$1" option_text
+source_arch_value() {
+    local line="$1" option_text arch_value
 
     if [[ "$line" =~ ^[[:space:]]*deb(-src)?[[:space:]]+\[([^]]*)\] ]]; then
         option_text="${BASH_REMATCH[2]}"
-        [[ "$option_text" =~ (^|[[:space:]])arch[[:space:]]*= ]]
-    else
-        return 1
+        if [[ "$option_text" =~ (^|[[:space:]])arch[[:space:]]*=[[:space:]]*([^[:space:]]+) ]]; then
+            arch_value="${BASH_REMATCH[2]}"
+            printf '%s\n' "$arch_value"
+            return 0
+        fi
     fi
+    return 1
+}
+
+source_line_has_amd64() {
+    local line="$1" arch_value token
+
+    arch_value="$(source_arch_value "$line" || true)"
+    arch_value="${arch_value//,/ }"
+    for token in $arch_value; do
+        [ "$token" = amd64 ] && return 0
+    done
+    return 1
+}
+
+source_line_is_arm64_only() {
+    local line="$1" arch_value
+
+    arch_value="$(source_arch_value "$line" || true)"
+    [ "$arch_value" = arm64 ]
+}
+
+source_line_has_arch() {
+    local line="$1"
+
+    source_arch_value "$line" >/dev/null
 }
 
 verify_sources_file() {
@@ -132,9 +187,14 @@ verify_sources_file() {
             ''|[[:space:]]*'#'*) continue ;;
         esac
         if [[ "$line" =~ ^[[:space:]]*deb(-src)?[[:space:]]+ ]] && \
-            ! source_line_has_arch "$line"; then
+            [[ "$line" == *ports.ubuntu.com* ]] && source_line_has_amd64 "$line"; then
             die "$IOLBOX_EXIT_VERIFY" \
-                "source assertion: unpinned entry remains in $path: $line"
+                "source assertion: amd64-enabled Ubuntu ports.ubuntu.com entry is forbidden in $path: $line"
+        fi
+        if [[ "$line" =~ ^[[:space:]]*deb(-src)?[[:space:]]+ ]] && \
+            ! source_line_is_arm64_only "$line"; then
+            die "$IOLBOX_EXIT_VERIFY" \
+                "source assertion: active Ubuntu one-line entry is not exactly arch=arm64 in $path: $line"
         fi
     done < "$path"
 }
@@ -156,7 +216,7 @@ write_amd64_sources() {
     tmp="$(mktemp "${AMD64_SOURCES_LIST}.iolbox-tmp.XXXXXX")" || \
         die "$IOLBOX_EXIT_PREFLIGHT" "could not create amd64 source temporary file"
     expected_amd64_sources "$suite" > "$tmp"
-    chmod 0644 -- "$tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
+    chmod 0644 "$tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
         "could not set permissions on amd64 source temporary file"
     if cmp -s -- "$AMD64_SOURCES_LIST" "$tmp" 2>/dev/null; then
         rm -f -- "$tmp"
@@ -207,14 +267,16 @@ verify_package_set() {
 }
 
 verify_end_state() {
-    local suite path
+    local suite path foreign_architectures
     suite="$(guest_suite)"
     [ "$suite" = "jammy" ] || die "$IOLBOX_EXIT_PREFLIGHT" \
         "qualified guest assertion: expected Jammy (suite jammy), detected '${suite:-unknown}'"
 
+    reject_unsupported_deb822_sources
     verify_sources_file "$SOURCES_LIST"
     if [ -d "$SOURCES_LIST_DIR" ]; then
         while IFS= read -r path; do
+            [ "$path" = "$AMD64_SOURCES_LIST" ] && continue
             verify_sources_file "$path"
         done < <(find "$SOURCES_LIST_DIR" -maxdepth 1 -type f -name '*.list' -print | sort)
     fi
@@ -225,7 +287,8 @@ verify_end_state() {
         die "$IOLBOX_EXIT_VERIFY" \
             "source assertion: $AMD64_SOURCES_LIST does not match the Jammy amd64 policy"
     fi
-    if ! dpkg --print-foreign-architectures | grep -Fxq amd64; then
+    foreign_architectures="$(dpkg --print-foreign-architectures 2>/dev/null || true)"
+    if ! text_contains_exact_line "$foreign_architectures" amd64; then
         die "$IOLBOX_EXIT_VERIFY" \
             "architecture assertion: dpkg --print-foreign-architectures does not contain amd64"
     fi
@@ -233,7 +296,7 @@ verify_end_state() {
 }
 
 run_provision() {
-    local suite libc_path rc
+    local suite libc_path rc foreign_architectures
 
     suite="$(guest_suite)"
     [ "$suite" = "jammy" ] || die "$IOLBOX_EXIT_PREFLIGHT" \
@@ -268,7 +331,8 @@ run_provision() {
             "command failed (exit $rc): DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libc6:amd64 libssl3:amd64"
     fi
 
-    if ! dpkg --print-foreign-architectures | grep -Fxq amd64; then
+    foreign_architectures="$(dpkg --print-foreign-architectures 2>/dev/null || true)"
+    if ! text_contains_exact_line "$foreign_architectures" amd64; then
         die "$IOLBOX_EXIT_APT" \
             "architecture assertion: dpkg did not retain foreign architecture amd64"
     fi

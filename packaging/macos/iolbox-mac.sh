@@ -12,11 +12,9 @@
 #
 # macOS ships Bash 3.2.  This is the only M1 script with that constraint:
 # there are no associative arrays, Bash 4 parameter case conversion, or
-# readarray here.  The guest scripts run under Jammy's Bash 5 instead.
-# Debian 12 is only a CANDIDATE, canary-gated and UNVERIFIED on hardware: its
-# 6.1 safety is inferred from the 6.3 threshold and has never been executed on
-# Apple Silicon Rosetta.  Debian 13 is BLOCKED on the measured macOS 13.5
-# baseline until tests/canary-probe.sh measures otherwise.
+# bulk array readers here. The guest scripts run under Jammy's Bash 5 instead.
+# Debian 13 is the DEFAULT; Jammy is COMPATIBILITY and Debian 12 is an
+# unpinned CANDIDATE. The live guest canary is the only compatibility authority.
 #
 # The Mac home is not used as a guest mount for staging.  limactl copy is used
 # explicitly because it works with the read-only home mount in the template.
@@ -53,36 +51,42 @@ COMMAND="provision"
 COMMAND_SET=0
 DRY_RUN=0
 YES=0
-PROFILE_REQUESTED="${IOLBOX_PROFILE:-jammy}"
+PROFILE_REQUESTED="${IOLBOX_PROFILE:-}"
 
 LIMACTL_BIN=""
 HOST_OS="unknown"
 HOST_ARCH="unknown"
 HOST_MACOS="unknown"
+HOST_MACOS_PRODUCT="unknown"
+HOST_MACOS_BUILD="unknown"
 HOST_LIMA="unknown"
 HOST_LIMA_RAW="unknown"
 MACHINE=""
 MACHINE_LISTING=""
+MACHINE_STATE=""
+HOST_ATTESTATION_DIR=""
+HOST_ATTESTATION_FILE=""
 PAYLOAD_PATH=""
 PAYLOAD_BASENAME=""
 RENDERED_YAML=""
 PROFILE_NAME=""
+PROFILE_ROLE=""
 PROFILE_GUEST=""
 PROFILE_PIN_ENV=""
 PROFILE_TEMPLATE=""
 PROFILE_MULTIARCH_STEP=""
 PROFILE_KERNEL_HOLD_STEP=""
 PROFILE_KERNEL_SERIES=""
+PROFILE_EXPECTED_UNAME_R=""
 PROFILE_KERNEL_RUNTIME_SERIES=""
 PROFILE_STATUS=""
-PROFILE_CANARY_EXPECTED=""
-PROFILE_CANARY_BASIS=""
-PROFILE_IMAGE_URL_VAR=""
-PROFILE_IMAGE_SHA_VAR=""
-PROFILE_IMAGE_URL_TOKEN=""
-PROFILE_IMAGE_SHA_TOKEN=""
+PROFILE_QUALIFICATION="UNMEASURED — CANARY REQUIRED"
+PROFILE_QUALIFICATION_VERDICT=""
+PROFILE_QUALIFICATION_STATUS=""
+PROFILE_QUALIFICATION_EVIDENCE=""
 IOLBOX_IMAGE_URL=""
-IOLBOX_IMAGE_SHA256=""
+IOLBOX_IMAGE_DIGEST=""
+IOLBOX_IMAGE_BYTES=""
 
 usage() {
     cat <<EOF
@@ -99,7 +103,7 @@ Commands:
   profiles        print the available guest profiles and their status
 
 Options:
-  --profile <name> select a profile (default: jammy; IOLBOX_PROFILE is honored)
+  --profile <name> select a profile (default: table DEFAULT; IOLBOX_PROFILE is honored)
   --dry-run       print the commands that would run; do not invoke Lima or write state
   --yes           skip the destructive confirmation required by destroy
   -h, --help      show this help
@@ -108,7 +112,7 @@ Environment:
   LIMACTL         explicit limactl path; otherwise standard Homebrew paths are tried
   IOLBOX_TARBALL  payload path; otherwise newest iolbox-server-*.tar.gz is selected
   IOLBOX_PROFILE  profile name; --profile takes precedence when both are set
-  IOLBOX_MACHINE  optional machine override; default comes from the profile pin file
+  IOLBOX_MACHINE  optional machine override; default is iolbox-<profile>
   IOLBOX_BIND     guest install bind mode (default: all)
   IOLBOX_GUI_PORT guest GUI port (default: 4001)
 EOF
@@ -130,6 +134,8 @@ die() {
 }
 
 load_profile_table() {
+    local default_count
+
     if [ ! -r "$PROFILE_TABLE_FILE" ]; then
         die 1 "profile table is missing: $PROFILE_TABLE_FILE"
     fi
@@ -137,16 +143,14 @@ load_profile_table() {
     . "$PROFILE_TABLE_FILE"
     [ -n "${IOLBOX_PROFILE_TABLE:-}" ] || die 1 \
         "profile table is empty: $PROFILE_TABLE_FILE"
-}
-
-profile_pin_value() {
-    local variable="$1" value
-
-    # The variable name is selected from the repository-owned profile table and
-    # validated by select_profile before this controlled indirect expansion.
-    # shellcheck disable=SC2294
-    eval "value=\${$variable-}"
-    printf '%s\n' "$value"
+    [ -n "${IOLBOX_QUALIFICATION_TABLE:-}" ] || die 1 \
+        "qualification table is empty: $PROFILE_TABLE_FILE"
+    default_count="$(printf '%s\n' "$IOLBOX_PROFILE_TABLE" | awk -F '|' '$2 == "DEFAULT" { count++ } END { print count + 0 }')"
+    [ "$default_count" -eq 1 ] || die 1 \
+        "profile table must contain exactly one DEFAULT row (found $default_count)"
+    if [ -z "$PROFILE_REQUESTED" ]; then
+        PROFILE_REQUESTED="$(printf '%s\n' "$IOLBOX_PROFILE_TABLE" | awk -F '|' '$2 == "DEFAULT" { print $1; exit }')"
+    fi
 }
 
 select_profile() {
@@ -156,66 +160,89 @@ select_profile() {
         -v wanted="$PROFILE_REQUESTED" '$1 == wanted { print; exit }')"
     [ -n "$record" ] || die 1 \
         "unknown profile '$PROFILE_REQUESTED'; run $(basename "$0") profiles"
-    IFS='|' read -r PROFILE_NAME PROFILE_GUEST PROFILE_PIN_ENV PROFILE_TEMPLATE \
+    IFS='|' read -r PROFILE_NAME PROFILE_ROLE PROFILE_GUEST PROFILE_PIN_ENV PROFILE_TEMPLATE \
         PROFILE_MULTIARCH_STEP PROFILE_KERNEL_HOLD_STEP PROFILE_KERNEL_SERIES \
-        PROFILE_STATUS PROFILE_CANARY_EXPECTED PROFILE_CANARY_BASIS \
-        PROFILE_IMAGE_URL_VAR PROFILE_IMAGE_SHA_VAR PROFILE_IMAGE_URL_TOKEN \
-        PROFILE_IMAGE_SHA_TOKEN <<EOF
+        PROFILE_EXPECTED_UNAME_R <<EOF
 $record
 EOF
-    case "$PROFILE_IMAGE_URL_VAR:$PROFILE_IMAGE_SHA_VAR" in
-        IOLBOX_*_IMAGE_URL:IOLBOX_*_IMAGE_SHA256) ;;
-        *) die 1 "profile $PROFILE_NAME has invalid pin variable names" ;;
-    esac
     ENV_FILE="$LIMA_DIR/$PROFILE_PIN_ENV"
     TEMPLATE_FILE="$LIMA_DIR/$PROFILE_TEMPLATE"
+    PROFILE_STATUS="$PROFILE_ROLE"
     PROFILE_KERNEL_RUNTIME_SERIES="$(printf '%s\n' "$PROFILE_KERNEL_SERIES" | cut -d. -f1,2)"
+}
+
+select_qualification() {
+    local record
+
+    PROFILE_QUALIFICATION="UNMEASURED — CANARY REQUIRED"
+    PROFILE_QUALIFICATION_VERDICT=""
+    PROFILE_QUALIFICATION_STATUS=""
+    PROFILE_QUALIFICATION_EVIDENCE=""
+    if [ "$HOST_MACOS_PRODUCT" = unknown ] || [ "$HOST_MACOS_BUILD" = unknown ]; then
+        return 0
+    fi
+    record="$(printf '%s\n' "$IOLBOX_QUALIFICATION_TABLE" | awk -F '|' \
+        -v profile="$PROFILE_NAME" -v product="$HOST_MACOS_PRODUCT" \
+        -v build="$HOST_MACOS_BUILD" \
+        '$1 == profile && $2 == product && $3 == build { print; exit }')"
+    if [ -n "$record" ]; then
+        IFS='|' read -r PROFILE_NAME_QUALIFIED HOST_MACOS_PRODUCT_QUALIFIED \
+            HOST_MACOS_BUILD_QUALIFIED PROFILE_QUALIFICATION_VERDICT \
+            PROFILE_QUALIFICATION_STATUS PROFILE_QUALIFICATION_EVIDENCE <<EOF
+$record
+EOF
+        PROFILE_QUALIFICATION="$PROFILE_QUALIFICATION_VERDICT ($PROFILE_QUALIFICATION_STATUS)"
+    fi
 }
 
 profile_summary() {
     printf '  profile: %s\n' "$PROFILE_NAME"
+    printf '  role: %s\n' "$PROFILE_ROLE"
     printf '  guest: %s\n' "$PROFILE_GUEST"
     printf '  kernel series: %s\n' "$PROFILE_KERNEL_SERIES"
-    printf '  profile status: %s\n' "$PROFILE_STATUS"
-    printf '  canary expectation (macOS 13.5 baseline): %s (%s)\n' \
-        "$PROFILE_CANARY_EXPECTED" "$PROFILE_CANARY_BASIS"
-    if [ "$PROFILE_NAME" = debian12 ]; then
-        printf '%s\n' \
-            '  UNVERIFIED: Debian 12 kernel 6.1 is inferred safe from the 6.3 threshold and has never been executed on Apple Silicon Rosetta.'
+    printf '  qualification: %s\n' "$PROFILE_QUALIFICATION"
+    if [ -n "$PROFILE_QUALIFICATION_EVIDENCE" ]; then
+        printf '  qualification evidence: %s\n' "$PROFILE_QUALIFICATION_EVIDENCE"
     fi
 }
 
 print_profiles_command() {
-    local name guest pin template multiarch hold series status expected basis
-    local url_var sha_var url_token sha_token
+    local name role guest pin template multiarch hold series expected
+    local qualification_record qualification
 
-    printf '%-12s %-24s %-10s %-28s %s\n' 'NAME' 'GUEST' 'KERNEL' 'STATUS' 'CANARY'
-    while IFS='|' read -r name guest pin template multiarch hold series status \
-        expected basis url_var sha_var url_token sha_token; do
+    printf '%-12s %-16s %-24s %-10s %s\n' 'NAME' 'ROLE' 'GUEST' 'KERNEL' 'QUALIFICATION'
+    while IFS='|' read -r name role guest pin template multiarch hold series expected; do
         [ -n "$name" ] || continue
-        printf '%-12s %-24s %-10s %-28s %s\n' \
-            "$name" "$guest" "$series" "$status" "$expected"
+        qualification='UNMEASURED — CANARY REQUIRED'
+        if [ "$HOST_MACOS_PRODUCT" != unknown ] && [ "$HOST_MACOS_BUILD" != unknown ]; then
+            qualification_record="$(printf '%s\n' "$IOLBOX_QUALIFICATION_TABLE" | awk -F '|' \
+                -v profile="$name" -v product="$HOST_MACOS_PRODUCT" \
+                -v build="$HOST_MACOS_BUILD" \
+                '$1 == profile && $2 == product && $3 == build { print; exit }')"
+            if [ -n "$qualification_record" ]; then
+                qualification="$(printf '%s\n' "$qualification_record" | awk -F '|' '{ print $4 " (" $5 ")" }')"
+            fi
+        fi
+        printf '%-12s %-16s %-24s %-10s %s\n' \
+            "$name" "$role" "$guest" "$series" "$qualification"
     done <<EOF
 $IOLBOX_PROFILE_TABLE
 EOF
 }
 
 assert_profile_provisionable() {
-    case "$PROFILE_STATUS" in
-        BLOCKED*)
-            die 3 \
-                "refusing to provision profile $PROFILE_NAME: it is BLOCKED on macOS 13.5 because Linux kernels >= 6.3 emit auxv type 28 (AT_RSEQ_ALIGN), which that Rosetta build aborts on. To change this answer, run packaging/macos/tests/canary-probe.sh --profile $PROFILE_NAME on the target Mac; do not guess from a macOS version number."
-            ;;
-    esac
+    # Static roles and qualification rows are descriptive. Only the live guest
+    # canary may reject a host/profile pair.
+    :
 }
 
 assert_profile_pinned() {
     local checksum_url
 
-    if [ "$IOLBOX_IMAGE_SHA256" = PIN-ME-SHA256 ]; then
-        checksum_url="${IOLBOX_IMAGE_URL%/*}/SHA256SUMS"
+    if [ "$IOLBOX_IMAGE_DIGEST" = PIN-ME ]; then
+        checksum_url="${IOLBOX_IMAGE_URL%/*}/SHA512SUMS"
         die 3 \
-            "refusing to provision profile $PROFILE_NAME: its image digest is still PIN-ME-SHA256. Fetch the checksum for exactly $IOLBOX_IMAGE_URL from $checksum_url, record the 64-hex SHA256 in $ENV_FILE, and retry."
+            "refusing to provision profile $PROFILE_NAME: its image digest is still PIN-ME. Debian publishes SHA512SUMS only; fetch the checksum for exactly $IOLBOX_IMAGE_URL from $checksum_url, record an algorithm-qualified sha512 digest in $ENV_FILE, and retry."
     fi
 }
 
@@ -267,12 +294,17 @@ collect_host_facts() {
     HOST_OS="$(uname -s 2>/dev/null || printf 'unknown')"
     HOST_ARCH="$(uname -m 2>/dev/null || printf 'unknown')"
     HOST_MACOS="unknown"
+    HOST_MACOS_PRODUCT="unknown"
+    HOST_MACOS_BUILD="unknown"
     if [ "$HOST_OS" = "Darwin" ] && command -v sw_vers >/dev/null 2>&1; then
         product="$(sw_vers -productVersion 2>/dev/null || true)"
         build="$(sw_vers -buildVersion 2>/dev/null || true)"
         if [ -n "$product" ] && [ -n "$build" ]; then
+            HOST_MACOS_PRODUCT="$product"
+            HOST_MACOS_BUILD="$build"
             HOST_MACOS="$product ($build)"
         elif [ -n "$product" ]; then
+            HOST_MACOS_PRODUCT="$product"
             HOST_MACOS="$product (build unknown)"
         fi
     fi
@@ -280,7 +312,7 @@ collect_host_facts() {
 
 extract_version() {
     local raw="$1"
-    printf '%s\n' "$raw" | sed -nE 's/.*([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/p' | head -n 1 || true
+    printf '%s\n' "$raw" | sed -nE 's/[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n 1 || true
 }
 
 read_lima_version() {
@@ -291,40 +323,9 @@ read_lima_version() {
     fi
 }
 
-# Compare dotted numeric versions without sort -V, which is not provided by
-# macOS.  Missing components are treated as zero; prerelease text is ignored
-# after the numeric portion because the qualified gate is intentionally only a
-# warning for older Lima versions.
-version_lt() {
-    local left="$1"
-    local right="$2"
-    local l1=0 l2=0 l3=0 r1=0 r2=0 r3=0
-
-    left="$(printf '%s\n' "$left" | sed -nE 's/^([0-9]+(\.[0-9]+){0,2}).*/\1/p')"
-    right="$(printf '%s\n' "$right" | sed -nE 's/^([0-9]+(\.[0-9]+){0,2}).*/\1/p')"
-    [ -n "$left" ] || return 1
-    [ -n "$right" ] || return 1
-    IFS=. read -r l1 l2 l3 <<EOF
-$left
-EOF
-    IFS=. read -r r1 r2 r3 <<EOF
-$right
-EOF
-    l1="${l1:-0}"
-    l2="${l2:-0}"
-    l3="${l3:-0}"
-    r1="${r1:-0}"
-    r2="${r2:-0}"
-    r3="${r3:-0}"
-
-    if [ "$l1" -lt "$r1" ]; then return 0; fi
-    if [ "$l1" -gt "$r1" ]; then return 1; fi
-    if [ "$l2" -lt "$r2" ]; then return 0; fi
-    if [ "$l2" -gt "$r2" ]; then return 1; fi
-    [ "$l3" -lt "$r3" ]
-}
-
 load_config() {
+    local digest_hex digest_length
+
     if [ ! -r "$ENV_FILE" ]; then
         printf 'missing pinned configuration: %s\n' "$ENV_FILE" >&2
         return 1
@@ -332,29 +333,45 @@ load_config() {
     # shellcheck disable=SC1090
     . "$ENV_FILE"
 
-    IOLBOX_IMAGE_URL="$(profile_pin_value "$PROFILE_IMAGE_URL_VAR")"
-    IOLBOX_IMAGE_SHA256="$(profile_pin_value "$PROFILE_IMAGE_SHA_VAR")"
     case "$IOLBOX_IMAGE_URL" in
         https://*) ;;
         *) printf 'invalid or missing pinned image URL in %s\n' "$ENV_FILE" >&2; return 1 ;;
     esac
-    case "$IOLBOX_IMAGE_SHA256" in
-        PIN-ME-SHA256) ;;
-        ''|*[!0123456789abcdefABCDEF]*)
-            printf 'invalid pinned image SHA256 in %s\n' "$ENV_FILE" >&2
+    case "$IOLBOX_IMAGE_DIGEST" in
+        PIN-ME) ;;
+        sha256:*|sha512:*) ;;
+        ''|*)
+            printf 'invalid algorithm-qualified image digest in %s\n' "$ENV_FILE" >&2
             return 1
             ;;
     esac
-    if [ "$IOLBOX_IMAGE_SHA256" != PIN-ME-SHA256 ] && \
-        [ "${#IOLBOX_IMAGE_SHA256}" -ne 64 ]; then
-        printf 'pinned image SHA256 must contain 64 hex characters in %s\n' "$ENV_FILE" >&2
-        return 1
+    if [ "$IOLBOX_IMAGE_DIGEST" != PIN-ME ]; then
+        case "$IOLBOX_IMAGE_DIGEST" in
+            sha256:*) digest_length=64 ;;
+            sha512:*) digest_length=128 ;;
+            *) printf 'pinned image digest has the wrong length in %s\n' "$ENV_FILE" >&2; return 1 ;;
+        esac
+        digest_hex="${IOLBOX_IMAGE_DIGEST#*:}"
+        if [ "${#digest_hex}" -ne "$digest_length" ]; then
+            printf 'pinned image digest has the wrong length in %s\n' "$ENV_FILE" >&2
+            return 1
+        fi
+        case "$digest_hex" in
+            ''|*[!0123456789abcdefABCDEF]*)
+                printf 'pinned image digest is not hexadecimal in %s\n' "$ENV_FILE" >&2
+                return 1
+                ;;
+        esac
     fi
-    : "${IOLBOX_MACHINE_NAME:?missing IOLBOX_MACHINE_NAME in $ENV_FILE}"
+    case "$IOLBOX_IMAGE_BYTES" in
+        ''|*[!0-9]*) printf 'image byte count must be decimal in %s\n' "$ENV_FILE" >&2; return 1 ;;
+    esac
     : "${IOLBOX_CPUS:?missing IOLBOX_CPUS in $ENV_FILE}"
     : "${IOLBOX_MEMORY:?missing IOLBOX_MEMORY in $ENV_FILE}"
     : "${IOLBOX_DISK:?missing IOLBOX_DISK in $ENV_FILE}"
-    MACHINE="${IOLBOX_MACHINE:-$IOLBOX_MACHINE_NAME}"
+    MACHINE="${IOLBOX_MACHINE:-iolbox-$PROFILE_NAME}"
+    HOST_ATTESTATION_DIR="${HOME:-.}/.iolbox/macos"
+    HOST_ATTESTATION_FILE="$HOST_ATTESTATION_DIR/${MACHINE}-structural-gate.json"
 }
 
 free_disk_kb() {
@@ -458,14 +475,13 @@ preflight() {
     if [ "$HOST_MACOS" = "unknown" ]; then
         die 3 "could not read macOS product version/build with sw_vers"
     fi
+    select_qualification
     if ! LIMACTL_BIN="$(locate_limactl)"; then
         die 3 "Lima was not found. Install Lima or set LIMACTL to its executable (tried /opt/homebrew/bin/limactl, /usr/local/bin/limactl, then PATH)"
     fi
     read_lima_version
     if [ "$HOST_LIMA" = "unknown" ]; then
         warn "could not parse Lima version from: $HOST_LIMA_RAW; the qualified M0 host used Lima 2.2.0"
-    elif version_lt "$HOST_LIMA" "2.2.0"; then
-        warn "Lima $HOST_LIMA is older than qualified 2.2.0; continuing, but M0 was qualified on Lima 2.2.0"
     fi
 
     available="$(free_disk_kb || true)"
@@ -480,25 +496,77 @@ preflight() {
     require_payload
     validate_guest_layout
     export IOLBOX_HOST_MACOS="$HOST_MACOS"
+    export IOLBOX_HOST_MACOS_PRODUCT="$HOST_MACOS_PRODUCT"
+    export IOLBOX_HOST_MACOS_BUILD="$HOST_MACOS_BUILD"
     export IOLBOX_HOST_LIMA="$HOST_LIMA"
     export IOLBOX_MACHINE="$MACHINE"
     export IOLBOX_PROFILE="$PROFILE_NAME"
     export IOLBOX_PROFILE_STATUS="$PROFILE_STATUS"
     export IOLBOX_KERNEL_SERIES="$PROFILE_KERNEL_RUNTIME_SERIES"
+    export IOLBOX_EXPECTED_UNAME_R="$PROFILE_EXPECTED_UNAME_R"
     export IOLBOX_PROVISION_DIR="$GUEST_PROVISION_DIR"
     export IOLBOX_PAYLOAD_TARBALL="$GUEST_PROVISION_DIR/payload/$PAYLOAD_BASENAME"
     export IOLBOX_BIND IOLBOX_GUI_PORT
 }
 
-machine_listing() {
-    if ! MACHINE_LISTING="$("$LIMACTL_BIN" list --format '{{.Name}}\t{{.Status}}' 2>&1)"; then
+machine_state() {
+    local listing
+
+    if ! listing="$("$LIMACTL_BIN" list --format '{{.Name}}|{{.Status}}' 2>&1)"; then
+        MACHINE_LISTING="$listing"
+        MACHINE_STATE=""
         return 1
     fi
+    MACHINE_LISTING="$listing"
+    MACHINE_STATE="$(printf '%s\n' "$listing" | awk -F '|' -v target="$MACHINE" '$1 == target {print $2; exit}')"
     return 0
 }
 
-machine_state() {
-    printf '%s\n' "$MACHINE_LISTING" | awk -v target="$MACHINE" '$1 == target {print $2; exit}'
+attestation_has() {
+    local needle="$1"
+    grep -F -- "$needle" "$HOST_ATTESTATION_FILE" >/dev/null 2>&1
+}
+
+host_attestation_is_valid() {
+    local line_count
+
+    [ -r "$HOST_ATTESTATION_FILE" ] || return 1
+    line_count="$(awk 'END { print NR + 0 }' "$HOST_ATTESTATION_FILE" 2>/dev/null || printf '0')"
+    [ "$line_count" -eq 1 ] || return 1
+    attestation_has '"schema":1' || return 1
+    attestation_has "\"profile\":\"$PROFILE_NAME\"" || return 1
+    attestation_has "\"macos_product\":\"$HOST_MACOS_PRODUCT\"" || return 1
+    attestation_has "\"macos_build\":\"$HOST_MACOS_BUILD\"" || return 1
+    attestation_has "\"lima_version\":\"$HOST_LIMA\"" || return 1
+    attestation_has '"drop_in":"/etc/systemd/system/iolbox-supervisor.service.d/10-iolbox-macos-canary.conf"' || return 1
+    attestation_has '"canary_verdict":"PASS"' || return 1
+    attestation_has '"kernel":"' || return 1
+    attestation_has '"timestamp":"' || return 1
+    return 0
+}
+
+require_host_attestation() {
+    if ! host_attestation_is_valid; then
+        die 3 "refusing to start existing stopped machine $MACHINE before the structural canary gate: missing or invalid host attestation $HOST_ATTESTATION_FILE for profile=$PROFILE_NAME macos_product=$HOST_MACOS_PRODUCT macos_build=$HOST_MACOS_BUILD lima_version=$HOST_LIMA"
+    fi
+}
+
+sync_host_attestation() {
+    local guest_attestation
+    local temp_file
+
+    guest_attestation="$("$LIMACTL_BIN" shell "$MACHINE" sudo -n cat /var/lib/iolbox/macos-structural-gate.json 2>&1)" || die 3 "guest structural gate attestation is unavailable at /var/lib/iolbox/macos-structural-gate.json; refusing to authorize a future stopped-machine start: $guest_attestation"
+    if [ "$(printf '%s\n' "$guest_attestation" | awk 'END { print NR + 0 }')" -ne 1 ]; then
+        die 3 "guest structural gate attestation is not single-line JSON; refusing to write $HOST_ATTESTATION_FILE"
+    fi
+    mkdir -p "$HOST_ATTESTATION_DIR" || die 3 "could not create host attestation directory: $HOST_ATTESTATION_DIR"
+    temp_file="$HOST_ATTESTATION_FILE.tmp.$$"
+    printf '%s\n' "$guest_attestation" > "$temp_file" || die 3 "could not write host attestation staging file: $temp_file"
+    mv -f "$temp_file" "$HOST_ATTESTATION_FILE" || die 3 "could not install host attestation: $HOST_ATTESTATION_FILE"
+    if ! host_attestation_is_valid; then
+        rm -f -- "$HOST_ATTESTATION_FILE"
+        die 3 "guest structural gate attestation did not match the current profile/host facts; refusing to authorize future starts"
+    fi
 }
 
 render_template() {
@@ -509,8 +577,8 @@ render_template() {
     fi
     RENDERED_YAML="$(mktemp "$IOLBOX_TMP_ROOT/iolbox-$PROFILE_NAME.XXXXXX")"
     sed \
-        -e "s|$PROFILE_IMAGE_URL_TOKEN|$IOLBOX_IMAGE_URL|g" \
-        -e "s|$PROFILE_IMAGE_SHA_TOKEN|$IOLBOX_IMAGE_SHA256|g" \
+        -e "s|@IOLBOX_IMAGE_URL@|$IOLBOX_IMAGE_URL|g" \
+        -e "s|@IOLBOX_IMAGE_DIGEST@|$IOLBOX_IMAGE_DIGEST|g" \
         -e "s|@CPUS@|$IOLBOX_CPUS|g" \
         -e "s|@MEMORY@|$IOLBOX_MEMORY|g" \
         -e "s|@DISK@|$IOLBOX_DISK|g" \
@@ -523,25 +591,36 @@ render_template() {
 
 ensure_machine() {
     local state
+    local created=0
 
-    if ! machine_listing; then
+    if ! machine_state; then
         die 3 "could not query Lima machine list with $LIMACTL_BIN: $MACHINE_LISTING"
     fi
-    state="$(machine_state)"
+    state="$MACHINE_STATE"
     if [ -z "$state" ]; then
+        if [ -n "$HOST_ATTESTATION_FILE" ]; then
+            rm -f -- "$HOST_ATTESTATION_FILE"
+        fi
         log "creating Lima machine $MACHINE from rendered locked template"
         render_template
         "$LIMACTL_BIN" create --name="$MACHINE" "$RENDERED_YAML"
         state="Stopped"
+        created=1
     else
         log "reusing existing Lima machine $MACHINE (state=$state)"
     fi
     case "$state" in
         Running|running)
             ;;
-        *)
+        Stopped|stopped)
+            if [ "$created" -eq 0 ]; then
+                require_host_attestation
+            fi
             log "starting Lima machine $MACHINE"
             "$LIMACTL_BIN" start "$MACHINE" --tty=false
+            ;;
+        *)
+            die 3 "refusing to start existing Lima machine $MACHINE in unrecognized state '$state'"
             ;;
     esac
 }
@@ -557,9 +636,34 @@ stage_files() {
     "$LIMACTL_BIN" shell "$MACHINE" sudo -n rm -rf "$stage_dir" "$GUEST_PROVISION_DIR"
     "$LIMACTL_BIN" copy "$GUEST_DIR" "$MACHINE:$stage_dir"
     "$LIMACTL_BIN" copy "$PAYLOAD_PATH" "$MACHINE:$stage_payload"
+    # Flatten the staged tree into $GUEST_PROVISION_DIR rather than `mv`ing the
+    # directory itself.  Two separate hazards made the naive `mv` wrong, and both
+    # were observed on hardware (macOS 26.6.1, Debian 13 guest):
+    #
+    #   1. `limactl copy <dir> <machine>:<path>` creates <path>/<basename-of-dir>,
+    #      so the steps land one level deeper than the destination path suggests.
+    #   2. `mv SRC DEST` when DEST already exists moves SRC *inside* DEST instead
+    #      of renaming it — and DEST already existed because the payload mkdir ran
+    #      first.  The two compounded into
+    #      /opt/iolbox-provision/iolbox-provision-stage/guest/10-multiarch-debian.sh
+    #      and every step then failed with exit 127.
+    #
+    # Copying the step files by content is immune to both, and to any future
+    # change in how limactl lays out a directory copy.
     "$LIMACTL_BIN" shell "$MACHINE" sudo -n mkdir -p "$GUEST_PROVISION_DIR/payload"
-    "$LIMACTL_BIN" shell "$MACHINE" sudo -n mv "$stage_dir" "$GUEST_PROVISION_DIR"
+    "$LIMACTL_BIN" shell "$MACHINE" sudo -n sh -c \
+        "set -e; \
+         src=\"\$(find '$stage_dir' -name 'lib.sh' -print -quit)\"; \
+         [ -n \"\$src\" ] || { echo 'staging: lib.sh not found under $stage_dir' >&2; exit 1; }; \
+         src=\"\$(dirname \"\$src\")\"; \
+         cp -f \"\$src\"/*.sh '$GUEST_PROVISION_DIR/'; \
+         chmod 0755 '$GUEST_PROVISION_DIR'/*.sh; \
+         rm -rf '$stage_dir'"
     "$LIMACTL_BIN" shell "$MACHINE" sudo -n mv "$stage_payload" "$GUEST_PROVISION_DIR/payload/$PAYLOAD_BASENAME"
+    # Fail here rather than at the first step's exit 127, which reads like a
+    # broken script instead of a broken staging step.
+    "$LIMACTL_BIN" shell "$MACHINE" sudo -n test -f "$GUEST_PROVISION_DIR/30-canary.sh" \
+        || die 1 "staging failed: $GUEST_PROVISION_DIR/30-canary.sh is missing after limactl copy"
 }
 
 record_canary() {
@@ -588,9 +692,10 @@ record_canary() {
 
 run_guest_step() {
     local step_name="$1"
-    local step_path="$GUEST_PROVISION_DIR/$step_name"
+    local step_path
     local step_code
 
+    step_path="$GUEST_PROVISION_DIR/$step_name"
     log "running guest step $step_name"
     if "$LIMACTL_BIN" shell "$MACHINE" sudo -E env \
         "IOLBOX_HOST_MACOS=$IOLBOX_HOST_MACOS" \
@@ -599,6 +704,7 @@ run_guest_step() {
         "IOLBOX_PROFILE=$PROFILE_NAME" \
         "IOLBOX_PROFILE_STATUS=$PROFILE_STATUS" \
         "IOLBOX_KERNEL_SERIES=$PROFILE_KERNEL_RUNTIME_SERIES" \
+        "IOLBOX_EXPECTED_UNAME_R=$PROFILE_EXPECTED_UNAME_R" \
         "IOLBOX_PROVISION_DIR=$IOLBOX_PROVISION_DIR" \
         "IOLBOX_PAYLOAD_TARBALL=$IOLBOX_PAYLOAD_TARBALL" \
         "IOLBOX_BIND=$IOLBOX_BIND" \
@@ -628,7 +734,7 @@ run_all_guest_steps() {
         50-verify.sh
     )
 
-    for step_name in "${steps[@]}"; do
+for step_name in ${steps[@]+"${steps[@]}"}; do
         if [ -f "$GUEST_DIR/$step_name" ]; then
             if run_guest_step "$step_name"; then
                 :
@@ -640,6 +746,7 @@ run_all_guest_steps() {
             die 1 "selected guest step is missing: $GUEST_DIR/$step_name"
         fi
     done
+    sync_host_attestation
 }
 
 guest_value() {
@@ -666,16 +773,17 @@ status_command() {
     local state kernel arch rosetta service http
 
     collect_host_facts
+    select_qualification
     printf 'iolbox status\n'
     profile_summary
     if ! LIMACTL_BIN="$(locate_limactl)"; then
         die 3 "Lima was not found; status needs limactl to inspect machine $MACHINE"
     fi
     read_lima_version
-    if ! machine_listing; then
+    if ! machine_state; then
         die 3 "could not query Lima machine list with $LIMACTL_BIN: $MACHINE_LISTING"
     fi
-    state="$(machine_state)"
+    state="$MACHINE_STATE"
     printf '  host macOS: %s\n' "$HOST_MACOS"
     printf '  host arch: %s\n' "$HOST_ARCH"
     printf '  Lima: %s (%s)\n' "$HOST_LIMA" "$LIMACTL_BIN"
@@ -713,10 +821,30 @@ status_command() {
     printf '  GET /: %s\n' "$http"
 }
 
+print_hostagent_warnings() {
+    local hostagent_log="${HOME:-.}/.lima/$MACHINE/ha.stderr.log"
+    local matches
+
+    printf 'Lima hostagent Rosetta warnings (%s):\n' "$hostagent_log"
+    if [ -r "$hostagent_log" ]; then
+        matches="$(grep -E 'Unable to configure Rosetta|unsupported build target macOS version' "$hostagent_log" || true)"
+        if [ -n "$matches" ]; then
+            printf '%s\n' "$matches" | sed 's/^/  /'
+        else
+            printf '%s\n' '  none found'
+        fi
+    else
+        printf '%s\n' '  log unavailable'
+    fi
+    printf '%s\n' '  remediation: brew reinstall lima (brew upgrade is a no-op when the version is already current; reinstall re-pours the bottle)'
+    printf '%s\n' '  Lima READY is not evidence that Rosetta was configured.'
+}
+
 doctor_command() {
     local available state kernel arch rosetta service http
 
     collect_host_facts
+    select_qualification
     printf 'iolbox doctor\n'
     profile_summary
     printf 'host:\n'
@@ -737,7 +865,7 @@ doctor_command() {
         read_lima_version
         printf '  executable: %s\n' "$LIMACTL_BIN"
         printf '  version: %s\n' "$HOST_LIMA"
-        if machine_listing; then
+        if machine_state; then
             printf '  machine list:\n%s\n' "$MACHINE_LISTING"
         else
             printf '  machine list: unavailable (%s)\n' "$MACHINE_LISTING"
@@ -749,11 +877,14 @@ doctor_command() {
     fi
 
     printf 'guest:\n'
-    if [ -z "$LIMACTL_BIN" ] || [ -z "$MACHINE_LISTING" ]; then
+    if [ -z "$LIMACTL_BIN" ]; then
         printf '  machine: %s\n' "$MACHINE"
         printf '  state/kernel/arch/Rosetta/service/GET /: unavailable\n'
+    elif ! machine_state; then
+        printf '  machine: %s\n' "$MACHINE"
+        printf '  state/kernel/arch/Rosetta/service/GET /: unavailable (%s)\n' "$MACHINE_LISTING"
     else
-        state="$(machine_state)"
+        state="$MACHINE_STATE"
         printf '  machine: %s\n' "$MACHINE"
         printf '  state: %s\n' "${state:-not created}"
         if [ "$state" = "Running" ] || [ "$state" = "running" ]; then
@@ -773,6 +904,7 @@ doctor_command() {
     fi
     printf 'last canary:\n'
     print_canary_state
+    print_hostagent_warnings
     return 0
 }
 
@@ -782,10 +914,10 @@ destroy_command() {
     if ! LIMACTL_BIN="$(locate_limactl)"; then
         die 3 "Lima was not found; destroy needs limactl to remove machine $MACHINE"
     fi
-    if ! machine_listing; then
+    if ! machine_state; then
         die 3 "could not query Lima machine list with $LIMACTL_BIN: $MACHINE_LISTING"
     fi
-    state="$(machine_state)"
+    state="$MACHINE_STATE"
     if [ -z "$state" ]; then
         log "machine $MACHINE does not exist; nothing to destroy"
         return 0
@@ -810,6 +942,7 @@ print_dry_common() {
     local candidate available
 
     collect_host_facts
+    select_qualification
     candidate="$(locate_limactl 2>/dev/null || true)"
     printf 'DRY-RUN: no Lima command, VM mutation, template temp file, or canary state write will occur.\n'
     profile_summary
@@ -822,9 +955,9 @@ print_dry_common() {
         printf '  limactl: unknown/not found in this environment (not invoked)\n'
     fi
     printf '  image URL: %s\n' "${IOLBOX_IMAGE_URL:-unknown}"
-    printf '  image SHA256: %s\n' "${IOLBOX_IMAGE_SHA256:-unknown}"
-    if [ "${IOLBOX_IMAGE_SHA256:-}" = PIN-ME-SHA256 ]; then
-        printf '%s\n' '  real-run gate: REFUSED until this profile has a published SHA256 pin.'
+    printf '  image digest: %s\n' "${IOLBOX_IMAGE_DIGEST:-unknown}"
+    if [ "${IOLBOX_IMAGE_DIGEST:-}" = PIN-ME ]; then
+        printf '%s\n' '  real-run gate: REFUSED until this profile has a published SHA512 pin (see the exact SHA512SUMS URL in the real-run error).'
     fi
     available="$(free_disk_kb || true)"
     if [ -n "$available" ]; then
@@ -836,8 +969,8 @@ print_dry_common() {
 
 print_dry_guest_command() {
     local step_name="$1"
-    printf '  %s shell "%s" sudo -E env IOLBOX_HOST_MACOS="%s" IOLBOX_HOST_LIMA="%s" IOLBOX_MACHINE="%s" IOLBOX_PROFILE="%s" IOLBOX_PROFILE_STATUS="%s" IOLBOX_KERNEL_SERIES="%s" IOLBOX_PROVISION_DIR="%s" IOLBOX_PAYLOAD_TARBALL="%s" IOLBOX_BIND="%s" IOLBOX_GUI_PORT="%s" bash "%s/%s"\n' \
-        "${LIMACTL_BIN:-limactl}" "$MACHINE" "$HOST_MACOS" "${HOST_LIMA:-unknown}" "$MACHINE" "$PROFILE_NAME" "$PROFILE_STATUS" "$PROFILE_KERNEL_RUNTIME_SERIES" "$GUEST_PROVISION_DIR" "$GUEST_PROVISION_DIR/payload/${PAYLOAD_BASENAME:-unknown.tar.gz}" "$IOLBOX_BIND" "$IOLBOX_GUI_PORT" "$GUEST_PROVISION_DIR" "$step_name"
+    printf '  %s shell "%s" sudo -E env IOLBOX_HOST_MACOS="%s" IOLBOX_HOST_LIMA="%s" IOLBOX_MACHINE="%s" IOLBOX_PROFILE="%s" IOLBOX_PROFILE_STATUS="%s" IOLBOX_KERNEL_SERIES="%s" IOLBOX_EXPECTED_UNAME_R="%s" IOLBOX_PROVISION_DIR="%s" IOLBOX_PAYLOAD_TARBALL="%s" IOLBOX_BIND="%s" IOLBOX_GUI_PORT="%s" bash "%s/%s"\n' \
+        "${LIMACTL_BIN:-limactl}" "$MACHINE" "$HOST_MACOS" "${HOST_LIMA:-unknown}" "$MACHINE" "$PROFILE_NAME" "$PROFILE_STATUS" "$PROFILE_KERNEL_RUNTIME_SERIES" "$PROFILE_EXPECTED_UNAME_R" "$GUEST_PROVISION_DIR" "$GUEST_PROVISION_DIR/payload/${PAYLOAD_BASENAME:-unknown.tar.gz}" "$IOLBOX_BIND" "$IOLBOX_GUI_PORT" "$GUEST_PROVISION_DIR" "$step_name"
 }
 
 dry_run_provision() {
@@ -860,25 +993,28 @@ dry_run_provision() {
         PAYLOAD_BASENAME='iolbox-server-<newest>.tar.gz'
         printf '  payload lookup: would fail unless IOLBOX_TARBALL or a matching tarball appears next to %s or in %s\n' "$SCRIPT_DIR" "$(pwd -P)"
     fi
-    printf '  sed -e "s|%s|<pinned URL>|g" -e "s|%s|<pinned SHA256>|g" -e "s|@CPUS@|%s|g" -e "s|@MEMORY@|%s|g" -e "s|@DISK@|%s|g" "%s" > "%s"\n' "$PROFILE_IMAGE_URL_TOKEN" "$PROFILE_IMAGE_SHA_TOKEN" "$IOLBOX_CPUS" "$IOLBOX_MEMORY" "$IOLBOX_DISK" "$TEMPLATE_FILE" "$dry_yaml"
-    printf '  "%s" list --format "{{.Name}}\\t{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
+    printf '  sed -e "s|@IOLBOX_IMAGE_URL@|<pinned URL>|g" -e "s|@IOLBOX_IMAGE_DIGEST@|<algorithm-qualified digest>|g" -e "s|@CPUS@|%s|g" -e "s|@MEMORY@|%s|g" -e "s|@DISK@|%s|g" "%s" > "%s"\n' "$IOLBOX_CPUS" "$IOLBOX_MEMORY" "$IOLBOX_DISK" "$TEMPLATE_FILE" "$dry_yaml"
+    printf '  "%s" list --format "{{.Name}}|{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
+    printf '  if machine "%s" is absent: delete stale host attestation "%s" before create\n' "$MACHINE" "$HOST_ATTESTATION_FILE"
     printf '  if machine "%s" is absent: "%s" create --name="%s" "%s"\n' "$MACHINE" "${LIMACTL_BIN:-limactl}" "$MACHINE" "$dry_yaml"
-    printf '  if machine "%s" is not Running: "%s" start "%s" --tty=false\n' "$MACHINE" "${LIMACTL_BIN:-limactl}" "$MACHINE"
+    printf '  if existing machine "%s" is Stopped: require valid host attestation before "%s" start\n' "$MACHINE" "${LIMACTL_BIN:-limactl}"
+    printf '  if fresh machine "%s": "%s" start "%s" --tty=false\n' "$MACHINE" "${LIMACTL_BIN:-limactl}" "$MACHINE"
     printf '  "%s" shell "%s" sudo -n rm -rf /tmp/iolbox-provision-stage "%s"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE" "$GUEST_PROVISION_DIR"
     printf '  "%s" copy "%s" "%s:/tmp/iolbox-provision-stage"\n' "${LIMACTL_BIN:-limactl}" "$GUEST_DIR" "$MACHINE"
     printf '  "%s" copy "<payload>" "%s:/tmp/iolbox-payload.tar.gz"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE"
     printf '  "%s" shell "%s" sudo -n mkdir -p "%s/payload"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE" "$GUEST_PROVISION_DIR"
     printf '  "%s" shell "%s" sudo -n mv /tmp/iolbox-provision-stage "%s"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE" "$GUEST_PROVISION_DIR"
     printf '  "%s" shell "%s" sudo -n mv /tmp/iolbox-payload.tar.gz "%s/payload/<payload>"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE" "$GUEST_PROVISION_DIR"
-    for step_name in "${steps[@]}"; do
+for step_name in ${steps[@]+"${steps[@]}"}; do
         print_dry_guest_command "$step_name"
     done
+    printf '  after gated service success: copy guest /var/lib/iolbox/macos-structural-gate.json to "%s"\n' "$HOST_ATTESTATION_FILE"
 }
 
 dry_run_canary() {
     print_dry_common
     printf 'canary commands:\n'
-    printf '  "%s" list --format "{{.Name}}\\t{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
+    printf '  "%s" list --format "{{.Name}}|{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
     print_dry_guest_command 30-canary.sh
     printf '  (would record pass/fail locally after the guest exit code; no state write in dry-run)\n'
 }
@@ -887,7 +1023,7 @@ dry_run_status() {
     print_dry_common
     printf 'status commands:\n'
     printf '  "%s" --version\n' "${LIMACTL_BIN:-limactl}"
-    printf '  "%s" list --format "{{.Name}}\\t{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
+    printf '  "%s" list --format "{{.Name}}|{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
     printf '  "%s" shell "%s" uname -r\n' "${LIMACTL_BIN:-limactl}" "$MACHINE"
     printf '  "%s" shell "%s" uname -m\n' "${LIMACTL_BIN:-limactl}" "$MACHINE"
     printf '  "%s" shell "%s" sudo -n cat /proc/sys/fs/binfmt_misc/rosetta\n' "${LIMACTL_BIN:-limactl}" "$MACHINE"
@@ -899,7 +1035,7 @@ dry_run_status() {
 dry_run_destroy() {
     print_dry_common
     printf 'destroy commands:\n'
-    printf '  "%s" list --format "{{.Name}}\\t{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
+    printf '  "%s" list --format "{{.Name}}|{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
     printf '  prompt: This stops and permanently deletes Lima machine %s and its guest lab data. Continue? [y/N]\n' "$MACHINE"
     printf '  if Running: "%s" stop "%s"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE"
     printf '  "%s" delete "%s"\n' "${LIMACTL_BIN:-limactl}" "$MACHINE"
@@ -913,9 +1049,11 @@ dry_run_doctor() {
     printf '  uname -m\n'
     printf '  df -Pk "%s"\n' "${HOME:-.}"
     printf '  "%s" --version\n' "${LIMACTL_BIN:-limactl}"
-    printf '  "%s" list --format "{{.Name}}\\t{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
+    printf '  "%s" list --format "{{.Name}}|{{.Status}}"\n' "${LIMACTL_BIN:-limactl}"
     printf '  guest facts (when %s is Running): uname -r, uname -m, binfmt, systemctl is-active, GET /\n' "$MACHINE"
     printf '  read "%s/lima-canary-%s.txt"\n' "$IOLBOX_STATE_ROOT" "$MACHINE"
+    printf '  grep -E "Unable to configure Rosetta|unsupported build target macOS version" "%s/.lima/%s/ha.stderr.log"\n' "${HOME:-.}" "$MACHINE"
+    printf '%s\n' '  remediation if matched: brew reinstall lima (brew upgrade is a no-op when already current; reinstall re-pours the bottle)'
 }
 
 dry_run_command() {
@@ -970,13 +1108,14 @@ load_profile_table
 select_profile
 
 if [ "$COMMAND" = profiles ]; then
+    collect_host_facts
     print_profiles_command
     exit 0
 fi
 
 if ! load_config; then
     if [ "$COMMAND" = "doctor" ]; then
-        MACHINE="${IOLBOX_MACHINE:-${IOLBOX_MACHINE_NAME:-iolbox}}"
+        MACHINE="${IOLBOX_MACHINE:-iolbox-$PROFILE_NAME}"
         warn "pinned configuration could not be loaded; doctor will report remaining facts"
     else
         die 1 "cannot load pinned Lima configuration"
@@ -997,24 +1136,28 @@ case "$COMMAND" in
         ;;
     canary)
         collect_host_facts
+        select_qualification
         if ! LIMACTL_BIN="$(locate_limactl)"; then
             die 3 "Lima was not found; canary needs limactl to inspect machine $MACHINE"
         fi
         read_lima_version
-        if ! machine_listing; then
+        if ! machine_state; then
             die 3 "could not query Lima machine list with $LIMACTL_BIN: $MACHINE_LISTING"
         fi
-        case "$(machine_state)" in
+        case "$MACHINE_STATE" in
             Running|running) ;;
             '') die 3 "machine $MACHINE does not exist; run provision first" ;;
             *) die 3 "machine $MACHINE is not running; start it before running canary" ;;
         esac
         export IOLBOX_HOST_MACOS="$HOST_MACOS"
+        export IOLBOX_HOST_MACOS_PRODUCT="$HOST_MACOS_PRODUCT"
+        export IOLBOX_HOST_MACOS_BUILD="$HOST_MACOS_BUILD"
         export IOLBOX_HOST_LIMA="$HOST_LIMA"
         export IOLBOX_MACHINE="$MACHINE"
         export IOLBOX_PROFILE="$PROFILE_NAME"
         export IOLBOX_PROFILE_STATUS="$PROFILE_STATUS"
         export IOLBOX_KERNEL_SERIES="$PROFILE_KERNEL_RUNTIME_SERIES"
+        export IOLBOX_EXPECTED_UNAME_R="$PROFILE_EXPECTED_UNAME_R"
         export IOLBOX_PROVISION_DIR="$GUEST_PROVISION_DIR"
         export IOLBOX_BIND IOLBOX_GUI_PORT
         run_guest_step 30-canary.sh

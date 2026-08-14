@@ -5,8 +5,8 @@
 #   1. proves the guest is Debian bookworm or trixie;
 #   2. detects Debian's current deb822 source layout or a legacy sources.list;
 #   3. adds amd64 to a restrictive deb822 Architectures field when necessary;
-#   4. enables dpkg amd64 and installs the measured libc6/libssl3 runtime set;
-#   5. asserts the foreign architecture and x86-64 loader/libc objects.
+#   4. enables dpkg amd64 and installs the suite-selected libc6/OpenSSL set;
+#   5. asserts the foreign architecture and x86-64 loader/libc/libssl objects.
 #
 # Debian differs from Ubuntu here: deb.debian.org serves amd64 and arm64 from
 # the same host, so no Ubuntu-style ports.ubuntu.com source surgery is needed.
@@ -17,9 +17,10 @@
 # (deb822). Older images may use a one-line /etc/apt/sources.list.  We detect
 # which exists.  Only a deb822 Architectures restriction needs an idempotent,
 # one-time .iolbox-orig backup.
-# Debian 12 is a CANDIDATE, canary-gated and UNVERIFIED on hardware; its 6.1
-# Rosetta safety is inferred from the 6.3 threshold and has never been executed
-# on Apple Silicon.  The same generic step is reused by blocked Debian 13.
+# Debian 12 remains a CANDIDATE and unqualified while its image is unpinned.
+# Debian's single deb.debian.org host serves amd64 and arm64; do not import
+# Ubuntu's ports/archive mirror surgery here.  The only source exception is
+# adding amd64 to every existing restrictive deb822 Architectures field.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -156,6 +157,23 @@ find_amd64_libc() {
     dpkg-query -L libc6:amd64 2>/dev/null | awk '/\/libc\.so\.6$/ { print; exit }'
 }
 
+runtime_packages() {
+    local codename="$1"
+
+    printf '%s\n' libc6:amd64
+    case "$codename" in
+        bookworm) printf '%s\n' libssl3:amd64 ;;
+        trixie) printf '%s\n' libssl3t64:amd64 ;;
+        *) die "$IOLBOX_EXIT_PREFLIGHT" "unsupported Debian suite for runtime package selection: $codename" ;;
+    esac
+}
+
+find_amd64_libssl() {
+    local package="$1"
+
+    dpkg-query -L "$package" 2>/dev/null | awk '/\/libssl\.so\.[0-9]+$/ { print; exit }'
+}
+
 package_is_installed() {
     local package="$1"
     [ "$(dpkg-query -W -f='${Architecture} ${Status}\n' "$package" 2>/dev/null || true)" = \
@@ -163,25 +181,33 @@ package_is_installed() {
 }
 
 verify_runtime() {
-    local exit_code="$1" package libc_path
+    local codename="$1" exit_code="$2" package libc_path ssl_package ssl_path
+    local foreign_architectures
 
-    for package in libc6:amd64 libssl3:amd64; do
+    while IFS= read -r package; do
         package_is_installed "$package" || die "$exit_code" \
             "package assertion: $package is not installed with architecture amd64"
-    done
-    if ! dpkg --print-foreign-architectures | grep -Fxq amd64; then
+    done < <(runtime_packages "$codename")
+    foreign_architectures="$(dpkg --print-foreign-architectures 2>/dev/null || true)"
+    if ! text_contains_exact_line "$foreign_architectures" amd64; then
         die "$exit_code" \
             'architecture assertion: dpkg --print-foreign-architectures does not contain amd64'
     fi
     libc_path="$(find_amd64_libc || true)"
     [ -n "$libc_path" ] || die "$exit_code" \
         'ELF assertion: dpkg has no libc6:amd64 libc.so.6 path'
+    ssl_package="$(runtime_packages "$codename" | tail -n1)"
+    ssl_path="$(find_amd64_libssl "$ssl_package" || true)"
+    [ -n "$ssl_path" ] || die "$exit_code" \
+        "ELF assertion: dpkg has no selected amd64 libssl object for Debian $codename"
     assert_amd64_elf "$IOLBOX_LOADER"
     assert_amd64_elf "$libc_path"
+    assert_amd64_elf "$ssl_path"
 }
 
 run_provision() {
-    local rc codename
+    local rc codename package
+    local -a packages=()
 
     codename="$(guest_codename)"
     prepare_sources
@@ -199,25 +225,31 @@ run_provision() {
         die "$IOLBOX_EXIT_APT" \
             "command failed (exit $rc): DEBIAN_FRONTEND=noninteractive apt-get update"
     fi
-    # libc6 supplies the translated loader and C runtime.  libssl3 is kept in
-    # the same small runtime set used by the existing payload.  Debian's
-    # single deb.debian.org host supplies both requested architectures.
+    # Install and verify the same suite-selected package list.  Bookworm uses
+    # libssl3:amd64; Debian 13 trixie renamed it libssl3t64:amd64 for the
+    # 64-bit time_t transition.  deb.debian.org serves both architectures, so
+    # no mirror rewrite is needed.
+    while IFS= read -r package; do
+        [ -n "$package" ] && packages+=("$package")
+    done < <(runtime_packages "$codename")
     if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libc6:amd64 libssl3:amd64; then
+        ${packages[@]+"${packages[@]}"}; then
         :
     else
         rc=$?
         die "$IOLBOX_EXIT_APT" \
-            "command failed (exit $rc): DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libc6:amd64 libssl3:amd64"
+            "command failed (exit $rc): DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packages[*]}"
     fi
-    verify_runtime "$IOLBOX_EXIT_APT"
+    verify_runtime "$codename" "$IOLBOX_EXIT_APT"
     log "Debian $codename amd64 multiarch runtime is installed and ELF-verified"
 }
 
 verify_end_state() {
-    guest_codename >/dev/null
+    local codename
+
+    codename="$(guest_codename)"
     verify_sources
-    verify_runtime "$IOLBOX_EXIT_VERIFY"
+    verify_runtime "$codename" "$IOLBOX_EXIT_VERIFY"
 }
 
 main() {

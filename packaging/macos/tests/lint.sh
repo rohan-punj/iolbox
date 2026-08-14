@@ -61,7 +61,7 @@ fi
 note "lint.sh: checking ${#scripts[@]} script(s) under $ROOT"
 
 # --- 1. syntax -------------------------------------------------------------
-for f in "${scripts[@]}"; do
+for f in ${scripts[@]+"${scripts[@]}"}; do
     if bash -n "$f" 2>/dev/null; then
         note "  ok      bash -n  ${f#"$ROOT"/}"
     else
@@ -73,7 +73,7 @@ done
 
 # --- 2. shellcheck ---------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-    for f in "${scripts[@]}"; do
+    for f in ${scripts[@]+"${scripts[@]}"}; do
         # -x follows `source`d files (the guest steps all source lib.sh).
         if shellcheck -x -S style "$f"; then
             note "  ok      shellcheck  ${f#"$ROOT"/}"
@@ -93,7 +93,7 @@ else
 fi
 
 # --- 3. house style --------------------------------------------------------
-for f in "${scripts[@]}"; do
+for f in ${scripts[@]+"${scripts[@]}"}; do
     base="${f#"$ROOT"/}"
     # lib.sh is sourced, never executed: it intentionally has no shebang and
     # must NOT set -e (that would leak into whatever sources it).
@@ -109,6 +109,36 @@ for f in "${scripts[@]}"; do
         fail=1
     fi
 done
+
+# --- 4. regression traps ---------------------------------------------------
+# A complete capture followed by awk is intentional. A producer feeding
+# grep -q can receive SIGPIPE under pipefail, returning 141 and bypassing an
+# "already exists" refusal. Keep this check textual and cheap so it also
+# covers host-only scripts that are not exercised on this machine.
+pipeline_hits="$(grep -R -n -E 'limactl[[:space:]]+list[^|]*\|[[:space:]]*grep[[:space:]]+(-[A-Za-z]*q|--quiet)' "$ROOT" --include='*.sh' 2>/dev/null || true)"
+if [ -n "$pipeline_hits" ]; then
+    note "  FAIL    safety    limactl list is piped to grep -q (SIGPIPE/pipefail hazard):"
+    note "$pipeline_hits"
+    fail=1
+else
+    note "  ok      safety    no early-closing grep consumer for Lima machine lists"
+fi
+
+# Bash expands every argument to an assignment builtin before assigning any
+# of them. Under set -u, `local a=1 b=\"$a/x\"` therefore aborts; bash -n
+# cannot see that semantic error. Reject the compact same-line pattern.
+self_ref_hits="$(find "$ROOT" -type f -name '*.sh' -exec awk '
+    /(^|[;[:space:]])local[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+[A-Za-z_][A-Za-z0-9_]*="[$][A-Za-z_][A-Za-z0-9_]*/ {
+        print FILENAME ":" FNR ":" $0
+    }
+' {} +)"
+if [ -n "$self_ref_hits" ]; then
+    note "  FAIL    safety    same-line local assignment references an earlier local:"
+    note "$self_ref_hits"
+    fail=1
+else
+    note "  ok      safety    no same-line local self-reference assignment"
+fi
 
 if [ "$fail" -ne 0 ]; then
     note "lint.sh: FAILED"

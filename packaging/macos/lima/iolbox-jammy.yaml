@@ -6,18 +6,17 @@
 # run time.  Keeping the URL, digest, and geometry out of this template avoids
 # two sources of truth.  Do not pass this tokenized file directly to limactl.
 #
-# The image is Ubuntu 22.04 arm64.  Jammy's 5.15 kernel is the qualified
-# Rosetta environment; Ubuntu 24.04/kernel 6.8 failed the amd64 loader canary
-# on the measured macOS 13.5 host (docs/macos-m0-result.md:37-56).  The image
-# URL and checksum are therefore rendered from the pinned env file rather
-# than replaced with template://ubuntu-22.04, whose meaning can drift.
+# The image is Ubuntu 22.04 arm64. Jammy is retained as the compatibility
+# profile; the live canary remains authoritative for the current host build.
+# The image URL and digest are rendered from the pinned env file rather than
+# replaced with template://ubuntu-22.04, whose meaning can drift.
 
 # Lima verifies the downloaded bytes against this digest before booting.  The
 # image URL is the exact release directory pinned in pinned-image.env.
 images:
-  - location: "@IOLBOX_JAMMY_IMAGE_URL@"
+  - location: "@IOLBOX_IMAGE_URL@"
     arch: aarch64
-    digest: "sha256:@IOLBOX_JAMMY_IMAGE_SHA256@"
+    digest: "@IOLBOX_IMAGE_DIGEST@"
 
 # VZ plus Rosetta is the configuration exercised by M0 on the Apple M1
 # (docs/macos-m0-result.md:23-32).  binfmt registration is required so the

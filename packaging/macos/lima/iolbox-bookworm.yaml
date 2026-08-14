@@ -1,15 +1,14 @@
 # iolbox Debian 12/bookworm Lima template; render before passing to Lima.
 #
 # This profile is a CANDIDATE, canary-gated and UNVERIFIED on Apple Silicon
-# Rosetta.  The 6.1 kernel is inferred safe from the measured 6.3 threshold,
-# but has never been executed on the measured Mac.  Debian image URL/digest and geometry are
-# rendered from pinned-image-debian12.env with the same @TOKEN@ scheme as the
-# Jammy template.
+# Rosetta. Debian 12 is an unpinned CANDIDATE and has no qualification row yet;
+# the live canary is authoritative. Image URL/digest and geometry are rendered
+# from pinned-image-debian12.env with the same @TOKEN@ scheme as the Jammy template.
 
 images:
-  - location: "@IOLBOX_DEBIAN12_IMAGE_URL@"
+  - location: "@IOLBOX_IMAGE_URL@"
     arch: aarch64
-    digest: "sha256:@IOLBOX_DEBIAN12_IMAGE_SHA256@"
+    digest: "@IOLBOX_IMAGE_DIGEST@"
 
 # This is the VZ + Rosetta shape used by M0.  The arm64 guest runs the
 # existing unmodified linux/amd64 payload through Rosetta.

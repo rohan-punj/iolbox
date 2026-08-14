@@ -24,6 +24,7 @@ IOLBOX_VERIFY_TIMEOUT_SECONDS="${IOLBOX_VERIFY_TIMEOUT_SECONDS:-30}"
 IOLBOX_VERIFY_JSON="${IOLBOX_VERIFY_JSON:-/var/lib/iolbox/macos-verify.json}"
 IOLBOX_IMAGE_CACHE_FILE="${IOLBOX_IMAGE_CACHE_FILE:-/opt/iolbox/images/.image-cache.json}"
 IOLBOX_ROSETTA_BINFMT_FILE="${IOLBOX_ROSETTA_BINFMT_FILE:-/proc/sys/fs/binfmt_misc/rosetta}"
+IOLBOX_STRUCTURAL_GATE_JSON="${IOLBOX_STRUCTURAL_GATE_JSON:-/var/lib/iolbox/macos-structural-gate.json}"
 
 usage() {
     cat <<EOF
@@ -73,6 +74,37 @@ wait_for_http_ready() {
         sleep 1
     done
     return 1
+}
+
+verify_structural_attestation() {
+    local gate
+
+    if [ ! -f "$IOLBOX_STRUCTURAL_GATE_JSON" ]; then
+        die "$IOLBOX_EXIT_VERIFY" "structural gate assertion: missing $IOLBOX_STRUCTURAL_GATE_JSON"
+    fi
+    gate="$(cat "$IOLBOX_STRUCTURAL_GATE_JSON")"
+    case "$gate" in
+        *'"schema":1'*) : ;;
+        *) die "$IOLBOX_EXIT_VERIFY" 'structural gate assertion: attestation schema is missing' ;;
+    esac
+    case "$gate" in
+        *'"drop_in":"/etc/systemd/system/iolbox-supervisor.service.d/10-iolbox-macos-canary.conf"'*) : ;;
+        *) die "$IOLBOX_EXIT_VERIFY" 'structural gate assertion: attestation has the wrong drop-in path' ;;
+    esac
+    case "$gate" in
+        *'"canary_verdict":"PASS"'*) : ;;
+        *) die "$IOLBOX_EXIT_VERIFY" 'structural gate assertion: attestation does not record canary PASS' ;;
+    esac
+    case "$gate" in
+        *'"macos_product":""'*|*'"macos_product":"unknown"'*)
+            die "$IOLBOX_EXIT_VERIFY" 'structural gate assertion: attestation lacks macOS product' ;;
+        *) : ;;
+    esac
+    case "$gate" in
+        *'"macos_build":""'*|*'"macos_build":"unknown"'*)
+            die "$IOLBOX_EXIT_VERIFY" 'structural gate assertion: attestation lacks macOS build' ;;
+        *) : ;;
+    esac
 }
 
 rosetta_binfmt_state() {
@@ -249,6 +281,8 @@ main() {
             "readiness assertion: GET http://127.0.0.1:$IOLBOX_GUI_PORT/ did not return status < 500 (last status ${http_status:-unknown})"
     fi
 
+    verify_structural_attestation
+
     if loader_output="$("$IOLBOX_LOADER" --version 2>&1)"; then
         loader_line="${loader_output%%$'\n'*}"
     else
@@ -271,9 +305,8 @@ main() {
         *[!a-zA-Z0-9._-]*) die "$IOLBOX_EXIT_VERIFY" \
             "persistence assertion: unsafe host ID value '$host_id'" ;;
     esac
+    assert_kernel_qualification "$IOLBOX_EXIT_VERIFY"
     kernel_series_value="$(kernel_series)"
-    [ "$kernel_series_value" = "$IOLBOX_KERNEL_SERIES" ] || die "$IOLBOX_EXIT_VERIFY" \
-        "kernel assertion: running series is $kernel_series_value, expected $IOLBOX_KERNEL_SERIES"
     if [ -e /opt/iolbox/iourc ]; then
         iourc_value=true
     else

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# 20-kernel-hold-debian.sh - enforce the Debian kernel policy for Rosetta.
+# 20-kernel-hold-debian.sh - enforce the Debian kernel reproducibility policy.
 #
 # In order, this step:
-#   1. asserts the running Debian kernel matches IOLBOX_KERNEL_SERIES;
+#   1. asserts the running Debian kernel matches the profile's series and,
+#      when supplied, exact uname -r;
 #   2. holds only the Debian kernel packages which are actually installed;
 #   3. gives Debian backports kernels a negative apt priority; and
-#   4. records the same key=value policy format as the Ubuntu step, including
-#      the selected profile and the Debian kernel's inferred/UNVERIFIED status.
+#   4. records the same key=value reproducibility policy format as the Ubuntu
+#      step, including profile/image/kernel qualification and provenance.
 #
-# The realistic Debian escape route is bookworm-backports, which carries 6.12;
-# that is a newer kernel family than the measured macOS 13.5 Rosetta canary
-# permits.  This is a policy hold, not a claim that Debian 6.1 has been
-# executed on Apple Silicon.  Debian 12 is a CANDIDATE, UNVERIFIED on hardware.
+# This is not a Rosetta safety claim. The canary is the authority for the exact
+# host/kernel pair. Debian 12 remains a candidate while its image is unpinned;
+# trixie preserves the exact kernel supplied by its pinned image.
 # --verify is read-only.
 set -euo pipefail
 
@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib.sh"
 
 IOLBOX_KERNEL_PREFS="${IOLBOX_KERNEL_PREFS:-/etc/apt/preferences.d/99-iolbox-kernel-hold}"
-IOLBOX_PROVISION_DATE="${IOLBOX_PROVISION_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+IOLBOX_PROVISION_DATE="${IOLBOX_PROVISION_DATE:-}"
 IOLBOX_PROFILE="${IOLBOX_PROFILE:-debian12}"
 IOLBOX_PROFILE_STATUS="${IOLBOX_PROFILE_STATUS:-CANDIDATE, UNVERIFIED}"
 
@@ -53,12 +53,11 @@ debian_codename() {
 }
 
 assert_qualified_kernel() {
-    local actual expected
+    local codename
 
-    actual="$(kernel_series)"
-    expected="$(printf '%s\n' "$IOLBOX_KERNEL_SERIES" | cut -d. -f1,2)"
-    [ "$actual" = "$expected" ] || die "$IOLBOX_EXIT_PREFLIGHT" \
-        "guest kernel series '$actual' is outside qualified '$IOLBOX_KERNEL_SERIES'; Linux >= 6.3 emits auxv type 28 (AT_RSEQ_ALIGN), which the measured macOS/Rosetta pair aborts on"
+    codename="$(debian_codename)"
+    assert_kernel_qualification "$IOLBOX_EXIT_PREFLIGHT" \
+        "$(iolbox_expected_uname_r "$codename")"
 }
 
 package_is_installed() {
@@ -76,7 +75,7 @@ installed_kernel_packages() {
         "linux-image-$(uname -r)"
     )
 
-    for package in "${candidates[@]}"; do
+    for package in ${candidates[@]+"${candidates[@]}"}; do
         if package_is_installed "$package"; then
             printf '%s\n' "$package"
         fi
@@ -90,7 +89,7 @@ get_kernel_packages() {
     while IFS= read -r package; do
         [ -n "$package" ] && packages+=("$package")
     done < <(installed_kernel_packages)
-    printf '%s\n' "${packages[@]}"
+    printf '%s\n' ${packages[@]+"${packages[@]}"}
 }
 
 hold_installed_kernels() {
@@ -104,7 +103,7 @@ hold_installed_kernels() {
         log 'no supported Debian kernel package is installed; nothing to hold'
         return 0
     fi
-    if apt-mark hold "${packages[@]}"; then
+    if apt-mark hold ${packages[@]+"${packages[@]}"}; then
         log "held installed Debian kernel packages: ${packages[*]}"
     else
         rc=$?
@@ -116,7 +115,7 @@ hold_installed_kernels() {
 write_if_changed() {
     local destination="$1" mode="$2" tmp="$3"
 
-    chmod "$mode" -- "$tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
+    chmod "$mode" "$tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
         "could not set permissions on temporary file for $destination"
     if cmp -s -- "$destination" "$tmp" 2>/dev/null; then
         rm -f -- "$tmp"
@@ -136,10 +135,9 @@ write_kernel_preferences() {
     printf '%s\n' \
         "# iolbox Debian kernel policy for $codename; profile=$IOLBOX_PROFILE." \
         '#' \
-        '# Debian bookworm-backports carries a 6.12 kernel.  Pulling a backports' \
-        '# kernel is the realistic Debian escape route, but it crosses the' \
-        '# measured macOS 13.5 Rosetta boundary unless the exact pair passes the' \
-        '# executable canary.  Keep backports kernels below apt install priority.' \
+        '# This is a reproducibility hold; the executable canary is the authority' \
+        '# for the exact host/kernel pair and no kernel series is universally' \
+        '# declared safe or unsafe by this policy.' \
         '#' \
         '# This negative pin complements apt-mark holds on packages installed now.' \
         'Package: linux-image* linux-headers*' \
@@ -149,7 +147,7 @@ write_kernel_preferences() {
 }
 
 write_policy_file() {
-    local tmp held_list package
+    local tmp held_list package provision_date codename
     local -a packages=()
 
     while IFS= read -r package; do
@@ -159,6 +157,13 @@ write_policy_file() {
     if [ "${#packages[@]}" -gt 0 ]; then
         held_list="${packages[*]}"
     fi
+    codename="$(debian_codename)"
+    provision_date=''
+    if [ -f "$IOLBOX_POLICY_FILE" ]; then
+        provision_date="$(sed -n 's/^provisioned_at=//p' "$IOLBOX_POLICY_FILE" | head -n1)"
+    fi
+    [ -n "$provision_date" ] || provision_date="$IOLBOX_PROVISION_DATE"
+    [ -n "$provision_date" ] || provision_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     install -d -m 0755 -- "$(dirname "$IOLBOX_POLICY_FILE")" || \
         die "$IOLBOX_EXIT_PREFLIGHT" 'could not create policy directory'
@@ -168,16 +173,19 @@ write_policy_file() {
         'iolbox macOS/Lima guest kernel policy' \
         "profile=$IOLBOX_PROFILE" \
         "profile_status=$IOLBOX_PROFILE_STATUS" \
-        "provisioned_at=$IOLBOX_PROVISION_DATE" \
+        'purpose=reproducibility' \
+        'canary_is_authority=true' \
+        "provisioned_at=$provision_date" \
         "host_macos=$IOLBOX_HOST_MACOS" \
         "host_lima=$IOLBOX_HOST_LIMA" \
         "machine=$IOLBOX_MACHINE" \
         "qualified_kernel_series=$IOLBOX_KERNEL_SERIES" \
-        'kernel_safety=inferred safe and UNVERIFIED on hardware (Debian kernel/Rosetta pair has never been executed on Apple Silicon)' \
-        'why=macOS Rosetta aborts on auxv type 28 (AT_RSEQ_ALIGN), emitted by Linux kernels >= 6.3; the macOS version that fixes this is UNVERIFIED' \
+        "qualified_kernel=$(iolbox_kernel_qualification "$codename")" \
+        "image_qualification=$(iolbox_image_qualification "$codename")" \
         "held_kernel_packages=$held_list" \
+        'security_update_tradeoff=holding the installed kernel and pinning backports delays kernel security updates; this is deliberate for reproducibility' \
         'check_holds=apt-mark showhold' \
-        'intentional_lift=qualify the exact macOS/Rosetta and guest-kernel pair first, then run apt-mark unhold <package-list>, remove /etc/apt/preferences.d/99-iolbox-kernel-hold, and reboot deliberately' \
+        'deliberate_requalification=run the executable canary on the exact host/kernel pair, review the policy and security updates, then apt-mark unhold the listed packages, remove the preferences pin, update, and reboot deliberately' \
         > "$tmp"
     write_if_changed "$IOLBOX_POLICY_FILE" 0644 "$tmp"
 }
@@ -193,7 +201,7 @@ assert_holds() {
     fi
     while IFS= read -r package; do
         [ -n "$package" ] || continue
-        if ! printf '%s\n' "$holds" | grep -Fxq -- "$package"; then
+        if ! text_contains_exact_line "$holds" "$package"; then
             die "$IOLBOX_EXIT_VERIFY" \
                 "hold assertion: installed Debian kernel package is not held: $package"
         fi
@@ -216,9 +224,18 @@ verify_end_state() {
         "policy assertion: missing $IOLBOX_POLICY_FILE"
     grep -Fqx "profile=$IOLBOX_PROFILE" "$IOLBOX_POLICY_FILE" || \
         die "$IOLBOX_EXIT_VERIFY" "policy assertion: profile=$IOLBOX_PROFILE is missing"
-    grep -Fq 'kernel_safety=inferred safe and UNVERIFIED on hardware' "$IOLBOX_POLICY_FILE" || \
-        die "$IOLBOX_EXIT_VERIFY" \
-        'policy assertion: Debian inferred/UNVERIFIED kernel safety record is missing'
+    grep -Fqx 'purpose=reproducibility' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: purpose=reproducibility is missing'
+    grep -Fqx 'canary_is_authority=true' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: canary_is_authority=true is missing'
+    grep -Fq 'qualified_kernel=' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: kernel qualification is missing'
+    grep -Fq 'image_qualification=' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: image qualification is missing'
+    grep -Fq 'security_update_tradeoff=' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: security-update tradeoff is missing'
+    grep -Fq 'deliberate_requalification=' "$IOLBOX_POLICY_FILE" || \
+        die "$IOLBOX_EXIT_VERIFY" 'policy assertion: deliberate requalification steps are missing'
     assert_holds
 }
 

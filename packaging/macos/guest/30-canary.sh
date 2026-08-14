@@ -92,7 +92,7 @@ canary_remediation() {
 
     case "$verdict" in
         FAIL_AUXV)
-            printf '%s' 'The guest kernel emits AT_RSEQ_ALIGN (auxv type 28), which Rosetta on this macOS build cannot handle. The supported guest is Ubuntu 22.04 with kernel 5.15. This is known to fail on macOS 13.5; the macOS version that fixes it is UNVERIFIED and its fix point has not been measured. Do not assume upgrading macOS will fix it; after an upgrade, re-run this canary to find out.'
+            printf '%s' "The exact current Rosetta/kernel pair failed because the guest emitted AT_RSEQ_ALIGN (auxv type 28), which Rosetta on macOS ${IOLBOX_HOST_MACOS:-unknown} could not handle. This is not a blanket kernel >= 6.3 restriction: macOS 26.6.1 has passed with kernels 6.8 and 6.12. Inspect the Lima Rosetta share and binfmt registration; when Rosetta/binfmt is absent or Lima warned while configuring Rosetta, reinstall Lima with brew reinstall lima and recreate or restart the guest. The jammy profile (Ubuntu 22.04, kernel 5.15) is the compatibility profile. Re-run this canary after remediation."
             ;;
         FAIL_NOEXEC)
             printf '%s' 'The amd64 loader reached the kernel but was rejected with Exec format error. Start Lima with VZ and Rosetta, verify the Rosetta binfmt registration, and re-run this canary.'
@@ -176,16 +176,31 @@ canary_json_escape() {
 # canary_json_object <verdict> <version> <kernel> <binfmt> <error>
 canary_json_object() {
     local verdict="$1" version="$2" kernel="$3" binfmt="$4" error_text="$5"
+    local macos_product="${6:-unknown}"
+    local macos_build="${7:-unknown}"
+    local lima_version="${8:-unknown}"
+    local profile="${9:-unknown}"
+    local timestamp="${10:-}"
     local escaped_verdict escaped_version escaped_kernel escaped_binfmt escaped_error
+    local escaped_product escaped_build escaped_lima escaped_profile escaped_timestamp
+
+    [ -n "$timestamp" ] || timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     escaped_verdict="$(canary_json_escape "$verdict")"
     escaped_version="$(canary_json_escape "$version")"
     escaped_kernel="$(canary_json_escape "$kernel")"
     escaped_binfmt="$(canary_json_escape "$binfmt")"
     escaped_error="$(canary_json_escape "$error_text")"
+    escaped_product="$(canary_json_escape "$macos_product")"
+    escaped_build="$(canary_json_escape "$macos_build")"
+    escaped_lima="$(canary_json_escape "$lima_version")"
+    escaped_profile="$(canary_json_escape "$profile")"
+    escaped_timestamp="$(canary_json_escape "$timestamp")"
 
-    printf '{"verdict":"%s","version":"%s","kernel":"%s","binfmt":"%s","error":"%s"}\n' \
-        "$escaped_verdict" "$escaped_version" "$escaped_kernel" "$escaped_binfmt" "$escaped_error"
+    printf '{"schema":1,"macos_product":"%s","macos_build":"%s","lima_version":"%s","profile":"%s","kernel":"%s","binfmt":"%s","verdict":"%s","timestamp":"%s","version":"%s","error":"%s"}\n' \
+        "$escaped_product" "$escaped_build" "$escaped_lima" "$escaped_profile" \
+        "$escaped_kernel" "$escaped_binfmt" "$escaped_verdict" "$escaped_timestamp" \
+        "$escaped_version" "$escaped_error"
 }
 
 canary_write_record() {
@@ -227,6 +242,7 @@ main() {
     local timeout_seconds="${IOLBOX_CANARY_TIMEOUT:-10}"
     local tmp_dir stdout_file stderr_file stdout_text stderr_text captured_text
     local exit_status verdict version kernel arch binfmt loader_exists json_text
+    local macos_product macos_build lima_version profile timestamp host_macos
 
     while [ "$#" -gt 0 ]; do
         arg="$1"
@@ -266,6 +282,22 @@ main() {
         return "$IOLBOX_EXIT_USAGE"
     fi
     have timeout || die "$IOLBOX_EXIT_USAGE" 'timeout(1) is required to run the Rosetta canary safely'
+
+    macos_product="${IOLBOX_HOST_MACOS_PRODUCT:-}"
+    macos_build="${IOLBOX_HOST_MACOS_BUILD:-}"
+    host_macos="$IOLBOX_HOST_MACOS"
+    if [ -z "$macos_product" ] && [[ "$host_macos" == *' ('*')' ]]; then
+        macos_product="${host_macos%% (*}"
+    fi
+    if [ -z "$macos_build" ] && [[ "$host_macos" == *' ('*')' ]]; then
+        macos_build="${host_macos##* (}"
+        macos_build="${macos_build%)}"
+    fi
+    [ -n "$macos_product" ] || macos_product='unknown'
+    [ -n "$macos_build" ] || macos_build='unknown'
+    lima_version="${IOLBOX_HOST_LIMA:-unknown}"
+    profile="${IOLBOX_PROFILE:-unknown}"
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     binfmt="$(canary_binfmt_state)"
     kernel="$(uname -r)"
@@ -308,9 +340,11 @@ main() {
     fi
     version="$(canary_extract_version "$stdout_text" || true)"
     if [ "$verdict" = 'PASS' ]; then
-        json_text="$(canary_json_object "$verdict" "$version" "$kernel" "$binfmt" '')"
+        json_text="$(canary_json_object "$verdict" "$version" "$kernel" "$binfmt" '' \
+            "$macos_product" "$macos_build" "$lima_version" "$profile" "$timestamp")"
     else
-        json_text="$(canary_json_object "$verdict" "$version" "$kernel" "$binfmt" "$captured_text")"
+        json_text="$(canary_json_object "$verdict" "$version" "$kernel" "$binfmt" "$captured_text" \
+            "$macos_product" "$macos_build" "$lima_version" "$profile" "$timestamp")"
     fi
     if ! canary_write_record "$json_text"; then
         if [ "$verdict" = 'PASS' ]; then

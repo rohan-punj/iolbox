@@ -11,7 +11,14 @@ test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOLBOX_CANARY_LIB_ONLY=1
 export IOLBOX_CANARY_LIB_ONLY
 # shellcheck source=../guest/30-canary.sh
-. "$test_dir/../guest/30-canary.sh"
+if [ ! -r "$test_dir/../guest/30-canary.sh" ]; then
+    printf 'ERROR: required canary fixture is missing or unreadable: %s\n' "$test_dir/../guest/30-canary.sh" >&2
+    exit 1
+fi
+if ! . "$test_dir/../guest/30-canary.sh"; then
+    printf 'ERROR: could not source canary fixture: %s\n' "$test_dir/../guest/30-canary.sh" >&2
+    exit 1
+fi
 
 total=0
 failures=0
@@ -68,9 +75,15 @@ assert_contains 'auxv message names macOS product/build' "$rendered_auxv" '13.5 
 assert_contains 'auxv message names Lima version' "$rendered_auxv" '2.2.0'
 assert_contains 'auxv message names guest kernel' "$rendered_auxv" '6.8.0-31-generic'
 assert_contains 'auxv message names AT_RSEQ_ALIGN' "$rendered_auxv" 'AT_RSEQ_ALIGN'
-assert_contains 'auxv message names supported guest' "$rendered_auxv" 'Ubuntu 22.04 with kernel 5.15'
-assert_contains 'auxv message marks macOS fix point unverified' "$rendered_auxv" 'UNVERIFIED'
-assert_contains 'auxv message gives re-run action' "$rendered_auxv" 're-run this canary'
+assert_contains 'auxv remediation offers Jammy compatibility profile' "$rendered_auxv" 'jammy profile'
+total=$((total + 1))
+if [[ "$rendered_auxv" == *'brew reinstall lima'* && "$rendered_auxv" == *'Rosetta'* && "$rendered_auxv" == *'binfmt'* ]]; then
+    printf 'ok - auxv remediation names Rosetta/binfmt repair and brew reinstall lima\n'
+else
+    printf 'FAIL - auxv remediation names Rosetta/binfmt repair and brew reinstall lima\n'
+    failures=$((failures + 1))
+fi
+assert_contains 'auxv message gives re-run action' "$rendered_auxv" 'Re-run this canary'
 
 printf 'Summary: %d cases, %d failures\n' "$total" "$failures"
 [ "$failures" -eq 0 ]
