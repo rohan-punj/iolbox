@@ -83,10 +83,10 @@
           "$ref": "#/$defs/imageRef"
         },
         "ram": {
-          "description": "Megabytes. Default depends on image class.",
+          "description": "Megabytes for an IOL node. Omit (or 0) to take the class default. The supervisor raises anything below the class minimum (1024 MB today) before launch: a modern 17.x image cannot boot on less and wedges during init while still reporting 'running'.",
           "type": "integer",
           "minimum": 32,
-          "default": 256
+          "default": 1024
         },
         "ethernet": {
           "description": "Number of Ethernet adapter groups (each = 4 ports in IOL).",

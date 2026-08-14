@@ -174,7 +174,17 @@
       <div class="field-row">
         <label class="field">
           <span class="label">RAM (MB)</span>
-          <input type="number" min="32" step="32" value={node.ram ?? 1024} oninput={updateRam} />
+          <!-- min 1024: the supervisor raises anything lower to its class floor
+               anyway (node.IOLRAMFor), because a modern IOL image wedges during
+               init on less while the node still reports "running". -->
+          <input
+            type="number"
+            min="1024"
+            step="256"
+            title="Minimum 1024 MB — a modern IOL image cannot finish booting on less."
+            value={node.ram ?? 1024}
+            oninput={updateRam}
+          />
         </label>
       </div>
 

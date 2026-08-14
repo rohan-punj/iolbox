@@ -302,9 +302,43 @@ func TestIOLArgvRAM(t *testing.T) {
 	if !strings.Contains(joined, "-m 1024") {
 		t.Fatalf("argv missing -m 1024: %v", argv)
 	}
-	// RAM 0 = omit the flag entirely (IOL default).
+	// RAM 0 = omit the flag entirely (IOL default). The server never builds
+	// such a Spec for an IOL node — buildSpec runs node.ram through IOLRAMFor
+	// first (see TestIOLRAMFor) — but a hand-built Spec must still behave.
 	s.RAM = 0
 	if joined := strings.Join(s.IOLArgv(), " "); strings.Contains(joined, "-m") {
 		t.Fatalf("argv must omit -m when RAM unset: %v", s.IOLArgv())
+	}
+}
+
+// TestIOLRAMFor pins the floor that keeps an under-provisioned IOL node from
+// wedging silently: 256 MB (IOL's own built-in default, and what EVE/PNet packs
+// carry) makes a 17.x image die with %SYS-2-MALLOCFAIL mid-init while the
+// process stays alive and the node keeps reporting "running".
+func TestIOLRAMFor(t *testing.T) {
+	cases := []struct {
+		name  string
+		ram   int
+		class string
+		want  int
+	}{
+		{"unset l3", 0, "l3", MinIOLRAMMB},
+		{"unset l2", 0, "l2", MinIOLRAMMB},
+		{"unset unknown class", 0, "unknown", MinIOLRAMMB},
+		{"unset empty class", 0, "", MinIOLRAMMB},
+		{"the confirmed-wedge value", 256, "l3", MinIOLRAMMB},
+		{"below floor", 512, "l3", MinIOLRAMMB},
+		{"negative", -1, "l3", MinIOLRAMMB},
+		{"at floor is untouched", MinIOLRAMMB, "l3", MinIOLRAMMB},
+		{"above floor is honoured", 4096, "l3", 4096},
+		{"above floor l2 is honoured", 2048, "l2", 2048},
+	}
+	for _, tc := range cases {
+		if got := IOLRAMFor(tc.ram, tc.class); got != tc.want {
+			t.Errorf("%s: IOLRAMFor(%d, %q) = %d, want %d", tc.name, tc.ram, tc.class, got, tc.want)
+		}
+	}
+	if MinIOLRAMMB <= 256 {
+		t.Fatalf("MinIOLRAMMB %d does not clear IOL's 256 MB built-in default", MinIOLRAMMB)
 	}
 }

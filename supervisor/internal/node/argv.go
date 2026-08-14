@@ -42,6 +42,51 @@ type Spec struct {
 	VPCSUDPRemote int
 }
 
+// MinIOLRAMMB is the floor the supervisor applies to every IOL node's -m value.
+//
+// IOL's own built-in default is 256 MB, which is not enough for a modern 17.x
+// x86_64 image to finish booting. Confirmed on real hardware 2026-08-14 with
+// IOL 17.18.02 at ram=256:
+//
+//	%SYS-2-MALLOCFAIL: Memory allocation of 220004 bytes failed
+//	Pool: Processor  Free: 21216  Cause: Not enough free memory
+//
+// The critical part is that this is SILENT to the supervisor: the IOL process
+// stays alive with IOS wedged mid-init, so lab.start returns ok and every node
+// reports "running". Nothing in the control protocol or the supervisor logs
+// distinguishes it from a healthy boot — the only evidence is on the console.
+// That is why the floor is enforced here rather than left to lab authors: a
+// too-small -m does not fail loudly enough to be a lab-authoring bug you would
+// ever notice.
+const MinIOLRAMMB = 1024
+
+// IOLRAMFor returns the effective -m megabytes for an IOL node, given the lab
+// document's node.ram (0 = unset) and the detected image class ("l2" / "l3" /
+// "unknown"; anything else is treated as unknown).
+//
+// Both unset and too-small values are raised to the class floor. Clamping an
+// explicit value is deliberate: an under-provisioned node does not merely run
+// slower, it wedges during init while still reporting "running", so honouring
+// the author's number would trade a working node for an inert one. The cost of
+// raising it is bounded by what IOS actually allocates.
+//
+// The floors are per-class because the L2 and L3 image families do not share a
+// footprint; they are equal today (both 17.x families need well over IOL's
+// 256 MB built-in) and this switch is the single place to diverge them.
+func IOLRAMFor(ram int, class string) int {
+	floor := MinIOLRAMMB
+	switch class {
+	case "l2":
+		floor = MinIOLRAMMB
+	case "l3":
+		floor = MinIOLRAMMB
+	}
+	if ram < floor {
+		return floor
+	}
+	return ram
+}
+
 // DefaultNVRAMKiB is the NVRAM size used when Spec.NVRAMKiB is 0. IOL rounds
 // this and it must comfortably exceed the injected startup-config; 64 KiB fits
 // typical lab configs. See NVRAMKiBFor for config-sized growth.
@@ -76,8 +121,11 @@ func (s Spec) IOLArgv() []string {
 	}
 	// -m <MB>: without it IOL runs at its built-in default (256MB), which is
 	// too small for modern 17.x x86_64 images to finish booting — the process
-	// stays alive while IOS wedges, so the failure is silent. Spec.RAM comes
-	// from the lab doc's node.ram.
+	// stays alive while IOS wedges, so the failure is silent (see MinIOLRAMMB).
+	// Spec.RAM comes from the lab doc's node.ram put through IOLRAMFor by the
+	// server's buildSpec, so for an IOL node it is never below the class floor
+	// and the flag is always emitted. The RAM > 0 guard remains so a Spec built
+	// by hand (tests, non-IOL kinds) still behaves.
 	if s.RAM > 0 {
 		argv = append(argv, "-m", strconv.Itoa(s.RAM))
 	}

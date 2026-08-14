@@ -28,6 +28,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
+# Minimum -m megabytes for an IOL node; mirrors node.MinIOLRAMMB in the
+# supervisor (supervisor/internal/node/argv.go). EVE/PNet packs routinely carry
+# ram="256" (IOL's own built-in default), which a modern 17.x image cannot boot
+# on: IOS dies with %SYS-2-MALLOCFAIL during init while the process stays alive,
+# so the node reports "running" and the lab looks fine. Imported values are
+# raised to this floor rather than carried over.
+MIN_IOL_RAM_MB = 1024
+
+
 def iface_name(kind: str, adapter: int, port: int) -> str:
     prefix = "e" if kind == "eth" else "s"
     return f"{prefix}{adapter}/{port}"
@@ -55,6 +64,13 @@ def parse_unl(path: Path):
             eth = int(n.get("ethernet") or 1)
             ser = int(n.get("serial") or 1)
             image = n.get("image") or "UNKNOWN.bin"
+            src_ram = int(n.get("ram") or 0)
+            ram = max(src_ram, MIN_IOL_RAM_MB)
+            if src_ram and src_ram < MIN_IOL_RAM_MB:
+                warnings.append(
+                    f"node {nid} ({name}): ram {src_ram} MB raised to {ram} MB "
+                    f"(too small to boot a modern IOL image)"
+                )
             node = {
                 "id": nid,
                 "kind": "iol",
@@ -62,7 +78,7 @@ def parse_unl(path: Path):
                 "x": left,
                 "y": top,
                 "image": {"id": "REPLACE_ON_IMPORT", "filename": image, "class": "unknown"},
-                "ram": int(n.get("ram") or 256),
+                "ram": ram,
                 "ethernet": eth,
                 "serial": ser,
                 "startupConfig": "",

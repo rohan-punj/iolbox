@@ -12,7 +12,7 @@
       "x": 240,
       "y": 200,
       "image": { "id": "REPLACE_WITH_IMAGE_ID", "filename": "L3-ADVENTERPRISE.bin", "class": "l3" },
-      "ram": 256,
+      "ram": 1024,
       "ethernet": 1,
       "serial": 1,
       "startupConfig": "hostname R1\n!\ninterface Ethernet0/0\n ip address 10.0.12.1 255.255.255.0\n no shutdown\n!\ninterface Ethernet0/1\n ip address 192.168.1.1 255.255.255.0\n no shutdown\n!\nend\n"
@@ -24,7 +24,7 @@
       "x": 560,
       "y": 200,
       "image": { "id": "REPLACE_WITH_IMAGE_ID", "filename": "L3-ADVENTERPRISE.bin", "class": "l3" },
-      "ram": 256,
+      "ram": 1024,
       "ethernet": 1,
       "serial": 1,
       "startupConfig": "hostname R2\n!\ninterface Ethernet0/0\n ip address 10.0.12.2 255.255.255.0\n no shutdown\n!\nend\n"

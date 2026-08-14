@@ -166,8 +166,26 @@ func (s *Server) handleLabLoad(raw json.RawMessage) (any, error) {
 		}
 		if n.Kind == lab.KindIOL && n.Image != nil {
 			nr.imageID = n.Image.ID
-			if _, ok := s.lookupImage(n.Image.ID); !ok {
+			class := ""
+			if info, ok := s.lookupImage(n.Image.ID); ok {
+				class = string(info.Class)
+			} else {
 				warnings = append(warnings, fmt.Sprintf("node %d references unregistered image %s", n.ID, n.Image.ID))
+			}
+			// Report the RAM floor the node will actually launch with. buildSpec
+			// raises it either way; warning here is what makes the correction
+			// visible, because the failure it prevents (IOS wedging mid-init on
+			// a live process) produces no error the supervisor can ever see.
+			if eff := node.IOLRAMFor(n.RAM, class); eff != n.RAM {
+				nr.ram = eff
+				if n.RAM == 0 {
+					warnings = append(warnings, fmt.Sprintf(
+						"node %d has no ram set; using the %d MB class default", n.ID, eff))
+				} else {
+					warnings = append(warnings, fmt.Sprintf(
+						"node %d ram %d MB is below the %d MB minimum for modern IOL images and would wedge during boot; raising it to %d MB",
+						n.ID, n.RAM, eff, eff))
+				}
 			}
 		}
 		ll.nodes[n.ID] = nr
@@ -1055,6 +1073,11 @@ func (s *Server) buildSpec(ll *loadedLab, n *lab.Node, nr *nodeRuntime) (node.Sp
 		spec.ImagePath = s.cfg.ImageDir + "/" + info.Filename
 		spec.Ethernet = intOr(n.Ethernet, 1)
 		spec.Serial = intOr(n.Serial, 1)
+		// Apply the class RAM floor. node.ram of 0 means "class default" (see
+		// lab.Node.RAM) and anything under the floor wedges IOS during init
+		// while the process — and therefore the node's state — still looks
+		// healthy, so both cases are raised here rather than passed through.
+		spec.RAM = node.IOLRAMFor(n.RAM, string(info.Class))
 		// Size NVRAM to hold the injected startup-config (P0 correction #3:
 		// boot pre-configured so IOS-XE PnP never engages). -n must be >= the
 		// nvram_<id> file prepareLabDir writes, which carries the *effective*
@@ -1162,6 +1185,14 @@ func (s *Server) handleNodeAdd(raw json.RawMessage) (any, error) {
 	}
 	if n.Kind == lab.KindIOL && n.Image != nil {
 		nr.imageID = n.Image.ID
+		class := ""
+		if info, ok := s.lookupImage(n.Image.ID); ok {
+			class = string(info.Class)
+		}
+		// Same floor buildSpec will apply at spawn — recorded here so the
+		// runtime's ram never disagrees with what the node actually launches
+		// with (node.add has no warnings channel to report the bump on).
+		nr.ram = node.IOLRAMFor(n.RAM, class)
 	}
 	ll.mu.Lock()
 	ll.doc.Nodes = append(ll.doc.Nodes, n)

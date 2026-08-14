@@ -67,7 +67,11 @@ type Node struct {
 	Icon string  `json:"icon,omitempty"`
 	// Image is required when Kind==iol and ignored for vpcs.
 	Image *ImageRef `json:"image,omitempty"`
-	// RAM in megabytes. Zero means "use the class default".
+	// RAM in megabytes. Zero means "use the class default". For an IOL node the
+	// server resolves this through node.IOLRAMFor at spawn, which also raises
+	// any explicit value below the class floor — validation deliberately stays
+	// permissive here so an old lab document still loads. See node.MinIOLRAMMB
+	// for why an under-provisioned node is treated as a bug and not a choice.
 	RAM int `json:"ram,omitempty"`
 	// Ethernet is the number of Ethernet adapter groups (each = 4 ports in IOL).
 	Ethernet *int `json:"ethernet,omitempty"`
