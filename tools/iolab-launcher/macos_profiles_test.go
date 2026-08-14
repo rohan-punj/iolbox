@@ -139,3 +139,39 @@ func TestRenderTemplateAndD11LimaEnvironment(t *testing.T) {
 		t.Fatalf("IOLBOX_HOST_LIMA = %q", env["IOLBOX_HOST_LIMA"])
 	}
 }
+
+func TestEveryShippedProfileRendersCompleteDarwinPortContract(t *testing.T) {
+	root := filepath.Join("..", "..", "packaging", "macos")
+	table, _, err := loadMacOSProfile(root, "debian13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, profile := range table.Profiles {
+		profile.ImageURL = "https://example.invalid/m3-image"
+		profile.ImageDigest = "sha256:" + strings.Repeat("a", 64)
+		profile.CPUs = "4"
+		profile.Memory = "4GiB"
+		profile.Disk = "15GiB"
+		raw, err := os.ReadFile(filepath.Join(root, "lima", profile.YAMLTemplate))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rendered, err := renderTemplateForPort(raw, profile, defaultDarwinGUIPort)
+		if err != nil {
+			t.Fatalf("render profile %s: %v", name, err)
+		}
+		rules, err := parseDarwinPortForwardRules(string(rendered))
+		if err != nil {
+			t.Fatalf("parse profile %s port contract: %v", name, err)
+		}
+		want := expectedDarwinPortForwardRules(darwinPortContract{GUIPort: defaultDarwinGUIPort})
+		if len(rules) != len(want) {
+			t.Fatalf("profile %s has %d port rules, want %d: %#v", name, len(rules), len(want), rules)
+		}
+		for i := range want {
+			if !darwinPortForwardRulesEqual(rules[i], want[i]) {
+				t.Fatalf("profile %s port rule %d = %#v, want %#v", name, i, rules[i], want[i])
+			}
+		}
+	}
+}

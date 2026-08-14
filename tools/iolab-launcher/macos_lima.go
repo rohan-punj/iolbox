@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,8 +36,9 @@ type limaInfo struct {
 }
 
 type limaClient struct {
-	info   limaInfo
-	runner commandRunner
+	info           limaInfo
+	runner         commandRunner
+	instanceConfig func(string) ([]byte, error)
 }
 
 type machineInfo struct {
@@ -135,6 +137,26 @@ func (l *limaClient) list(ctx context.Context) ([]machineInfo, error) {
 	return parseMachineListing(string(out))
 }
 
+func readStoredLimaConfig(machine string) ([]byte, error) {
+	path, err := homePath(".lima", machine, "lima.yaml")
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func (l *limaClient) hasDarwinPortContract(machine string, ports darwinPortContract) (bool, error) {
+	reader := l.instanceConfig
+	if reader == nil {
+		reader = readStoredLimaConfig
+	}
+	data, err := reader(machine)
+	if err != nil {
+		return false, err
+	}
+	return darwinPortContractMatchesYAML(data, ports)
+}
+
 func findMachine(machines []machineInfo, name string) (string, bool) {
 	for _, machine := range machines {
 		if machine.Name == name {
@@ -145,6 +167,14 @@ func findMachine(machines []machineInfo, name string) (string, bool) {
 }
 
 func renderTemplate(template []byte, p macOSProfile) ([]byte, error) {
+	return renderTemplateForPort(template, p, defaultDarwinGUIPort)
+}
+
+func renderTemplateForPort(template []byte, p macOSProfile, guiPort int) ([]byte, error) {
+	contract, err := newDarwinPortContract(guiPort)
+	if err != nil {
+		return nil, err
+	}
 	rendered := string(template)
 	replacements := map[string]string{
 		"@IOLBOX_IMAGE_URL@":    p.ImageURL,
@@ -152,22 +182,31 @@ func renderTemplate(template []byte, p macOSProfile) ([]byte, error) {
 		"@CPUS@":                p.CPUs,
 		"@MEMORY@":              p.Memory,
 		"@DISK@":                p.Disk,
+		"@IOLBOX_GUI_PORT@":     strconv.Itoa(contract.GUIPort),
 	}
 	for token, value := range replacements {
 		rendered = strings.ReplaceAll(rendered, token, value)
 	}
-	if strings.Contains(rendered, "@") {
-		return nil, fmt.Errorf("rendered Lima template still contains an unresolved placeholder")
+	for _, token := range regexp.MustCompile(`@[A-Z][A-Z0-9_]+@`).FindAllString(rendered, -1) {
+		// The shipped Jammy/Bookworm comments use the prose marker @TOKEN@;
+		// only actual all-caps field tokens are unresolved configuration.
+		if token != "@TOKEN@" {
+			return nil, fmt.Errorf("rendered Lima template still contains an unresolved placeholder")
+		}
 	}
 	return []byte(rendered), nil
 }
 
 func writeRenderedTemplate(dir string, p macOSProfile) (string, error) {
+	return writeRenderedTemplateForPort(dir, p, defaultDarwinGUIPort)
+}
+
+func writeRenderedTemplateForPort(dir string, p macOSProfile, guiPort int) (string, error) {
 	data, err := os.ReadFile(p.TemplatePath)
 	if err != nil {
 		return "", err
 	}
-	rendered, err := renderTemplate(data, p)
+	rendered, err := renderTemplateForPort(data, p, guiPort)
 	if err != nil {
 		return "", err
 	}
@@ -210,6 +249,14 @@ func (l *limaClient) start(ctx context.Context, machine string) error {
 	return nil
 }
 
+func (l *limaClient) startWithPortContract(ctx context.Context, machine string, ports darwinPortContract) error {
+	out, err := l.run(ctx, "start", machine, ports.limaStartSetArg(), "--tty=false")
+	if err != nil {
+		return fmt.Errorf("limactl start: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func (l *limaClient) stop(ctx context.Context, machine string) error {
 	out, err := l.run(ctx, "stop", machine)
 	if err != nil {
@@ -231,7 +278,16 @@ func (l *limaClient) copy(ctx context.Context, source, destination string) error
 }
 
 func ensureMachine(ctx context.Context, l *limaClient, machine, state, template, attestationPath string, validAttestation func() error) (bool, error) {
+	return ensureMachineWithPorts(ctx, l, machine, state, template, attestationPath, validAttestation, nil)
+}
+
+func ensureMachineWithPorts(ctx context.Context, l *limaClient, machine, state, template, attestationPath string, validAttestation func() error, ports *darwinPortContract) (bool, error) {
 	created := false
+	if ports != nil && !strings.EqualFold(state, "running") {
+		if err := preflightDarwinPorts(*ports); err != nil {
+			return false, err
+		}
+	}
 	if state == "" {
 		if attestationPath != "" {
 			if err := os.Remove(attestationPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -246,6 +302,16 @@ func ensureMachine(ctx context.Context, l *limaClient, machine, state, template,
 	}
 	switch strings.ToLower(state) {
 	case "running":
+		if ports != nil {
+			compliant, err := l.hasDarwinPortContract(machine, *ports)
+			if err != nil {
+				return false, codedError(exitPreflight, "could not inspect Lima port contract for running machine %q: %v; stop then start to migrate", machine, err)
+			}
+			if !compliant {
+				return false, codedError(exitPreflight, "running machine %q does not have the Darwin M3 port contract; stop then start to migrate", machine)
+			}
+
+		}
 		return created, nil
 	case "stopped":
 		if !created && validAttestation != nil {
@@ -253,7 +319,11 @@ func ensureMachine(ctx context.Context, l *limaClient, machine, state, template,
 				return false, codedError(exitPreflight, "refusing to start stopped machine %q: %v", machine, err)
 			}
 		}
-		if err := l.start(ctx, machine); err != nil {
+		if ports != nil {
+			if err := l.startWithPortContract(ctx, machine, *ports); err != nil {
+				return false, err
+			}
+		} else if err := l.start(ctx, machine); err != nil {
 			return false, err
 		}
 		return created, nil

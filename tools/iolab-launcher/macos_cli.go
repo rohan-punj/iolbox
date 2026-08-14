@@ -22,6 +22,9 @@ type darwinOptions struct {
 	Tarball     string
 	BootTimeout time.Duration
 	NoBrowser   bool
+	NoSync      bool
+	ImagesDir   string
+	LabsDir     string
 	Bind        string
 	GUIPort     int
 }
@@ -64,11 +67,17 @@ func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
 	fs.StringVar(&opts.Tarball, "tarball", opts.Tarball, "payload tarball")
 	fs.DurationVar(&opts.BootTimeout, "boot-timeout", opts.BootTimeout, "readiness timeout")
 	fs.BoolVar(&opts.NoBrowser, "no-browser", false, "do not open the browser")
+	fs.BoolVar(&opts.NoSync, "no-sync", false, "disable macOS host folder sync")
+	fs.StringVar(&opts.ImagesDir, "images-dir", "", "override the macOS images folder")
+	fs.StringVar(&opts.LabsDir, "labs-dir", "", "override the macOS labs folder")
 	if err := fs.Parse(args); err != nil {
 		return darwinOptions{}, err
 	}
 	if fs.NArg() != 0 {
 		return darwinOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if _, err := newDarwinPortContract(opts.GUIPort); err != nil {
+		return darwinOptions{}, err
 	}
 	return opts, nil
 }
@@ -164,6 +173,14 @@ func runDarwinCLI(args []string) int {
 	if err != nil {
 		return exitCode(err)
 	}
+	var syncConfig darwinSyncConfig
+	if opts.Command == "start" || opts.Command == "upgrade" || opts.Command == "stop" {
+		syncConfig, err = resolveDarwinSyncConfig(opts.NoSync, opts.ImagesDir, opts.LabsDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+			return exitPreflight
+		}
+	}
 	switch opts.Command {
 	case "start", "upgrade":
 		if facts.FreeDiskErr != nil || facts.FreeDiskKB < minFreeDiskGiB*1024*1024 {
@@ -175,8 +192,13 @@ func runDarwinCLI(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return exitCode(err)
 		}
+		ports, portErr := newDarwinPortContract(opts.GUIPort)
+		if portErr != nil {
+			fmt.Fprintln(os.Stderr, portErr)
+			return exitUsage
+		}
 		err = runProvision(context.Background(), client, opts.Machine, profile, facts, payload, lifecycleConfig{
-			Bind: opts.Bind, GUIPort: opts.GUIPort, BootTimeout: opts.BootTimeout, Upgrade: opts.Command == "upgrade",
+			Bind: opts.Bind, GUIPort: opts.GUIPort, Ports: ports, BootTimeout: opts.BootTimeout, Upgrade: opts.Command == "upgrade", Sync: &syncConfig,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
@@ -193,7 +215,15 @@ func runDarwinCLI(args []string) int {
 			return exitPreflight
 		}
 		state, _ := findMachine(machines, opts.Machine)
-		if err := stopMachine(context.Background(), client, opts.Machine, state, opts.BootTimeout); err != nil {
+		if err := runDarwinStop(context.Background(), client, opts.Machine, state, syncConfig, opts.BootTimeout, func() (controlClient, func(), error) {
+			control, err := dialControlWS(fmt.Sprintf("127.0.0.1:%d", opts.GUIPort))
+			if err != nil {
+				return nil, nil, err
+			}
+			return &wsControlClient{ws: control}, func() {
+				_ = control.Close()
+			}, nil
+		}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return exitCode(err)
 		}
@@ -213,6 +243,11 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 	}
 	state, exists := findMachine(machines, opts.Machine)
 	fmt.Println("iolbox status")
+	ports, portErr := newDarwinPortContract(opts.GUIPort)
+	if portErr == nil {
+		fmt.Printf("  GUI port: 127.0.0.1:%d\n  console ports: 127.0.0.1:%d-%d\n  capture ports: 127.0.0.1:%d-%d\n  guest control port: not forwarded (127.0.0.1:%d host check)\n", ports.GUIPort, darwinConsoleStart, darwinConsoleEnd, darwinCaptureStart, darwinCaptureEnd, darwinControlPort)
+	}
+	printDarwinSyncFacts(opts)
 	q := qualificationFor(table, profile.Name, facts.Product, facts.Build)
 	fmt.Printf("  profile: %s\n  role: %s\n  guest: %s\n  kernel pin: %s\n  macOS: %s\n  host_arch: %s\n  qualification: %s\n  lima: %s (%s)\n  machine: %s\n  state: %s\n", profile.Name, profile.Role, profile.GuestLabel, profile.ExpectedUnameR, hostMACOSString(facts), facts.Arch, q.String(), info.Version, info.Path, opts.Machine, map[bool]string{true: state, false: "not created"}[exists])
 	fmt.Println("  last canary:")
@@ -233,6 +268,10 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 
 func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts) int {
 	fmt.Println("iolbox diagnose")
+	if ports, err := newDarwinPortContract(opts.GUIPort); err == nil {
+		fmt.Printf("port contract: GUI=127.0.0.1:%d consoles=127.0.0.1:%d-%d captures=127.0.0.1:%d-%d guest-control=not-forwarded\n", ports.GUIPort, darwinConsoleStart, darwinConsoleEnd, darwinCaptureStart, darwinCaptureEnd)
+	}
+	printDarwinSyncFacts(opts)
 	q := qualificationFor(table, profile.Name, facts.Product, facts.Build)
 	fmt.Printf("profile: %s (%s)\nguest: %s\nkernel pin: %s\nqualification: %s\nmacOS product/build: %s\nhost arch: %s\nexecution=rosetta-amd64\nguest_arch=aarch64\n", profile.Name, profile.Role, profile.GuestLabel, profile.ExpectedUnameR, q.String(), hostMACOSString(facts), facts.Arch)
 	if facts.FreeDiskErr != nil {
@@ -285,12 +324,12 @@ func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, f
 				} else {
 					fmt.Println("live canary: PASS")
 				}
-				control, helloErr := dialNDJSON(context.Background(), "127.0.0.1:4000", 3*time.Second)
+				control, helloErr := dialControlWS(fmt.Sprintf("127.0.0.1:%d", opts.GUIPort))
 				if helloErr != nil {
 					fmt.Println("supervisor hello: unavailable (", helloErr, ")")
 				} else {
 					defer control.Close()
-					hello, helloErr := control.hello(context.Background())
+					hello, helloErr := control.hello()
 					if helloErr != nil {
 						fmt.Println("supervisor hello: unavailable (", helloErr, ")")
 					} else {
@@ -302,6 +341,19 @@ func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, f
 	}
 	printDiagnosticRemediation(opts.Machine)
 	return exitOK
+}
+
+func printDarwinSyncFacts(opts darwinOptions) {
+	if opts.NoSync {
+		fmt.Println("sync: disabled")
+		return
+	}
+	config, err := resolveDarwinSyncConfig(false, opts.ImagesDir, opts.LabsDir)
+	if err != nil {
+		fmt.Println("sync: unavailable (", err, ")")
+		return
+	}
+	fmt.Printf("sync images: %s\nsync labs: %s\n", config.ImagesDir, config.LabsDir)
 }
 
 func printDiagnosticRemediation(machine string) {

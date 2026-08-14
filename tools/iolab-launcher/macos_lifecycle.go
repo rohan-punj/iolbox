@@ -24,8 +24,10 @@ type hostFacts struct {
 type lifecycleConfig struct {
 	Bind        string
 	GUIPort     int
+	Ports       darwinPortContract
 	BootTimeout time.Duration
 	Upgrade     bool
+	Sync        *darwinSyncConfig
 }
 
 func runHostFact(ctx context.Context, name string, args ...string) (string, error) {
@@ -295,6 +297,14 @@ func exitCodeFor(err error) int {
 }
 
 func runProvision(ctx context.Context, l *limaClient, machine string, p macOSProfile, facts hostFacts, payloadPath string, config lifecycleConfig) error {
+	ports := config.Ports
+	if ports.GUIPort == 0 {
+		var err error
+		ports, err = newDarwinPortContract(config.GUIPort)
+		if err != nil {
+			return codedError(exitUsage, "%v", err)
+		}
+	}
 	templatePath := ""
 	var err error
 	if _, statErr := os.Stat(p.TemplatePath); statErr != nil {
@@ -303,11 +313,12 @@ func runProvision(ctx context.Context, l *limaClient, machine string, p macOSPro
 	// Render and validate before querying or mutating Lima, matching the
 	// documented start sequence. Existing machines do not consume the file,
 	// but rendering still proves the shipped profile is internally coherent.
-	templatePath, err = writeRenderedTemplate("", p)
+	templatePath, err = writeRenderedTemplateForPort("", p, ports.GUIPort)
 	if err != nil {
 		return codedError(exitUsage, "render Lima template: %v", err)
 	}
 	defer os.Remove(templatePath)
+
 	machines, err := l.list(ctx)
 	if err != nil {
 		return codedError(exitPreflight, "%v", err)
@@ -323,7 +334,7 @@ func runProvision(ctx context.Context, l *limaClient, machine string, p macOSPro
 	validAttestation := func() error {
 		return requireAttestation(attestationPath, p, facts, l.info.Version)
 	}
-	created, err := ensureMachine(ctx, l, machine, state, templatePath, attestationPath, validAttestation)
+	created, err := ensureMachineWithPorts(ctx, l, machine, state, templatePath, attestationPath, validAttestation, &ports)
 	if err != nil {
 		return err
 	}
@@ -342,20 +353,50 @@ func runProvision(ctx context.Context, l *limaClient, machine string, p macOSPro
 	if err := runGuestSequence(ctx, l, machine, p, facts, l.info.Version, payloadBase, config); err != nil {
 		return err
 	}
-	guiPort := config.GUIPort
-	if guiPort == 0 {
-		guiPort = 4001
-	}
+	guiPort := ports.GUIPort
 	if _, err := waitHTTPReady(ctx, nil, fmt.Sprintf("http://127.0.0.1:%d/", guiPort), config.BootTimeout); err != nil {
 		return codedError(exitVerify, "GUI readiness failed: %v", err)
 	}
-	control, err := dialNDJSON(ctx, "127.0.0.1:4000", 10*time.Second)
+	if err := verifyDarwinHostContract(ports, 2*time.Second); err != nil {
+		return err
+	}
+	control, err := dialControlWS(fmt.Sprintf("127.0.0.1:%d", guiPort))
 	if err != nil {
 		return codedError(exitVerify, "control-plane connection failed: %v", err)
 	}
 	defer control.Close()
-	if _, err := control.hello(ctx); err != nil {
+	if _, err := control.hello(); err != nil {
 		return codedError(exitVerify, "control-plane hello failed: %v", err)
 	}
+	if config.Sync != nil {
+		if err := syncDarwinStartup(control, fmt.Sprintf("http://127.0.0.1:%d", guiPort), *config.Sync); err != nil {
+			return codedError(exitVerify, "%v", err)
+		}
+	}
 	return nil
+}
+
+type darwinStopControlFactory func() (controlClient, func(), error)
+
+// runDarwinStop performs the mandatory host sync while the guest is still
+// running. A sync failure returns before stopMachine, leaving the Lima
+// instance available for recovery and retry.
+func runDarwinStop(ctx context.Context, l *limaClient, machine, state string, config darwinSyncConfig, timeout time.Duration, connect darwinStopControlFactory) error {
+	if strings.EqualFold(state, "running") && !config.NoSync {
+		if connect == nil {
+			return codedError(exitVerify, "control-plane connection for stop sync is unavailable")
+		}
+		control, closeControl, err := connect()
+		if err != nil {
+			return codedError(exitVerify, "control-plane connection for stop sync failed: %v", err)
+		}
+		syncErr := syncDarwinBeforeStop(control, config)
+		if closeControl != nil {
+			closeControl()
+		}
+		if syncErr != nil {
+			return codedError(exitVerify, "%v", syncErr)
+		}
+	}
+	return stopMachine(ctx, l, machine, state, timeout)
 }

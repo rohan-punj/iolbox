@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,20 +62,30 @@ type folderSync struct {
 	client   controlClient
 	uploader imageUploader
 
-	seedMu  sync.Mutex
-	seedIDs map[string]bool // guest's built-in starter lab ids, recorded once at connect
+	seedMu         sync.Mutex
+	seedIDs        map[string]bool // guest's built-in starter lab ids, recorded once at connect
+	excludeSeedIDs bool            // Windows/QEMU compatibility; Darwin syncs every document
 
 	writeMu sync.Mutex // guards labs\ file writes (syncLabsOut vs. concurrent calls)
 }
 
 func newFolderSync(imagesDir, labsDir string, client controlClient, uploader imageUploader) *folderSync {
+	return newFolderSyncMode(imagesDir, labsDir, client, uploader, true)
+}
+
+func newFolderSyncMode(imagesDir, labsDir string, client controlClient, uploader imageUploader, excludeSeedIDs bool) *folderSync {
 	return &folderSync{
-		imagesDir: imagesDir,
-		labsDir:   labsDir,
-		client:    client,
-		uploader:  uploader,
-		seedIDs:   make(map[string]bool),
+		imagesDir:      imagesDir,
+		labsDir:        labsDir,
+		client:         client,
+		uploader:       uploader,
+		seedIDs:        make(map[string]bool),
+		excludeSeedIDs: excludeSeedIDs,
 	}
+}
+
+func newDarwinFolderSync(imagesDir, labsDir string, client controlClient, uploader imageUploader) *folderSync {
+	return newFolderSyncMode(imagesDir, labsDir, client, uploader, false)
 }
 
 // ensureDirs creates the images/labs directories if missing and logs their
@@ -94,6 +106,9 @@ func ensureDirs(imagesDir, labsDir string) error {
 // boot since the OS disk is ephemeral) so they are never written back into
 // labs\ and never clobbered by a same-id user file.
 func (fs *folderSync) recordSeedLabIDs() error {
+	if !fs.excludeSeedIDs {
+		return nil
+	}
 	ids, err := fs.client.listLabIDs()
 	if err != nil {
 		return fmt.Errorf("recordSeedLabIDs: listLabIDs: %w", err)
@@ -107,6 +122,9 @@ func (fs *folderSync) recordSeedLabIDs() error {
 }
 
 func (fs *folderSync) isSeedID(id string) bool {
+	if !fs.excludeSeedIDs {
+		return false
+	}
 	fs.seedMu.Lock()
 	defer fs.seedMu.Unlock()
 	return fs.seedIDs[id]
@@ -254,6 +272,18 @@ var yamlIDLine = regexp.MustCompile(`(?m)^id:\s*["']?([A-Za-z0-9_-]+)["']?\s*$`)
 // pathological race, but the launcher only calls syncLabsIn once at startup
 // before the periodic/final syncLabsOut begins.
 func (fs *folderSync) syncLabsOut() (count int, err error) {
+	return fs.syncLabsOutMode(false, false)
+}
+
+func (fs *folderSync) syncLabsOutMissingOnly() (count int, err error) {
+	return fs.syncLabsOutMode(true, false)
+}
+
+func (fs *folderSync) syncLabsOutStrict() (count int, err error) {
+	return fs.syncLabsOutMode(true, true)
+}
+
+func (fs *folderSync) syncLabsOutMode(missingOnly, strict bool) (count int, err error) {
 	ids, err := fs.client.listLabIDs()
 	if err != nil {
 		return 0, fmt.Errorf("syncLabsOut: listLabIDs: %w", err)
@@ -261,6 +291,7 @@ func (fs *folderSync) syncLabsOut() (count int, err error) {
 
 	fs.writeMu.Lock()
 	defer fs.writeMu.Unlock()
+	var failures []string
 
 	for _, id := range ids {
 		if fs.isSeedID(id) {
@@ -270,12 +301,25 @@ func (fs *folderSync) syncLabsOut() (count int, err error) {
 			logf("  lab id %q: WARNING: unsafe id for a filename — skipped", id)
 			continue
 		}
+		target := filepath.Join(fs.labsDir, id+".yml")
+		if missingOnly {
+			if _, statErr := os.Stat(target); statErr == nil {
+				continue
+			} else if !os.IsNotExist(statErr) {
+				if strict {
+					failures = append(failures, fmt.Sprintf("lab %s: stat: %v", id, statErr))
+				}
+				continue
+			}
+		}
 		doc, getErr := fs.client.getLab(id)
 		if getErr != nil {
 			logf("  lab %s: getLab FAILED: %v", id, getErr)
+			if strict {
+				failures = append(failures, fmt.Sprintf("lab %s: getLab: %v", id, getErr))
+			}
 			continue
 		}
-		target := filepath.Join(fs.labsDir, id+".yml")
 
 		docID, ok := labDocID(doc)
 		if ok && fs.isSeedID(docID) {
@@ -284,11 +328,26 @@ func (fs *folderSync) syncLabsOut() (count int, err error) {
 		}
 
 		// The doc is already formatted YAML (or legacy JSON) text — write verbatim.
-		if writeErr := writeFileAtomic(target, []byte(doc)); writeErr != nil {
+		write := writeFileAtomic
+		if missingOnly {
+			write = writeFileIfMissing
+		}
+		if writeErr := write(target, []byte(doc)); writeErr != nil {
 			logf("  lab %s: write FAILED (%s): %v", id, target, writeErr)
+			if missingOnly && errors.Is(writeErr, os.ErrExist) {
+				logf("  lab %s: host file appeared during rescue/export; preserved %s", id, target)
+				continue
+			}
+
+			if strict {
+				failures = append(failures, fmt.Sprintf("lab %s: write: %v", id, writeErr))
+			}
 			continue
 		}
 		count++
+	}
+	if strict && len(failures) > 0 {
+		return count, fmt.Errorf("syncLabsOut: %s", strings.Join(failures, "; "))
 	}
 	return count, nil
 }
@@ -318,9 +377,34 @@ func writeFileAtomic(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// ---- Real implementations against the WS client + net/http -------------
+// writeFileIfMissing is the collision-safe counterpart used by Darwin's
+// startup rescue and pre-stop export. O_EXCL makes the no-clobber decision
+// atomic with file creation, so a host edit that appears after an initial
+// Stat still wins over guest data.
+func writeFileIfMissing(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		_ = f.Close()
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
 
 // wsControlClient adapts controlWSClient to the controlClient interface used
+// ---- Real implementations against the WS client + net/http -------------
 // by folderSync.
 type wsControlClient struct {
 	ws *controlWSClient
@@ -436,11 +520,17 @@ func newHTTPImageUploader(baseURL string) *httpImageUploader {
 }
 
 func (u *httpImageUploader) upload(filename string, body io.Reader, mtimeNs int64) (string, error) {
-	url := fmt.Sprintf("%s/api/upload/image?filename=%s", u.baseURL, filename)
-	if mtimeNs > 0 {
-		url += fmt.Sprintf("&mtime=%d", mtimeNs)
+	endpoint, err := url.Parse(strings.TrimRight(u.baseURL, "/") + "/api/upload/image")
+	if err != nil {
+		return "", err
 	}
-	req, err := http.NewRequest(http.MethodPost, url, body)
+	query := endpoint.Query()
+	query.Set("filename", filename)
+	if mtimeNs > 0 {
+		query.Set("mtime", fmt.Sprintf("%d", mtimeNs))
+	}
+	endpoint.RawQuery = query.Encode()
+	req, err := http.NewRequest(http.MethodPost, endpoint.String(), body)
 	if err != nil {
 		return "", err
 	}

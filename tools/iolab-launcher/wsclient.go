@@ -40,6 +40,15 @@ const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 // wsDial performs the TCP dial + HTTP/1.1 Upgrade handshake against
 // ws://host:port/path and returns the raw, now-upgraded TCP connection.
 func wsDial(addr, path string) (net.Conn, error) {
+	return wsDialWithHeaders(addr, path, nil)
+}
+
+// wsDialWithHeaders is wsDial plus arbitrary extra request headers (e.g.
+// Cookie/Origin, required by the GUI-facing /control bridge's session and
+// same-origin checks — see wsbridge.requireSession/sameOrigin). The
+// guest-loopback control socket has no such requirement, so callers that
+// don't need it keep using plain wsDial.
+func wsDialWithHeaders(addr, path string, extraHeaders map[string]string) (net.Conn, error) {
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("ws dial %s: %w", addr, err)
@@ -57,8 +66,11 @@ func wsDial(addr, path string) (net.Conn, error) {
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + key + "\r\n" +
-		"Sec-WebSocket-Version: 13\r\n" +
-		"\r\n"
+		"Sec-WebSocket-Version: 13\r\n"
+	for k, v := range extraHeaders {
+		req += k + ": " + v + "\r\n"
+	}
+	req += "\r\n"
 
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	if _, err := conn.Write([]byte(req)); err != nil {
@@ -96,6 +108,25 @@ func wsDial(addr, path string) (net.Conn, error) {
 		return &bufferedConn{Conn: conn, r: br}, nil
 	}
 	return conn, nil
+}
+
+// fetchSessionCookie performs a plain GET / against the GUI's HTTP origin
+// and returns the iolbox_session cookie value the SPA handler sets
+// (wsbridge.go, http.SetCookie). This is the same cookie a browser's cookie
+// jar would carry into a subsequent /control WebSocket dial.
+func fetchSessionCookie(addr string) (string, error) {
+	resp, err := http.Get("http://" + addr + "/")
+	if err != nil {
+		return "", fmt.Errorf("GET / for session cookie: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	for _, c := range resp.Cookies() {
+		if c.Name == "iolbox_session" && c.Value != "" {
+			return c.Value, nil
+		}
+	}
+	return "", fmt.Errorf("GET / response carried no iolbox_session cookie")
 }
 
 // wsAcceptKey computes the Sec-WebSocket-Accept value for a given client key.
@@ -283,9 +314,26 @@ type controlWSClient struct {
 	timeout time.Duration
 }
 
+// wsDialWithSession is wsDial plus the session cookie and Origin header the
+// GUI bridge requires on every one of its WebSocket routes -- /control,
+// /console/{nodeId}, and /capture/{linkId} alike (wsbridge.requireSession/
+// sameOrigin). A real browser carries these automatically via its cookie
+// jar after loading the page; this fetches the cookie explicitly via one
+// GET / first, exercising the same host boundary a browser would.
+func wsDialWithSession(addr, path string) (net.Conn, error) {
+	cookie, err := fetchSessionCookie(addr)
+	if err != nil {
+		return nil, fmt.Errorf("%s session: %w", path, err)
+	}
+	return wsDialWithHeaders(addr, path, map[string]string{
+		"Cookie": "iolbox_session=" + cookie,
+		"Origin": "http://" + addr,
+	})
+}
+
 // dialControlWS connects to ws://127.0.0.1:<port>/control.
 func dialControlWS(addr string) (*controlWSClient, error) {
-	conn, err := wsDial(addr, "/control")
+	conn, err := wsDialWithSession(addr, "/control")
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +356,21 @@ func (c *controlWSClient) Close() error {
 // Enforces a per-request read deadline.
 func (c *controlWSClient) request(op string, args any) (json.RawMessage, error) {
 	return c.requestTimeout(op, args, c.timeout)
+}
+
+// hello is the typed browser-side control handshake. It intentionally travels
+// over the GUI WebSocket rather than the guest-loopback TCP control port so
+// Darwin lifecycle checks exercise the same host boundary as the browser.
+func (c *controlWSClient) hello() (helloResult, error) {
+	result, err := c.request("hello", map[string]string{"client": "iolbox-launcher"})
+	if err != nil {
+		return helloResult{}, err
+	}
+	var hello helloResult
+	if err := json.Unmarshal(result, &hello); err != nil {
+		return helloResult{}, fmt.Errorf("decode hello result: %w", err)
+	}
+	return hello, nil
 }
 
 // requestTimeout is request with an explicit per-call read/write deadline.

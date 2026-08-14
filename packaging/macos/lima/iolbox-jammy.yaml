@@ -41,6 +41,24 @@ mounts:
   - location: "~"
     writable: false
 
+portForwards:
+  - guestPort: @IOLBOX_GUI_PORT@
+    hostPort: @IOLBOX_GUI_PORT@
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [9000, 9049]
+    hostPortRange: [9000, 9049]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [5500, 5529]
+    hostPortRange: [5500, 5529]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    proto: "any"
+    ignore: true
+
 # There are intentionally no provision scripts or readiness probes here.
 # Ordered, re-runnable provisioning belongs to packaging/macos/guest/, and
 # guest/30-canary.sh is a hard gate whose failure must fail the whole run.

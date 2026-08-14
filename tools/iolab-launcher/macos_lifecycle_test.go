@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,51 @@ func TestEnsureMachineLifecycleOrdering(t *testing.T) {
 	})
 }
 
+func TestEnsureMachineWithPortsReusesCompliantRunningInstance(t *testing.T) {
+	runner := &sequenceRunner{}
+	ports, err := newDarwinPortContract(defaultDarwinGUIPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &limaClient{
+		info:   limaInfo{Path: "limactl"},
+		runner: runner,
+		instanceConfig: func(string) ([]byte, error) {
+			return []byte(ports.yamlPortForwards()), nil
+		},
+	}
+	if _, err := ensureMachineWithPorts(t.Context(), client, "m3", "Running", "", "", nil, &ports); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("compliant running machine was edited or restarted: %v", runner.calls)
+	}
+}
+
+func TestEnsureMachineWithPortsRefusesRunningOldInstanceWithoutEdit(t *testing.T) {
+	runner := &sequenceRunner{errors: map[string]error{
+		"edit": errors.New("cannot edit a running instance"),
+	}}
+	ports, err := newDarwinPortContract(defaultDarwinGUIPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &limaClient{
+		info:   limaInfo{Path: "limactl"},
+		runner: runner,
+		instanceConfig: func(string) ([]byte, error) {
+			return []byte("portForwards:\n  - guestPort: 4001\n    hostPort: 4001\n"), nil
+		},
+	}
+	_, err = ensureMachineWithPorts(t.Context(), client, "old-m3", "Running", "", "", nil, &ports)
+	if err == nil || !strings.Contains(err.Error(), "stop then start to migrate") {
+		t.Fatalf("old running instance error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("old running instance attempted a Lima mutation: %v", runner.calls)
+	}
+}
+
 var errMissingTestFile = errors.New("missing test file")
 
 func writeStringFile(path, value string) error {
@@ -121,7 +167,35 @@ func readFileForTest(path string) ([]byte, error) {
 	return data, nil
 }
 
+func TestRunDarwinStopSyncFailureLeavesMachineRunning(t *testing.T) {
+	cc := newStubControlClient()
+	cc.labs["lab1"] = labYAML("lab1", "guest")
+	cc.getErrFor["lab1"] = errors.New("control channel dropped")
+	runner := &sequenceRunner{errors: map[string]error{
+		"stop": errors.New("stop must not be called"),
+	}}
+	client := &limaClient{info: limaInfo{Path: "limactl"}, runner: runner}
+	state := "Running"
+	config := darwinSyncConfig{
+		ImagesDir: filepath.Join(t.TempDir(), "images"),
+		LabsDir:   filepath.Join(t.TempDir(), "labs"),
+	}
+	err := runDarwinStop(t.Context(), client, "m3", state, config, time.Second, func() (controlClient, func(), error) {
+		return cc, func() {}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "control channel dropped") {
+		t.Fatalf("stop sync error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("Lima was called after stop sync failure: %v", runner.calls)
+	}
+	if state != "Running" {
+		t.Fatalf("machine state changed after sync failure: %q", state)
+	}
+}
+
 func TestStopNeverBuildsDeleteOrDataRemovalCommand(t *testing.T) {
+
 	runner := &sequenceRunner{listOutputs: [][]byte{[]byte("m|Stopped\n")}}
 	client := &limaClient{info: limaInfo{Path: "limactl"}, runner: runner}
 	if err := stopMachine(t.Context(), client, "m", "Running", 2*time.Second); err != nil {

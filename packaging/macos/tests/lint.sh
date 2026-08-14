@@ -60,6 +60,15 @@ fi
 
 note "lint.sh: checking ${#scripts[@]} script(s) under $ROOT"
 
+# M3 adds a Mac-host harness; keep its presence explicit so a packaging
+# omission cannot make the generic recursive sweep look complete.
+if [ ! -f "$ROOT/tests/hardware-m3.sh" ]; then
+    note "  FAIL    inventory hardware-m3.sh is missing"
+    fail=1
+else
+    note "  ok      inventory hardware-m3.sh is present"
+fi
+
 # --- 1. syntax -------------------------------------------------------------
 for f in ${scripts[@]+"${scripts[@]}"}; do
     if bash -n "$f" 2>/dev/null; then

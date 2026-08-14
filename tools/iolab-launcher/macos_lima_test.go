@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +15,27 @@ func TestParseMachineListing(t *testing.T) {
 	}
 	if _, err := parseMachineListing("malformed"); err == nil {
 		t.Fatal("malformed machine listing was accepted")
+	}
+}
+
+func TestLimaStartWithPortContractKeepsExpressionInOneArg(t *testing.T) {
+	runner := &sequenceRunner{}
+	client := &limaClient{info: limaInfo{Path: "limactl"}, runner: runner}
+	ports, err := newDarwinPortContract(defaultDarwinGUIPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.startWithPortContract(t.Context(), "m3", ports); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 5 {
+		t.Fatalf("Lima start argv = %v", runner.calls)
+	}
+	if runner.calls[0][1] != "start" || runner.calls[0][2] != "m3" || runner.calls[0][4] != "--tty=false" {
+		t.Fatalf("Lima start ordering = %v", runner.calls[0])
+	}
+	if !strings.HasPrefix(runner.calls[0][3], "--set=.portForwards=") || !strings.Contains(runner.calls[0][3], "\"hostIP\": \"127.0.0.1\"") {
+		t.Fatalf("Lima port expression = %q", runner.calls[0][3])
 	}
 }
 

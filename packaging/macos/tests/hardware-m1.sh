@@ -132,7 +132,24 @@ try:
 except ValueError:
     args = {}
 deadline = time.time() + float(sys.argv[4] if len(sys.argv) > 4 else 120)
-s = socket.create_connection(("127.0.0.1", 4000), timeout=10)
+# The raw control socket can lag the HTTP GUI port by a beat right after a
+# systemd restart (see the check_http_ready comment on the identical race
+# for 4001) -- earlier runs happened not to notice because 4000 usually logs
+# before 4001 in the same process startup, but that is a log-ordering
+# artifact of goroutine scheduling, not a bind-order guarantee. Retry
+# ECONNREFUSED here the same way, instead of failing the whole harness on a
+# beat of timing noise.
+s = None
+connect_err = None
+for _ in range(15):
+    try:
+        s = socket.create_connection(("127.0.0.1", 4000), timeout=10)
+        break
+    except ConnectionRefusedError as e:
+        connect_err = e
+        time.sleep(1)
+if s is None:
+    raise connect_err
 s.sendall((json.dumps({"id": req_id, "op": op, "args": args}) + "\n").encode())
 buf = b""
 while time.time() < deadline:
