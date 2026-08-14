@@ -121,13 +121,14 @@ else
     echo "install.sh: all required commands present ($NEEDED_BINS)"
 fi
 
-# libssl3 / equivalent: some IOL images dlopen libcrypto. Not hard-checked
+# libssl3 / equivalent: some IOL images dlopen libcrypto. Debian 13 uses
+# libssl3t64 for this runtime. Not hard-checked
 # here (package name varies too much across distros — libssl3 on
 # Debian/Ubuntu, openssl-libs on Fedora/RHEL, etc.) — if IOL nodes fail to
 # start with a dlopen error, install your distro's OpenSSL 3.x runtime lib.
 echo "install.sh: NOTE - if IOL nodes fail to start with a libcrypto/dlopen"
 echo "  error, install your distro's OpenSSL 3.x shared library package"
-echo "  (Debian/Ubuntu: libssl3; Fedora/RHEL: openssl-libs)."
+echo "  (Debian/Ubuntu: libssl3; Debian 13: libssl3t64; Fedora/RHEL: openssl-libs)."
 
 # ---------------------------------------------------------------------------
 # Hostname sanity check
