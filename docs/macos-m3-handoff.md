@@ -77,31 +77,46 @@ present at the kernel level; the missing piece is guest provisioning —
 netns/veth tooling PC nodes need, because **M0/M1/M2/M3 only ever proved
 IOL nodes** (Rosetta amd64 translation, a completely separate code path).
 
-**A fix is in progress, started by the user in a separate session**
-(background task `task_c7ca0558`, "Add PC/VPCS node support to macOS Lima
-guest provisioning") — **check whether it has landed before starting M4**,
-since M4's acceptance criteria explicitly require "VPCS connected to IOL
-with bidirectional ping." If that task hasn't finished, M4 is blocked on it
-for that one criterion specifically (the other M4 criteria — multi-link,
-NAT, extnet, four-node, soak — are independent of VPCS and can proceed).
+**A fix has landed**, committed directly to this same branch
+(`luna/macos-m3-ux`) by a separate concurrent session as `9916fb9` (see §4):
+four layered gaps, all live-reproduced — (1) `install.sh` never created the
+`ioltool` account, (2) `install.sh`/`pack-native.sh` never built/shipped
+`iolbox-toollaunch`, (3) the native launcher's `--cgroup` fallback ran
+inside `ip netns exec`, which remounts `/sys` and hides the cgroup2 mount,
+breaking `cgroup.procs` writes with ENOENT — fixed with a `--netns` flag
+that joins the namespace via `setns()` before dropping root instead, (4)
+`install.sh` never installed `/opt/iolbox/tools/packs` at all. Each fix was
+individually confirmed via direct NDJSON probes and a raw `clone3`
+reproduction, **but the commit message itself says full end-to-end
+PC-node-reaches-running confirmation is still owed**, blocked partly by this
+M3 session's own concurrent hardware runs resetting the shared guest.
+**Before relying on VPCS for M4's bidirectional-ping criterion, run that
+end-to-end confirmation first** — don't assume the commit alone is
+equivalent to a hardware PASS.
 
 ---
 
-## 4. Shared-worktree gotcha this session
+## 4. Shared-branch/worktree gotcha this session
 
 Mid-session, `git status` in this worktree showed six files modified that
 this session never touched (`supervisor/internal/tool/launch*.go`,
 `runtime/pack-native.sh`, `runtime/files/native/install.sh`,
 `tools/iolbox-toollaunch/*`), with mtimes falling inside the session's own
-active work window. These turned out to be the user's own concurrent work on
-the `ioltool`/netns/cgroup fix above (§3), edited directly in this same
-worktree directory on disk while this session was mid-hardware-validation.
+active work window. These turned out to be a **separate concurrent session**
+working the `ioltool`/netns/cgroup fix (§3) directly in this exact worktree
+directory on disk, on this exact branch (`luna/macos-m3-ux`) — confirmed
+after the fact when that session's own commit (`9916fb9`) appeared in `git
+log` on this branch, ahead of nothing conflicting because this session never
+staged those files.
 
 **Never `git add -A` or `git add .` in a worktree that might have concurrent
 activity** — stage the exact file list by path. This session committed only
-the 23 files that were actually part of M3's own change list; the six
-unrelated files were left completely untouched, uncommitted, for their own
-owner to commit.
+the files that were actually part of M3's own change list; the six
+unrelated files were left completely untouched and uncommitted for their own
+owner, who committed them cleanly afterward with no conflict. **A new M4
+session should assume this pattern can recur** — check `git log`/`git
+status` for unexpected commits or dirty files before assuming the worktree
+is exactly as this handoff describes it, and never broad-stage.
 
 ---
 
