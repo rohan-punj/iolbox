@@ -113,10 +113,21 @@ func launchSetprivArgv(spec LaunchSpec) []string {
 // launchNativeArgv builds the standalone helper invocation. The helper must
 // see --cgroup before the transition flags so it can place itself while still
 // root; after the separator, the target receives the exact requested argv.
+//
+// withCgroup also carries --netns, and the caller must NOT additionally wrap
+// this argv in NetnsExecArgs: this is exactly the cgroup-fallback case (the
+// clone3(CLONE_INTO_CGROUP) placement failed to start), and the helper joins
+// the namespace itself, before the uid switch, instead of relying on `ip
+// netns exec`. `ip netns exec` unshares the mount namespace and remounts
+// /sys to reflect the target netns' interfaces, which shadows the cgroup2
+// mount at /sys/fs/cgroup within that mount namespace — so a cgroup.procs
+// write attempted from inside it fails with ENOENT even though the path
+// exists in the root mount namespace. See tools/iolbox-toollaunch's joinNetns
+// for the setns side of this.
 func launchNativeArgv(spec LaunchSpec, withCgroup bool) []string {
 	argv := []string{launchNativePath}
 	if withCgroup {
-		argv = append(argv, "--cgroup", spec.CgroupPath)
+		argv = append(argv, "--cgroup", spec.CgroupPath, "--netns", spec.Netns)
 	}
 	argv = append(argv, "--user", "ioltool", "--caps", capListValue(spec.AmbientCaps), "--", spec.Binary)
 	return append(argv, spec.Args...)

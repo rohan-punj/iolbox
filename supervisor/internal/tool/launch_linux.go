@@ -175,8 +175,12 @@ func Launch(spec LaunchSpec) (*exec.Cmd, error) {
 			return nil, fmt.Errorf("tool: cgroup-fd launch failed: %w; native fallback requires cgroup path", firstErr)
 		}
 		mode = "native"
+		// Not wrapped in NetnsExecArgs, unlike the primary attempt above:
+		// launchNativeArgv(spec, true) already carries --netns, and the
+		// helper joins the namespace itself before dropping root. See its
+		// doc comment for why `ip netns exec` cannot be used here.
 		fallback := launchTransitionArgv(mode, spec, true)
-		fallbackCmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, fallback), false)
+		fallbackCmd := launchBuildCommand(spec, fallback, false)
 		// The fallback registers under the same lock for the same reason;
 		// cmd.Wait owns this direct child's status from this point onward.
 		if fallbackErr := Registry.StartAndAdd(fallbackCmd.Start, func() int { return fallbackCmd.Process.Pid }); fallbackErr != nil {

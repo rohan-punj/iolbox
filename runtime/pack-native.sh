@@ -30,6 +30,23 @@ SUPERVISOR_BIN_DEFAULT_2="$BUILD_DIR/rootfs/opt/iolbox/supervisor"
 SUPERVISOR_BIN=""
 VPCS_BIN_DEFAULT="$BUILD_DIR/vpcs/vpcs"     # fetch-vpcs.sh's output path
 VPCS_BIN=""
+# Source, not a prebuilt binary: unlike vpcs (fetched) and supervisor (built by
+# build-release.sh), iolbox-toollaunch is trivial to cross-compile here with
+# CGO disabled, matching how runtime/build-rootfs.sh builds it (see that
+# script's `go build -trimpath` invocation for TOOLLAUNCH_BIN).
+TOOLLAUNCH_SRC_DEFAULT="$SCRIPT_DIR/../tools/iolbox-toollaunch"
+TOOLLAUNCH_SRC=""
+TOOLLAUNCH_BIN=""
+# Learning-tool packs (see docs/ for the P2/P3 plans). Each simple pack is a
+# single static Go binary that is both the pack's AF_UNIX GUI and its
+# lab-facing service; "pc" is the built-in netprobe pack PC/VPCS nodes require
+# (see supervisor/internal/server/toolpacks.go). secbench additionally ships a
+# directory of standalone attack binaries under tools/secbench-attacks-go.
+# Skippable with --no-packs for callers that only need supervisor/vpcs (e.g. a
+# quick IOL-only smoke build) and don't want the extra build time.
+SIMPLE_PACKS="aaa webserver httpclient syslog netsvc pc"
+SECBENCH_ATTACKS_SRC_DEFAULT="$SCRIPT_DIR/../tools/secbench-attacks-go"
+SKIP_PACKS=0
 OUT_DIR="$BUILD_DIR"
 
 usage() {
@@ -49,6 +66,12 @@ Usage: $0 [options]
   --vpcs-bin PATH          Path to a prebuilt linux/amd64 vpcs binary.
                            Default: $VPCS_BIN_DEFAULT (run ./fetch-vpcs.sh
                            first, or drop a binary there by hand)
+  --toollaunch-bin PATH    Path to a prebuilt linux/amd64 iolbox-toollaunch
+                           binary. Default: cross-compiled on the fly from
+                           $TOOLLAUNCH_SRC_DEFAULT (requires 'go' on PATH).
+  --no-packs               Skip building/staging the learning-tool packs
+                           (aaa/webserver/httpclient/syslog/netsvc/pc/secbench).
+                           PC/VPCS nodes will not work without them.
   --build-dir DIR          Output root (default: $BUILD_DIR)
   --out DIR                Where to write the tarball (default: --build-dir)
   -h, --help               This help
@@ -62,6 +85,8 @@ while [ $# -gt 0 ]; do
         --version) VERSION="$2"; shift 2 ;;
         --supervisor-bin) SUPERVISOR_BIN="$2"; shift 2 ;;
         --vpcs-bin) VPCS_BIN="$2"; shift 2 ;;
+        --toollaunch-bin) TOOLLAUNCH_BIN="$2"; shift 2 ;;
+        --no-packs) SKIP_PACKS=1; shift ;;
         --build-dir) BUILD_DIR="$2"; OUT_DIR="$BUILD_DIR"; shift 2 ;;
         --out) OUT_DIR="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -110,18 +135,91 @@ EOF
     exit 1
 fi
 
+if [ -z "$TOOLLAUNCH_BIN" ]; then
+    if [ -z "$TOOLLAUNCH_SRC" ]; then
+        TOOLLAUNCH_SRC="$TOOLLAUNCH_SRC_DEFAULT"
+    fi
+    if [ ! -d "$TOOLLAUNCH_SRC" ]; then
+        cat >&2 <<EOF
+pack-native: iolbox-toollaunch source not found at:
+  $TOOLLAUNCH_SRC
+
+Pass --toollaunch-bin PATH to use a prebuilt linux/amd64 binary instead.
+EOF
+        exit 1
+    fi
+    command -v go >/dev/null 2>&1 || {
+        cat >&2 <<EOF
+pack-native: 'go' is not on PATH, needed to build iolbox-toollaunch from
+  $TOOLLAUNCH_SRC
+
+Install Go, or pass --toollaunch-bin PATH to use a prebuilt linux/amd64
+binary instead.
+EOF
+        exit 1
+    }
+    TOOLLAUNCH_BIN="$BUILD_DIR/iolbox-toollaunch"
+    echo "== pack-native: building iolbox-toollaunch from $TOOLLAUNCH_SRC =="
+    ( cd "$TOOLLAUNCH_SRC" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOLLAUNCH_BIN" . )
+fi
+
+if [ ! -x "$TOOLLAUNCH_BIN" ]; then
+    echo "pack-native: iolbox-toollaunch binary not found or not executable at: $TOOLLAUNCH_BIN" >&2
+    exit 1
+fi
+
 # Sanity: both binaries should be linux/amd64 ELF, since they're going onto
 # an x86-64 Linux server (same check fetch-vpcs.sh already does for vpcs at
 # build time; repeated here since --supervisor-bin/--vpcs-bin let a caller
 # point at an arbitrary file that may not have gone through that check).
 if command -v file >/dev/null 2>&1; then
-    for b in "$SUPERVISOR_BIN" "$VPCS_BIN"; do
+    for b in "$SUPERVISOR_BIN" "$VPCS_BIN" "$TOOLLAUNCH_BIN"; do
         FILE_OUT="$(file -b "$b" 2>/dev/null || echo unknown)"
         case "$FILE_OUT" in
             *"ELF 64-bit"*"x86-64"*) : ;;
             *) echo "pack-native: WARNING - $b does not look like linux/amd64 ELF64: $FILE_OUT" >&2 ;;
         esac
     done
+fi
+
+# ---------------------------------------------------------------------------
+# Learning-tool packs (skippable with --no-packs)
+# ---------------------------------------------------------------------------
+PACK_STAGE="$BUILD_DIR/native-packs"
+if [ "$SKIP_PACKS" -eq 1 ]; then
+    echo "== pack-native: --no-packs given, skipping tool packs (PC/VPCS nodes will not work) =="
+else
+    command -v go >/dev/null 2>&1 || {
+        echo "pack-native: 'go' is not on PATH, needed to build the tool packs. Pass --no-packs to skip them (PC/VPCS nodes will not work), or install Go." >&2
+        exit 1
+    }
+    rm -rf "$PACK_STAGE"
+    for pack in $SIMPLE_PACKS; do
+        pack_dir="$FILES_DIR/tools/packs/$pack"
+        [ -f "$pack_dir/pack.json" ] || { echo "pack-native: pack manifest missing: $pack_dir/pack.json" >&2; exit 1; }
+        echo "== pack-native: building $pack pack GUI (linux/amd64) =="
+        ( cd "$pack_dir/gui" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$PACK_STAGE/$pack/$pack-gui" . )
+        install -m 0644 "$pack_dir/pack.json" "$PACK_STAGE/$pack/pack.json"
+        install -m 0755 "$PACK_STAGE/$pack/$pack-gui" "$PACK_STAGE/$pack/$pack-gui"
+    done
+
+    echo "== pack-native: building secbench pack GUI (linux/amd64) =="
+    secbench_dir="$FILES_DIR/tools/packs/secbench"
+    [ -f "$secbench_dir/pack.json" ] || { echo "pack-native: pack manifest missing: $secbench_dir/pack.json" >&2; exit 1; }
+    install -d -m 0755 "$PACK_STAGE/secbench/bin"
+    ( cd "$secbench_dir/gui" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$PACK_STAGE/secbench/secbench-gui" . )
+    install -m 0644 "$secbench_dir/pack.json" "$PACK_STAGE/secbench/pack.json"
+
+    SECBENCH_ATTACKS_SRC="${SECBENCH_ATTACKS_SRC:-$SECBENCH_ATTACKS_SRC_DEFAULT}"
+    if [ ! -d "$SECBENCH_ATTACKS_SRC" ]; then
+        echo "pack-native: secbench attack binaries source not found: $SECBENCH_ATTACKS_SRC" >&2
+        exit 1
+    fi
+    echo "== pack-native: building secbench attack binaries (linux/amd64) =="
+    ( cd "$SECBENCH_ATTACKS_SRC" && for d in cmd/*/; do
+        key="$(basename "$d")"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$PACK_STAGE/secbench/bin/$key" "./$d"
+    done )
 fi
 
 for f in \
@@ -161,6 +259,14 @@ install -d -m 0755 "$STAGE_DIR/etc"
 # runtime/build-rootfs.sh's install invocation and install.sh's comment).
 install -m 0755 "$SUPERVISOR_BIN" "$STAGE_DIR/bin/supervisor"
 install -m 0755 "$VPCS_BIN" "$STAGE_DIR/bin/vpcs"
+install -m 0755 "$TOOLLAUNCH_BIN" "$STAGE_DIR/bin/iolbox-toollaunch"
+
+# Learning-tool packs, staged verbatim under tools/packs/<id>/ so install.sh
+# can copy the whole tree into $PREFIX/tools/packs without per-pack knowledge.
+if [ "$SKIP_PACKS" -ne 1 ]; then
+    install -d -m 0755 "$STAGE_DIR/tools"
+    cp -R "$PACK_STAGE" "$STAGE_DIR/tools/packs"
+fi
 
 # Reused verbatim from runtime/files/ — same scripts the WSL/VMware rootfs
 # ships, no VMware-specific path assumptions in either (both are plain

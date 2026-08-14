@@ -176,6 +176,31 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# ioltool service account
+# ---------------------------------------------------------------------------
+# PC/VPCS nodes (the "tool" package) launch their pack GUI as a dedicated,
+# unprivileged account named ioltool — supervisor/internal/tool/detect_linux.go's
+# capability probe requires user.Lookup("ioltool") to succeed, and both its
+# ambientCapTransition and unixProxy checks fail without it, which surfaces as
+# "runtime does not support PC nodes" in the GUI. Every other packaging target
+# (OVA/QEMU/LXC/WSL) gets this account for free because runtime/build-rootfs.sh
+# creates it inside the shared rootfs image before those targets are packed. A
+# native install (this script) runs on the operator's own box, which was never
+# built from that rootfs, so create it here too — idempotently, since this
+# script is safe to re-run.
+if ! id ioltool >/dev/null 2>&1; then
+    echo "install.sh: creating ioltool service account (used by PC/VPCS pack GUIs)"
+    useradd -r -M -s /usr/sbin/nologin ioltool || {
+        echo "install.sh: could not create the ioltool service account" >&2
+        exit 1
+    }
+fi
+id ioltool >/dev/null 2>&1 || {
+    echo "install.sh: ioltool account still missing after useradd" >&2
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
 # Install files
 # ---------------------------------------------------------------------------
 echo "install.sh: installing to $PREFIX"
@@ -185,12 +210,39 @@ install -d -m 0755 "$PREFIX/images"
 install -d -m 0755 "$PREFIX/run"
 install -d -m 0755 "$PREFIX/labs"
 
+# Learning-tool packs (PC/VPCS, aaa, webserver, httpclient, syslog, netsvc,
+# secbench) — staged by pack-native.sh under tools/packs/. Installed at the
+# supervisor's hardcoded default (server.go's ToolPacksDir), /opt/iolbox/tools
+# /packs, same as iolbox-toollaunch above: nothing currently plumbs --prefix
+# through to it. Absent when the tarball was built with --no-packs; PC/VPCS
+# and the other tool nodes simply won't be available in that case (the
+# supervisor logs a warning and starts with an empty tool-pack registry, same
+# as any other pack-load failure).
+if [ -d "$SCRIPT_DIR/tools/packs" ]; then
+    echo "install.sh: installing tool packs"
+    install -d -m 0755 /opt/iolbox/tools
+    rm -rf /opt/iolbox/tools/packs
+    cp -R "$SCRIPT_DIR/tools/packs" /opt/iolbox/tools/packs
+    chown -R root:root /opt/iolbox/tools/packs
+    find /opt/iolbox/tools/packs -type d -exec chmod 0755 {} +
+    find /opt/iolbox/tools/packs -type f -name '*.json' -exec chmod 0644 {} +
+    find /opt/iolbox/tools/packs -type f ! -name '*.json' -exec chmod 0755 {} +
+else
+    echo "install.sh: NOTE - no tools/packs bundled in this tarball; PC/VPCS and other tool nodes will not be available."
+fi
+
 # Binaries: 0755, not 0644 — a non-executable supervisor binary fails
 # fork/exec at ExecStart with a confusing "Permission denied", a mistake
 # already made once in this project (see runtime/README.md history /
 # build-rootfs.sh's `install -m 0755` on the same two files).
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/supervisor" "$PREFIX/supervisor"
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/vpcs" "$PREFIX/vpcs"
+
+# PC/VPCS nodes' ambient-capability transition (supervisor/internal/tool/launch.go)
+# execs this helper at a hardcoded path, /opt/iolbox/iolbox-toollaunch, regardless
+# of --prefix; install it there to match rather than under $PREFIX.
+install -d -m 0755 /opt/iolbox
+install -m 0755 -o root -g root "$SCRIPT_DIR/bin/iolbox-toollaunch" /opt/iolbox/iolbox-toollaunch
 
 install -m 0755 -o root -g root "$SCRIPT_DIR/opt-iolbox/firstboot-iourc.sh" "$PREFIX/firstboot-iourc.sh"
 install -m 0755 -o root -g root "$SCRIPT_DIR/opt-iolbox/prestart-clean.sh" "$PREFIX/prestart-clean.sh"

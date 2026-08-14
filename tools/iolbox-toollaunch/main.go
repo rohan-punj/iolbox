@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const usageText = "usage: iolbox-toollaunch [--cgroup PATH] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
+const usageText = "usage: iolbox-toollaunch [--cgroup PATH] [--netns NAME] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
 
 // knownCapNumbers is the portable name->Linux-capability-number map (plain
 // integers, not syscalls, so this stays buildable on every platform even
@@ -48,6 +48,7 @@ func parseCapsList(value string) ([]string, error) {
 const (
 	launchExitUsage       = 2
 	launchExitCgroup      = 10
+	launchExitNetns       = 11
 	launchExitLinuxOnly   = 20
 	launchExitLookupUser  = 30
 	launchExitParseUID    = 31
@@ -67,6 +68,7 @@ const (
 
 type launchOptions struct {
 	cgroup string
+	netns  string
 	user   string
 	caps   []string
 	target string
@@ -100,7 +102,7 @@ func main() {
 		os.Exit(launchExitUsage)
 	}
 
-	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.caps); err != nil {
+	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.netns, opts.caps); err != nil {
 		code := launchExitExec
 		var failure *launchFailure
 		if errors.As(err, &failure) {
@@ -117,6 +119,7 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 	seenUser := false
 	seenCaps := false
 	seenCgroup := false
+	seenNetns := false
 
 	for i := 0; i < len(argv); i++ {
 		if argv[i] == "--" {
@@ -130,6 +133,13 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 			}
 			opts.cgroup = argv[i+1]
 			seenCgroup = true
+			i++
+		case "--netns":
+			if seenNetns || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
+				return launchOptions{}, errors.New("--netns requires one non-empty name before --")
+			}
+			opts.netns = argv[i+1]
+			seenNetns = true
 			i++
 		case "--user":
 			if seenUser || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
@@ -191,12 +201,12 @@ func writeCgroupMembership(cgroupPath string) error {
 	return nil
 }
 
-func launchAs(user, target string, args []string, cgroupPath string, caps []string) error {
+func launchAs(user, target string, args []string, cgroupPath, netns string, caps []string) error {
 	if user == "" || target == "" {
 		return newLaunchFailure(launchExitUsage, "arguments", errors.New("user and target are required"))
 	}
 	if err := writeCgroupMembership(cgroupPath); err != nil {
 		return err
 	}
-	return launchTransition(user, target, args, caps)
+	return launchTransition(user, target, args, netns, caps)
 }
