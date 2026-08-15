@@ -209,7 +209,7 @@ else
         echo "== pack-native: building $pack pack GUI (linux/amd64) =="
         ( cd "$pack_dir/gui" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$PACK_STAGE/$pack/$pack-gui" . )
         install -m 0644 "$pack_dir/pack.json" "$PACK_STAGE/$pack/pack.json"
-        install -m 0755 "$PACK_STAGE/$pack/$pack-gui" "$PACK_STAGE/$pack/$pack-gui"
+        chmod 0755 "$PACK_STAGE/$pack/$pack-gui"
     done
 
     echo "== pack-native: building secbench pack GUI (linux/amd64) =="
