@@ -94,6 +94,15 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Normalize to absolute paths now that --build-dir/--out are final. Several
+# steps below (the tool-pack build loop in particular) build inside a `cd`'d
+# subshell; a relative BUILD_DIR/OUT_DIR would resolve against that subshell's
+# cwd instead of the caller's, silently writing packs to the wrong place and
+# leaving PACK_STAGE never created for the `install` calls that follow.
+mkdir -p "$BUILD_DIR" "$OUT_DIR"
+BUILD_DIR="$(cd "$BUILD_DIR" && pwd)"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+
 # ---------------------------------------------------------------------------
 # Resolve binary sources
 # ---------------------------------------------------------------------------
