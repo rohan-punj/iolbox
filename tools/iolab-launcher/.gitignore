@@ -10,3 +10,8 @@ iolbox-launcher.exe
 # dropped IOL images and persisted labs live here; never commit them)
 /images/
 /labs/
+# Locally cross-compiled darwin/arm64 launcher + hardware test binaries
+# (built ad hoc during Apple Silicon M-track sessions; staged to the Mac,
+# never committed)
+iolbox-launcher-darwin-arm64
+*.test

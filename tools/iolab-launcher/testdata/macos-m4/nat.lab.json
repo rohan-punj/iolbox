@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "id": "m4-nat",
+  "name": "M4 NAT",
+  "description": "M4 item 3 NAT client fixture; run id is added by the hardware driver.",
+  "canvas": {"zoom": 1, "pan": {"x": 0, "y": 0}, "background": "dots"},
+  "nodes": [
+    {
+      "id": 0, "kind": "iol", "name": "R1", "x": 240, "y": 200,
+      "image": {"id": "REPLACE_WITH_IMAGE_ID", "filename": "M4-image.bin", "class": "l3"},
+      "ram": 1024, "ethernet": 1, "serial": 1,
+      "startupConfig": "hostname R1\n!\nip routing\naccess-list 1 permit 192.168.1.0 0.0.0.255\ninterface Ethernet0/0\n ip address 192.168.1.1 255.255.255.0\n ip nat inside\n no shutdown\n!\ninterface Ethernet0/1\n ip address dhcp\n ip nat outside\n no shutdown\n!\nip nat inside source list 1 interface Ethernet0/1 overload\nend\n"
+    },
+    {
+      "id": 1, "kind": "vpcs", "name": "PC1", "x": 240, "y": 400,
+      "ethernet": 1, "serial": 0,
+      "config": {"commands": ["ip 192.168.1.10 192.168.1.1 24"]}
+    },
+    {"id": 2, "kind": "nat", "name": "NAT", "x": 560, "y": 200, "ethernet": 1, "serial": 0}
+  ],
+  "links": [
+    {"id": 0, "type": "p2p", "endpoints": [{"node": 0, "interface": "e0/0"}, {"node": 1, "interface": "eth0"}]},
+    {"id": 1, "type": "p2p", "endpoints": [{"node": 0, "interface": "e0/1"}, {"node": 2, "interface": "eth0"}]}
+  ]
+}

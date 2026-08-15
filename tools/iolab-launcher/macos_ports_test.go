@@ -63,6 +63,73 @@ func TestDarwinPortContractRendersAllRulesInOrder(t *testing.T) {
 		t.Fatalf("unexpected Lima --set argument: %s", setExpr)
 	}
 }
+
+// TestDarwinPortForwardRulesAcceptBlockSequenceForm reproduces a lima.yaml
+// observed on real hardware after a forced-kill/restart recovery cycle:
+// Lima's own YAML marshaler had resaved the config with guestPortRange/
+// hostPortRange as a block sequence (key on its own line, items indented
+// below) instead of the flow form this launcher writes when first creating
+// a VM (guestPortRange: [9000, 9049]). Before this fix, the parser treated
+// the empty-value "guestPortRange:" line as a hard error ("invalid
+// portForwards field"), so a perfectly healthy, already-running VM could
+// never pass its own port-contract check again — every restart failed.
+func TestDarwinPortForwardRulesAcceptBlockSequenceForm(t *testing.T) {
+	yaml := `
+portForwards:
+- guestPort: 4001
+  hostPort: 4001
+  hostIP: 127.0.0.1
+  proto: tcp
+- guestPortRange:
+  - 9000
+  - 9049
+  hostPortRange:
+  - 9000
+  - 9049
+  hostIP: 127.0.0.1
+  proto: tcp
+- guestPortRange:
+  - 5500
+  - 5529
+  hostPortRange:
+  - 5500
+  - 5529
+  hostIP: 127.0.0.1
+  proto: tcp
+- guestIP: 127.0.0.1
+  guestPortRange:
+  - 1
+  - 65535
+  proto: any
+  ignore: true
+`
+	rules, err := parseDarwinPortForwardRules(yaml)
+	if err != nil {
+		t.Fatalf("parseDarwinPortForwardRules(block form) error: %v", err)
+	}
+	if len(rules) != 4 {
+		t.Fatalf("rule count = %d, want 4: %#v", len(rules), rules)
+	}
+	if rules[1]["guestPortRange"] != "[9000,9049]" || rules[1]["hostPortRange"] != "[9000,9049]" {
+		t.Fatalf("console range rule = %#v", rules[1])
+	}
+	if rules[2]["guestPortRange"] != "[5500,5529]" || rules[2]["hostPortRange"] != "[5500,5529]" {
+		t.Fatalf("capture range rule = %#v", rules[2])
+	}
+
+	ports, err := newDarwinPortContract(4001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := darwinPortContractMatchesYAML([]byte(yaml), ports)
+	if err != nil {
+		t.Fatalf("darwinPortContractMatchesYAML(block form) error: %v", err)
+	}
+	if !ok {
+		t.Fatal("darwinPortContractMatchesYAML(block form) = false, want true — a Lima-resaved config must still satisfy the same contract it was created with")
+	}
+}
+
 func TestDarwinPortConflictsReportsEveryPort(t *testing.T) {
 	ports, err := newDarwinPortContract(defaultDarwinGUIPort)
 	if err != nil {

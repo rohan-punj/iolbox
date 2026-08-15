@@ -8,6 +8,14 @@ This plan follows, in precedence order, `docs/macos-m3-handoff.md`,
 `docs/macos-m3-result.md`, `docs/macos-m1-handoff.md`, and the immutable M4
 section of `docs/macos-arm64-plan.md`.
 
+**Owner-approved scope deviation (recorded 2026-08-14):** the sustained
+traffic soak (item 6) runs for **10 minutes (600 s)**, not the two hours
+(7,200 s) named in `docs/macos-arm64-plan.md` §M4 and `docs/macos-m4-prompt.md`.
+The owner explicitly directed this shortening during the M4 session. All other
+soak isolation/seal/failure-handling rules below are unchanged and apply at
+the 600 s duration; `docs/macos-m4-result.md` must state plainly that this was
+a reduced-duration soak by owner instruction, not a full 2-hour run.
+
 ## Outcome and governing rules
 
 M4 is an evidence-first Apple Silicon hardware qualification. It is complete
@@ -140,7 +148,9 @@ The orchestrator enforces this state sequence and refuses out-of-order phases:
 5. Item 4: mechanized extnet disposition; if exercised, stop it and prove the
    item baseline is restored.
 6. Item 6: load a fresh, clean multi-link fixture, establish a fresh capture
-   connection and fixed node/link set, then run the isolated two-hour soak.
+   connection and fixed node/link set, then run the isolated ten-minute soak
+   (owner-approved scope reduction from the originally planned two-hour
+   window — see note below).
    Seal and independently verify its evidence before any later state change.
 7. Item 5: four-node capacity, using the deterministic RAM state machine.
 8. Item 7: forced launcher termination, then forced VM termination and
@@ -148,7 +158,7 @@ The orchestrator enforces this state sequence and refuses out-of-order phases:
 9. Item 8: final hardware-derived record, scope gate, independent verification,
    final non-destructive stop, and sentinel verification.
 
-During the soak's uninterrupted 7,200-second measurement window there are no
+During the soak's uninterrupted 600-second measurement window there are no
 node/link starts or stops, other hardware phases, supervisor/launcher/VM
 lifecycle commands, fixture reloads, or competing qualification harnesses.
 The node/link/PID ownership set is fixed at the start and checked throughout.
@@ -173,7 +183,7 @@ reported as zero.
 | 3. NAT | `hello.features`; client address/route; chosen numeric target; timestamped Mac and ordinary-guest upstream controls immediately before and after; gateway and 20-packet outbound summaries; before/after `ip addr/route/link`, `iptables-save` and matching FORWARD/MASQUERADE counter values/deltas; tap/bridge map; resources and cleanup subtraction. | NAT starts; gateway succeeds; client receives at least 19/20 from the numeric target; matching forwarding and MASQUERADE deltas are positive; owned NAT residue is zero. Either failed control makes the attempt `UNVERIFIED` and requires a new reachable target/run—never PASS or waiver. |
 | 4. extnet | All inputs to the decision table below with command exit statuses. If exercised: peer precheck, attach state, at least 20 packets each direction, capture/console if contract supplies it, resource samples, and exact cleanup counts. | Only “no suitable Lima interface” yields `NOT_EXERCISABLE`. An available interface requires at least 19/20 each way and zero owned residue. Missing product/permission/peer/harness path with a suitable interface is `FAIL/BLOCKED`. |
 | 5. Four IOL | Attempt number; fixed profile/config; one `lab.start` result; four console transcripts, prompt times, PIDs and RSS values; 15-second boot samples; four adjacent-link warm summaries and R1↔R3 100-packet summaries; aggregate RSS; guest/host memory/load extrema; OOM/MALLOCFAIL/kernel/supervisor logs; cleanup and RAM-state-machine evidence. | Same 4 GiB Debian 13 guest, four 1024 MB IOL nodes concurrently; each prompt ≤150 s; every adjacent link passes; each end-to-end direction ≥99/100; no hard-wall condition; exact owned residue zero. Exactly one initial attempt and, only after prescribed reclamation, one cold retry. |
-| 6. Isolated soak | Attempt identity; fixed ownership set; start/end UTC and monotonic times; process start identities; traffic/metrics/collector heartbeat rows; pcapng checkpoints at elapsed 0, 30, 60, 90, and 120 minutes; interval and cumulative ping counts; per-node RSS and resource extrema; power/sleep/boot records; watchdog events; collector exit; final pcapng/count/hash validation; seal manifest and independent verification output. | One uninterrupted monotonic duration ≥7,200 s; ≥120 traffic summaries and ≥121 endpoint-inclusive resource samples; no heartbeat gap >90 s; cumulative loss ≤1%; no unexplained total-failure interval; one capture connection, advancing at every checkpoint, valid through the end with traffic in final five minutes; no sleep/reboot/reconnect/restart/death/OOM/wedge; verified seal. |
+| 6. Isolated soak | Attempt identity; fixed ownership set; start/end UTC and monotonic times; process start identities; traffic/metrics/collector heartbeat rows; pcapng checkpoints at elapsed 0, 2.5, 5, 7.5, and 10 minutes; interval and cumulative ping counts; per-node RSS and resource extrema; power/sleep/boot records; watchdog events; collector exit; final pcapng/count/hash validation; seal manifest and independent verification output. | One uninterrupted monotonic duration ≥600 s; ≥10 traffic summaries and ≥11 endpoint-inclusive resource samples; no heartbeat gap >60 s; cumulative loss ≤1%; no unexplained total-failure interval; one capture connection, advancing at every checkpoint, valid through the end with traffic in the final minute; no sleep/reboot/reconnect/restart/death/OOM/wedge; verified seal. |
 | 7. Forced recovery | Exact launcher PID/phase/SIGKILL argv and nonzero exit; exact Lima forced-stop help/argv/status; before/kill/restart ownership maps; both launcher restart and `GET / <500` readiness times; old-object set-subtraction counts; recovery fixture start/prompts and bidirectional ping counts; cleanup counts; sentinel manifests/hashes at every checkpoint. | Both forced exits proven; both restarts reach real HTTP readiness; every old owned PID/listener/interface/bridge/tap/NAT rule/netns/veth/cgroup/collector count is exactly zero before recovery load; recovery traffic meets item-1 warm bar and clean stop; every persistence hash matches. |
 | 8. Record | Verified `summary.json`, verifier stdout/stderr/status, requirement matrix, source/hash index, scope diff, and result cross-check. | This is aggregation of items 1–7, not a separate hardware test. It passes only when the verifier recomputes and accepts all applicable fields. |
 
@@ -258,13 +268,13 @@ directory for any retry.
 
 Any interruption means restart from zero: a sleep, reboot, collector restart,
 heartbeat gap, crash, hang, disconnect that kills/interrupts the harness, or
-other failed attempt requires a new uninterrupted 7,200-second run. Attempts
+other failed attempt requires a new uninterrupted 600-second run. Attempts
 cannot be resumed or concatenated, and no sample or capture block from a failed
 attempt may be copied into the passing attempt.
 
 ### `SOAK-COMPLETE` seal
 
-After at least 7,200 monotonic seconds and only if every soak bar has passed:
+After at least 600 monotonic seconds and only if every soak bar has passed:
 
 1. Stop traffic at the scheduled boundary, let the collector close normally,
    flush and `fsync` the pcapng, metrics, heartbeat, and index files, and record
@@ -413,7 +423,7 @@ Unconditional implementation outputs are:
   cannot overlap the soak; each IOL has explicit `ram: 1024` or higher.
 - `tools/iolab-launcher/testdata/macos-m4/four-iol-ring.lab.json`.
 - `tools/iolab-launcher/README.md`: opt-in invocation, prerequisites,
-  isolated two-hour warning, evidence/verification layout.
+  isolated ten-minute soak warning, evidence/verification layout.
 - `packaging/macos/tests/hardware-m4.sh`: Bash 3.2 orchestrator, protected-name
   and ownership gates, VM preservation, sentinels, isolated watchdog soak and
   seal, deterministic RAM state machine, exact-PID recovery, and collation.

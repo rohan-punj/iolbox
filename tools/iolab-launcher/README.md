@@ -67,6 +67,48 @@ same-named file you place there.
 Sync failures (e.g. the control channel isn't reachable yet) are logged as
 warnings and never fail the launch — the GUI works with or without sync.
 
+## Apple Silicon M4 qualification harness
+
+The opt-in Darwin test and Mac-side orchestrator are intentionally separate
+from the normal launcher flow. Build the arm64 launcher and test binary, stage
+the launcher, test binary, `packaging/macos/`, and the real executable IOL image
+to the target Mac, then run:
+
+```
+packaging/macos/tests/hardware-m4.sh --machine iolbox-m4-e2e \
+  --launcher ~/iolbox-m1/iolbox-launcher \
+  --test-binary ~/iolbox-m1/iolbox-launcher-hardware.test \
+  --assets-dir ~/iolbox-m1/packaging/macos \
+  --image ~/iolbox-m0/x86_64_crb_linux-adventerprisek9-ms.iol17.18.02.bin
+```
+
+The run creates `~/iolbox-m1/evidence-m4/<run-id>/`. It executes VPCS/IOL,
+multi-link capture, NAT, the mechanized extnet disposition, a fresh isolated
+ten-minute soak, four-node capacity (including the prescribed RAM-wall retry),
+forced recovery, final stop, and the independent record verifier. The soak is
+an owner-approved ten-minute reduction of the originally planned long-duration
+window and must not be started from a short-lived SSH command: the script keeps its
+measurement process attached to the Mac-side run and writes `SOAK-COMPLETE`
+only after the capture, metrics, heartbeats, resource rows, power audit, and
+hash manifest pass.
+
+The record verifier is platform-neutral and can also be run against a retained
+host copy:
+
+```
+go test ./tools/iolab-launcher -run TestM4VerifyRecord -args \
+  -m4-record <host-evidence-copy>/summary.json
+```
+
+All IOL fixtures use at least 1024 MB. `iol22` is rejected by exact-name
+guards, stop paths never call `delete`, and positive WebSocket routes reuse
+`wsDialWithSession`.
+
+The GUI port is configurable with `IOLBOX_M4_GUI_PORT` or the orchestrator's
+`--gui-port` flag. The staged guest verifier is checked before a run and must
+use `IOLBOX_GUI_PORT` for both socket and `GET /` readiness; it must not rely
+on the default `4001` by coincidence.
+
 ## Other flags
 
 Run `iolbox-launcher.exe -h` for the full list (`--backend`, `--mem`, `--smp`,

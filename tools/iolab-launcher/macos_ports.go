@@ -124,7 +124,9 @@ func parseDarwinPortForwardRules(text string) ([]darwinPortForwardRule, error) {
 	var current darwinPortForwardRule
 	blockIndent, ruleIndent := -1, -1
 	inBlock := false
-	for lineNo, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for lineNo := 0; lineNo < len(lines); lineNo++ {
+		line := lines[lineNo]
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -168,8 +170,27 @@ func parseDarwinPortForwardRules(text string) ([]darwinPortForwardRule, error) {
 		}
 		key := strings.TrimSpace(trimmed[:colon])
 		value := strings.TrimSpace(trimmed[colon+1:])
-		if key == "" || value == "" {
+		if key == "" {
 			return nil, fmt.Errorf("invalid portForwards field on line %d: %q", lineNo+1, trimmed)
+		}
+		if value == "" {
+			// Block-sequence form, e.g.:
+			//   guestPortRange:
+			//   - 9000
+			//   - 9049
+			// instead of the flow form this launcher itself writes
+			// (guestPortRange: [9000, 9049]). Lima's own YAML marshaler
+			// re-emits block style whenever it resaves a config (observed
+			// on real hardware after a forced-kill/restart cycle rewrote
+			// the running VM's lima.yaml), so both forms must parse to the
+			// same canonical value or a perfectly healthy VM becomes
+			// unrecoverable by this launcher's own port-contract check.
+			items, consumed, err := parseDarwinYAMLBlockSequence(lines, lineNo+1, ruleIndent)
+			if err != nil {
+				return nil, fmt.Errorf("invalid portForwards block on line %d: %w", lineNo+1, err)
+			}
+			value = "[" + strings.Join(items, ",") + "]"
+			lineNo += consumed
 		}
 		current[key] = canonicalDarwinPortValue(value)
 	}
@@ -177,6 +198,45 @@ func parseDarwinPortForwardRules(text string) ([]darwinPortForwardRule, error) {
 		rules = append(rules, current)
 	}
 	return rules, nil
+}
+
+// parseDarwinYAMLBlockSequence reads the "- item" lines of a YAML block
+// sequence that starts immediately after a "key:" line with no inline
+// value, returning the scalar items and how many lines were consumed.
+//
+// minIndent is the enclosing rule's indent (the "-" of "- guestPort: ..."),
+// not the "key:" line's own indent — go-yaml's default block style renders
+// a mapping key's nested sequence at the SAME indent as the key itself when
+// that key is a continuation field inside a list item (observed verbatim on
+// real hardware: "hostPortRange:" and its own "- 9000"/"- 9049" items sit at
+// identical indent). Using the key's own indent as the floor would reject
+// exactly that, the most common real-world shape. Sequence items are
+// distinguished from the next sibling field purely by the "-" prefix, which
+// is why minIndent only needs to exclude a return to the next top-level
+// rule, not bound the sequence tightly against its key.
+func parseDarwinYAMLBlockSequence(lines []string, start, minIndent int) (items []string, consumed int, err error) {
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			consumed = i - start + 1
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if indent <= minIndent || !strings.HasPrefix(trimmed, "-") {
+			break
+		}
+		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		if item == "" {
+			return nil, 0, fmt.Errorf("empty block sequence item on line %d", i+1)
+		}
+		items = append(items, item)
+		consumed = i - start + 1
+	}
+	if len(items) == 0 {
+		return nil, 0, fmt.Errorf("expected a block sequence after line %d", start+1)
+	}
+	return items, consumed, nil
 }
 
 func canonicalDarwinPortValue(value string) string {
