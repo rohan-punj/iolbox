@@ -30,9 +30,14 @@ func handleCLIConnection(conn net.Conn, app *App) {
 	_, _ = io.WriteString(conn, cliPrompt)
 	reader := bufio.NewReader(conn)
 	var line []byte
+	// cursor is the edit position within line (0..len(line)); it lets Left/
+	// Right/Home/End move within a line — including one just recalled from
+	// history — instead of only ever appending at the end.
+	cursor := 0
 	// esc tracks a partially-read ANSI escape sequence for arrow keys: 0 = none,
-	// 1 = saw ESC (0x1b), 2 = saw ESC '['. xterm/xterm.js send up as ESC [ A and
-	// down as ESC [ B; every other CSI final byte is dropped once seen, same as
+	// 1 = saw ESC (0x1b), 2 = saw ESC '['. xterm/xterm.js send up as ESC [ A,
+	// down as ESC [ B, right as ESC [ C, left as ESC [ D, home as ESC [ H, and
+	// end as ESC [ F; every other CSI final byte is dropped once seen, same as
 	// the always-dropped control bytes below.
 	esc := 0
 	// hist is a snapshot of app.state.History() taken lazily on the first arrow
@@ -47,12 +52,32 @@ func handleCLIConnection(conn net.Conn, app *App) {
 	// \n half — see the CRLF check in the main loop below.
 	justDispatchedCR := false
 
+	// moveCursor repositions the terminal's on-screen cursor by n columns
+	// (n<0 left, n>0 right) without touching buffer content. Left uses plain
+	// backspace (0x08), which every terminal treats as "move left one column"
+	// without erasing — the same byte the erase-on-backspace path below already
+	// relies on. Right has no plain-ASCII equivalent, so it uses the CSI cursor-
+	// forward sequence xterm.js itself sends for the right-arrow key.
+	moveCursor := func(n int) {
+		if n > 0 {
+			_, _ = io.WriteString(conn, fmt.Sprintf("\x1b[%dC", n))
+		} else {
+			for i := 0; i < -n; i++ {
+				_, _ = io.WriteString(conn, "\b")
+			}
+		}
+	}
+
 	redraw := func(next []byte) {
+		if cursor < len(line) {
+			moveCursor(len(line) - cursor) // get to end of the old line first
+		}
 		for range line {
 			_, _ = io.WriteString(conn, "\b \b")
 		}
 		line = append(line[:0], next...)
 		_, _ = conn.Write(line)
+		cursor = len(line)
 	}
 
 	for {
@@ -92,10 +117,30 @@ func handleCLIConnection(conn net.Conn, app *App) {
 						redraw([]byte(hist[pos]))
 					}
 				}
+			case 'D': // left
+				if cursor > 0 {
+					moveCursor(-1)
+					cursor--
+				}
+			case 'C': // right
+				if cursor < len(line) {
+					moveCursor(1)
+					cursor++
+				}
+			case 'H': // home
+				if cursor > 0 {
+					moveCursor(-cursor)
+					cursor = 0
+				}
+			case 'F': // end
+				if cursor < len(line) {
+					moveCursor(len(line) - cursor)
+					cursor = len(line)
+				}
 			default:
-				// Left/right/other CSI sequences: this CLI has no cursor
-				// positioning within the line, so drop them rather than
-				// corrupt the visible buffer.
+				// Other CSI sequences (Delete, PageUp/Down, ...): this CLI
+				// doesn't support them, so drop them rather than corrupt the
+				// visible buffer.
 			}
 			continue
 		}
@@ -115,15 +160,32 @@ func handleCLIConnection(conn net.Conn, app *App) {
 			justDispatchedCR = b == '\r'
 			_, _ = io.WriteString(conn, "\r\n"+dispatchLine(app, string(line))+"\r\n"+cliPrompt)
 			line = line[:0]
+			cursor = 0
 			hist, pos, pending = nil, -1, nil
 		case b == 0x7f || b == 0x08: // Backspace/DEL
-			if len(line) > 0 {
+			if cursor > 0 {
+				copy(line[cursor-1:], line[cursor:])
 				line = line[:len(line)-1]
-				_, _ = io.WriteString(conn, "\b \b")
+				cursor--
+				tail := line[cursor:]
+				_, _ = io.WriteString(conn, "\b")
+				if len(tail) > 0 {
+					_, _ = conn.Write(tail)
+				}
+				_, _ = io.WriteString(conn, " ")
+				moveCursor(-(len(tail) + 1))
 			}
 		case b >= 0x20 && b < 0x7f: // printable ASCII
-			line = append(line, b)
+			line = append(line, 0)
+			copy(line[cursor+1:], line[cursor:len(line)-1])
+			line[cursor] = b
+			tail := line[cursor+1:]
 			_, _ = conn.Write([]byte{b})
+			if len(tail) > 0 {
+				_, _ = conn.Write(tail)
+			}
+			moveCursor(-len(tail))
+			cursor++
 		default:
 			// Control bytes (Ctrl-C, telnet IAC stragglers, ...) are silently
 			// dropped rather than fed into the line buffer — this CLI has no

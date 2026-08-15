@@ -165,6 +165,99 @@ func TestCLIConnectionArrowKeyHistory(t *testing.T) {
 	}
 }
 
+// TestCLIConnectionCursorEditsRecalledLine covers "up arrow recalls a
+// previous command but the cursor can't then be moved to edit it": Left/
+// Right/Home/End used to be silently dropped as unrecognized CSI sequences,
+// so a recalled line could only ever be appended to, never re-edited in
+// place. Recalls "ip 10.0.0.1/24", moves the cursor left with the arrow key,
+// deletes and re-inserts a digit mid-line, then submits — checking both the
+// exact wire echo at each step and that the edited (not the original) line
+// is what actually got dispatched.
+func TestCLIConnectionCursorEditsRecalledLine(t *testing.T) {
+	app := testApp(t)
+	client, server := net.Pipe()
+	defer client.Close()
+	go handleCLIConnection(server, app)
+
+	readN := func(n int) string {
+		t.Helper()
+		buf := make([]byte, n)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := readFull(client, buf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return string(buf)
+	}
+	send := func(b ...byte) {
+		t.Helper()
+		if _, err := client.Write(b); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	sendLine := func(line string) {
+		t.Helper()
+		send(append([]byte(line), '\r')...)
+		buf := make([]byte, 4096)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		total := 0
+		for {
+			n, err := client.Read(buf[total:])
+			total += n
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if strings.HasSuffix(string(buf[:total]), cliPrompt) {
+				return
+			}
+		}
+	}
+	arrow := func(final byte) { send(0x1b, '[', final) }
+
+	if got := readN(len(cliPrompt)); got != cliPrompt {
+		t.Fatalf("initial prompt = %q, want %q", got, cliPrompt)
+	}
+	sendLine("ip 10.0.0.1/24")
+
+	// Recall "ip 10.0.0.1/24" (14 chars); cursor lands at the end (14).
+	arrow('A')
+	if got := readN(len("ip 10.0.0.1/24")); got != "ip 10.0.0.1/24" {
+		t.Fatalf("recall redraw = %q, want %q", got, "ip 10.0.0.1/24")
+	}
+
+	// Left x3: cursor 14 -> 11, landing just after the last octet's "1"
+	// (index 10) and before "/24". Each Left is a single plain backspace.
+	for i := 0; i < 3; i++ {
+		arrow('D')
+		if got := readN(1); got != "\b" {
+			t.Fatalf("left-arrow echo = %q, want backspace", got)
+		}
+	}
+
+	// Backspace deletes the "1" at index 10 in place: line becomes
+	// "ip 10.0.0./24" (13 chars), cursor 11 -> 10. The tail "/24" (3 bytes)
+	// gets rewritten, then a space erases the stale trailing char, then the
+	// cursor steps back 4 (len(tail)+1) to stay right where it was editing.
+	send(0x7f)
+	if got := readN(1 + 3 + 1 + 4); got != "\b/24 \b\b\b\b" {
+		t.Fatalf("backspace-mid-line echo = %q, want %q", got, "\b/24 \b\b\b\b")
+	}
+
+	// Insert "2" at the same cursor position: line becomes
+	// "ip 10.0.0.2/24" (14 chars), cursor 10 -> 11. Tail "/24" (3 bytes)
+	// gets rewritten after it, then the cursor steps back 3 to sit right
+	// after the inserted "2".
+	send('2')
+	if got := readN(1 + 3 + 3); got != "2/24\b\b\b" {
+		t.Fatalf("insert-mid-line echo = %q, want %q", got, "2/24\b\b\b")
+	}
+
+	send('\r')
+	want := "\r\n" + "Address configured on eth1: 10.0.0.2/24" + "\r\n" + cliPrompt
+	if got := readN(len(want)); got != want {
+		t.Fatalf("dispatched response = %q, want %q (edited line must be \"ip 10.0.0.2/24\", not the original recall)", got, want)
+	}
+}
+
 func readFull(conn net.Conn, buf []byte) (int, error) {
 	total := 0
 	for total < len(buf) {
