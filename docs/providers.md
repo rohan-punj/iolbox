@@ -91,3 +91,42 @@ Both the VMware appliance and the WSL tar come from **one** Debian-slim rootfs:
   no-default-route posture is retired — see runtime/README.md)
 
 Build scripts live in `runtime/`. Reproducible; nothing Cisco is ever baked in.
+
+## Apple Silicon macOS: Lima provider
+
+The Apple Silicon path is the Go `iolbox` launcher plus a user-installed Lima;
+it is not a resurrection of the conceptual Windows Tauri provider. Lima is an
+external Apache-2.0 prerequisite. iolbox detects it and uses it, but never
+installs, upgrades, reinstalls, or removes it.
+
+- **Preflight and canary:** require Apple Silicon macOS, the selected supported
+  macOS/profile qualification row, Lima VZ, and the Rosetta binfmt/canary
+  gate. A READY Lima VM without a passing Rosetta canary is not sufficient.
+  Diagnostics report `guest_arch=aarch64`, `execution=rosetta-amd64`, the
+  measured kernel, service/HTTP readiness, and the live canary result.
+- **Profiles:** the shipped locked table uses Debian 13/trixie as DEFAULT with
+  the pinned `6.12.101+deb13-cloud-arm64` kernel; Ubuntu 22.04/Jammy is the
+  pinned COMPATIBILITY profile on the 5.15 line; Debian 12/bookworm is an
+  unqualified candidate while its digest is `PIN-ME`.
+- **Durable guest:** the default machine is named `iolbox-debian13`. `start`
+  creates it if absent or validates/reuses it if present; `upgrade` requires
+  the existing machine and replaces the guest payload without deleting the
+  VM or its data; `stop` only stops it.
+- **Host-loopback contract:** GUI is `127.0.0.1:4001`; guest control is not
+  forwarded; console ports are host loopback `9000-9049` and capture ports are
+  host loopback `5500-5529`. The GUI has no authentication, so these forwards
+  must not be exposed beyond the Mac without an independently secured tunnel.
+- **Host-folder synchronization:** by default,
+  `~/Library/Application Support/iolbox/images` and
+  `~/Library/Application Support/iolbox/labs` synchronize with the running
+  guest. Stop performs the final lab/image sync while the guest is still up.
+  `--no-sync`, `--images-dir`, and `--labs-dir` are explicit user choices.
+- **Capability boundary:** the shipped runtime supports x86_64 IOL through
+  Rosetta only. i386/i86bi and arm64-native IOL are unsupported; this provider
+  does not imply the separate M7/native-arm64 work.
+- **Deletion boundary:** ordinary launcher removal is non-destructive. A
+  destructive reset is a separately warned, literal operation that may delete
+  only the named `iolbox-debian13` Lima machine and move the exact iolbox host
+  data/attestation paths to uniquely named Trash destinations after verifying
+  the machine is stopped. It never means deleting all of `~/.lima`, all of
+  `~/.iolbox`, or the user's home data.

@@ -150,7 +150,8 @@ jobs:
       # opaque label in the output filename (iolbox-ct-<VERSION>.tar.zst).
       - name: Resolve version string
         id: version
-        run: echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: echo "value=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
 
       - name: Pack Proxmox LXC template
         run: sudo runtime/pack-lxc.sh --build-dir runtime/build --version "${{ steps.version.outputs.value }}"
@@ -180,6 +181,140 @@ jobs:
             runtime/build/SHA256SUMS-ci.txt
 
   # ---------------------------------------------------------------------
+  # macOS: package the Darwin launcher with the exact native payload from
+  # build-linux above. This job never rebuilds or discovers a second payload.
+  # ---------------------------------------------------------------------
+  build-macos:
+    name: Build Apple Silicon macOS archive
+    needs: build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: tools/iolab-launcher/go.mod
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: iolbox-linux
+          path: linux-artifact
+
+      - name: Resolve release/ref version and source date
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME//\//-}"
+          test -n "$version"
+          epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "source-date-epoch=$epoch" >> "$GITHUB_OUTPUT"
+
+      - name: Select and verify exact build-linux payload
+        id: payload
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          mapfile -t payloads < <(find linux-artifact -type f -name "iolbox-server-${VERSION}.tar.gz" -print)
+          test "${#payloads[@]}" -eq 1
+          payload="${payloads[0]}"
+          base="$(basename "$payload")"
+          mapfile -t checksum_files < <(find linux-artifact -type f -name SHA256SUMS-ci.txt -print)
+          test "${#checksum_files[@]}" -eq 1
+          checksums="${checksum_files[0]}"
+          expected="$(awk -v b="$base" '
+            BEGIN { bad=0; matches=0; digest="" }
+            NF != 2 || length($1) != 64 || $1 !~ /^[0-9A-Fa-f]+$/ || $2 !~ /^\*?[^[:space:]]+$/ { bad=1 }
+            $2 == b || $2 == "*" b { matches++; digest=$1 }
+            END {
+              if (bad || matches != 1) exit 1
+              print digest
+            }
+          ' "$checksums")" || {
+            echo "checksum manifest is malformed or does not contain exactly one line for $base" >&2
+            exit 1
+          }
+          printf '%s' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$'
+          ( cd "$(dirname "$payload")" && printf '%s  %s\n' "$expected" "$base" | sha256sum -c - )
+          echo "path=$payload" >> "$GITHUB_OUTPUT"
+          echo "basename=$base" >> "$GITHUB_OUTPUT"
+          echo "sha256=$expected" >> "$GITHUB_OUTPUT"
+          echo "checksums=$checksums" >> "$GITHUB_OUTPUT"
+          echo "build-linux payload: $payload"
+          echo "build-linux checksum manifest: $checksums"
+          echo "trusted payload sha256: $expected"
+
+      - name: Vet and test launcher
+        working-directory: tools/iolab-launcher
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Cross-build Darwin arm64 launcher
+        working-directory: tools/iolab-launcher
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o bin/iolbox-darwin-arm64 .
+
+      - name: Pack deterministic macOS archive
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.source-date-epoch }}
+          PAYLOAD: ${{ steps.payload.outputs.path }}
+          PAYLOAD_SHA256: ${{ steps.payload.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/macos/pack-release.sh \
+            --launcher "$GITHUB_WORKSPACE/tools/iolab-launcher/bin/iolbox-darwin-arm64" \
+            --payload "$GITHUB_WORKSPACE/$PAYLOAD" \
+            --payload-sha256 "$PAYLOAD_SHA256" \
+            --version "$VERSION" \
+            --output "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz" \
+            --source-date-epoch "$SOURCE_DATE_EPOCH"
+
+      - name: Verify archive layout and reproducibility
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.source-date-epoch }}
+          PAYLOAD: ${{ steps.payload.outputs.path }}
+          PAYLOAD_SHA256: ${{ steps.payload.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/macos/tests/release-layout-test.sh \
+            --archive "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz" \
+            --launcher "$GITHUB_WORKSPACE/tools/iolab-launcher/bin/iolbox-darwin-arm64" \
+            --payload "$GITHUB_WORKSPACE/$PAYLOAD" \
+            --payload-sha256 "$PAYLOAD_SHA256" \
+            --version "$VERSION" \
+            --source-date-epoch "$SOURCE_DATE_EPOCH"
+          echo "--- tar listing ---"
+          tar -tzf "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz"
+          echo "--- internal checksums ---"
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          tar -xzf "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz" -C "$work"
+          ( cd "$work/iolbox-macos-arm64" && sha256sum -c SHA256SUMS )
+          echo "--- launcher file ---"
+          file "$work/iolbox-macos-arm64/iolbox"
+          echo "--- archive hash ---"
+          sha256sum "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iolbox-macos
+          path: |
+            iolbox-macos-arm64.tar.gz
+            iolbox-macos-arm64.tar.gz.sha256
+
+  # ---------------------------------------------------------------------
   # Release: only on an actual tag push (workflow_dispatch runs stop after
   # producing/testing artifacts — no draft is created). Published as a
   # DRAFT, never live, because three artifacts CI cannot build (vmdk/vmx,
@@ -189,7 +324,7 @@ jobs:
   # ---------------------------------------------------------------------
   release:
     name: Draft GitHub Release
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -202,6 +337,7 @@ jobs:
           files: |
             iolbox-windows/**/*
             iolbox-linux/**/*
+            iolbox-macos/**/*
           body: |
             iolbox ${{ github.ref_name }}
 
@@ -220,6 +356,8 @@ jobs:
             - `iolbox-disk-${{ github.ref_name }}.qcow2` + the Windows launcher bundle zip (qemu/ + iolbox-launcher.exe + iolbox-disk.qcow2)
 
             Everything else — `iolbox-rootfs.tar` (WSL2), `iolbox-ct-${{ github.ref_name }}.tar.zst` (Proxmox LXC), `iolbox-server-${{ github.ref_name }}.tar.gz` (native systemd), `iolbox-launcher.exe`, `capture-helper.exe`, `SHA256SUMS-ci.txt` — is already attached by this workflow.
+
+            **Apple Silicon macOS (Lima):** the Mac archive requires user-installed Lima and qualifies Apple Silicon macOS with the Debian 13/trixie default profile and Ubuntu 22.04/Jammy compatibility profile. The default guest/kernel is Debian 13 with the pinned 6.12.101+deb13-cloud-arm64 kernel; Jammy is pinned to the qualified 5.15 line. The existing amd64 supervisor/VPCS and **x86_64 IOL only** run through Rosetta; i386/i86bi and arm64-native IOL are unsupported. The archive is unsigned: verify its outer and internal SHA-256 files, inspect quarantine, and if the launcher is quarantined remove that attribute from the launcher only with `xattr -d com.apple.quarantine ./iolbox` before `./iolbox start`. GUI, console, and capture forwards are loopback-only and unauthenticated. No Cisco software is included.
 
             See [docs/INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md) for which artifact matches your situation, and un-draft only once the manually-built artifacts above are attached.
           generate_release_notes: true

@@ -7,6 +7,30 @@ on:
     branches: [main]
 
 jobs:
+  launcher:
+    name: Apple Silicon launcher (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/iolab-launcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: tools/iolab-launcher/go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Cross-build darwin/arm64 launcher
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o bin/iolbox-darwin-arm64 .
+      - name: Compile Darwin-selected tests
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go test -c -o bin/iolbox-darwin-arm64.test .
+          echo "Darwin-selected tests compiled; they are not executed on this Linux runner."
+
   supervisor:
     name: Supervisor (Go)
     runs-on: ubuntu-latest

@@ -7,10 +7,13 @@ tab. **iolbox ships no Cisco software** — you supply your own IOL `.bin`/
 `.iol` image files and hold the appropriate licenses for them; see the
 "First steps" section below for how images get loaded in on each target.
 
-The v0.5.2 release publishes six deployable artifacts (plus `capture-helper.exe`,
-a small standalone Wireshark-bridge helper, and `SHA256SUMS-ci.txt` — which
-covers only the CI-built artifacts; the VMware/OVA/QEMU disk-image artifacts
-in sections 1, 2, and 6 are built and attached by hand and aren't in it).
+The current release publishes seven deployable artifacts (plus
+`capture-helper.exe`, a small standalone Wireshark-bridge helper, and
+`SHA256SUMS-ci.txt` — which covers only the CI-built artifacts; the
+VMware/OVA/QEMU disk-image artifacts in sections 1, 2, and 6 are built and
+attached by hand and aren't in it). Use the release tag in the download URLs
+and filenames below; older tags do not retroactively gain the Apple Silicon
+archive. Pick the row that matches your situation:
 Pick the row that matches your situation:
 
 | Your situation | Artifact | Section |
@@ -20,8 +23,9 @@ Pick the row that matches your situation:
 | Windows with WSL2/Hyper-V already enabled | `iolbox-rootfs.tar` | [WSL rootfs](#3-wsl-rootfs-wsl2) |
 | Proxmox homelab | `iolbox-ct-v0.5.2.tar.zst` | [Proxmox LXC](#4-proxmox-lxc) |
 | Existing Linux server / cloud VM / on-prem hypervisor guest | `iolbox-server-v0.5.2.tar.gz` | [Native (systemd)](#5-native-systemd-linux-server) |
+| Apple Silicon Mac with Lima | `iolbox-macos-arm64.tar.gz` | [Apple Silicon macOS (Lima)](#7-apple-silicon-macos-lima) |
 
-All six run the identical Go supervisor and (except the native target's
+All seven run the identical Go supervisor and (except the native target's
 build) the identical Debian-slim runtime — see `runtime/README.md`'s "one
 rootfs, two packages" note. Whichever you pick, the GUI ends up at
 **`http://<host>:4001`**, and it has **no login of any kind**. Only expose
@@ -32,9 +36,9 @@ Default sizing for every target is **4 vCPUs / 4096 MB RAM** (source:
 `runtime/resources.env`, `IOLBOX_VCPUS=4` / `IOLBOX_RAM_MB=4096`); each
 section below notes where to change it for that target.
 
-A Docker image also exists as a seventh, build-from-source option if you'd
+A Docker image also exists as an eighth, build-from-source option if you'd
 rather not touch WSL2/Hyper-V/VMware at all — see `docker/README.md`. It
-isn't one of the six release artifacts and isn't covered in depth here.
+isn't one of the seven release artifacts and isn't covered in depth here.
 
 ---
 
@@ -441,16 +445,132 @@ reports "GUI is up".
   `iourc` and restart the `iolbox-firstboot-iourc` unit, then the
   supervisor).
 
-## Apple Silicon macOS (Lima)
+## 7. Apple Silicon macOS (Lima)
 
-The macOS launcher provisions an arm64 Linux guest and runs the x86_64
-supervisor/IOL payload through Lima Rosetta. A qualified Apple Silicon guest
-omits `i386` from `hello.features`; the GUI keeps ELF32 images visible for
-inventory but disables their palette, picker, replacement, and start controls
-with the measured capability reason. x86_64 IOL images remain supported. The
-supervisor's `arch` field describes the guest/runtime, not the IOL ELF.
+**Artifact:** `iolbox-macos-arm64.tar.gz` plus
+`iolbox-macos-arm64.tar.gz.sha256` from the same `<tag>` release
+**Source:** `packaging/macos/pack-release.sh`,
+`packaging/macos/release-manifest.txt`, and
+[`docs/macos-release.md`](macos-release.md)
+
+This is an unsigned Apple Silicon (`darwin/arm64`) archive. It contains the Go
+launcher, the exact native Linux payload built by the same workflow, locked
+Lima profiles/templates, the guest provisioner, checksums, and notices. It does
+not contain Lima, a hypervisor, a guest disk, or Cisco software.
+
+### Prerequisites and supported profiles
+
+Install and manage Lima separately; iolbox does not install, upgrade,
+reinstall, or remove it. Apple Silicon macOS and Rosetta are required. The
+default profile is Debian 13/trixie with the pinned `6.12.101+deb13-cloud-arm64`
+kernel. The qualified compatibility profile is Ubuntu 22.04/Jammy on the
+5.15 kernel line. Debian 12/bookworm is shipped as an unqualified candidate
+and remains refused while its image digest is unpinned.
+
+The archive runs the existing Linux supervisor/VPCS and **x86_64 IOL only**
+through Rosetta. i386/i86bi and arm64-native IOL are unsupported; the GUI may
+keep unsupported ELF32 images visible for inventory while disabling their
+start-related controls with the measured capability reason.
+
+### Checksum, download, and extract
+
+Use the same release tag for both files. For a published release, download
+from `https://github.com/rohan-punj/iolbox/releases/download/<tag>/`:
+
+```sh
+curl --fail --location -O \
+  https://github.com/rohan-punj/iolbox/releases/download/<tag>/iolbox-macos-arm64.tar.gz
+curl --fail --location -O \
+  https://github.com/rohan-punj/iolbox/releases/download/<tag>/iolbox-macos-arm64.tar.gz.sha256
+shasum -a 256 -c iolbox-macos-arm64.tar.gz.sha256
+mkdir extract
+tar -xzf iolbox-macos-arm64.tar.gz -C extract
+cd extract/iolbox-macos-arm64
+shasum -a 256 -c SHA256SUMS
+```
+
+The outer and internal SHA-256 files detect corruption or a changed download;
+because the artifact is unsigned, they do not authenticate the publisher.
+
+### Browser-versus-curl quarantine and Gatekeeper
+
+Qualification records the browser name/version, whether the browser
+auto-extracted the archive, and separate `xattr -l` plus
+`xattr -p com.apple.quarantine` output and exit status for the downloaded
+archive, extracted directory, and `iolbox` binary. The browser and curl paths
+are independent observations: an attribute may be present on one path and
+absent on the other. An absent attribute is recorded, not manufactured and not
+treated as proof that a different path was quarantined.
+
+Before first run, inspect the actual files:
+
+```sh
+xattr -l /path/to/iolbox-macos-arm64.tar.gz || true
+xattr -p com.apple.quarantine /path/to/iolbox-macos-arm64.tar.gz; echo "archive xattr exit=$?"
+xattr -l .; echo "directory xattr exit=$?"
+xattr -p com.apple.quarantine ./iolbox; echo "binary xattr exit=$?"
+```
+
+After the checksum checks, if and only if the binary actually has
+`com.apple.quarantine`, remove that attribute from that binary only:
+
+```sh
+xattr -d com.apple.quarantine ./iolbox
+```
+
+No `sudo`, recursive home-directory cleanup, automatic quarantine mutation,
+Gatekeeper disablement, or `spctl --master-disable` is part of iolbox. If the
+real browser flow succeeds through a narrower Finder/Gatekeeper consent action
+instead, the release record and this procedure must be updated before
+publication; do not substitute an unexecuted workaround.
+
+### Start, data, upgrade, and uninstall
+
+From the extracted directory, the documented first command is:
+
+```sh
+./iolbox start
+```
+
+The launcher creates or reuses the durable named Lima machine
+`iolbox-debian13`, runs the VZ/Rosetta canary and provisioning checks, and
+serves the GUI at `http://127.0.0.1:4001`. The GUI, console, and capture
+forwards are loopback-only and have no authentication. Host data defaults to:
+
+```text
+~/Library/Application Support/iolbox/images
+~/Library/Application Support/iolbox/labs
+```
+
+Run `./iolbox upgrade` from a later extracted release to replace the guest
+payload while preserving the Lima machine, host images/labs, host identity and
+license, and pinned guest kernel. Run `./iolbox stop` to stop the guest; it is
+not deletion. Removing the extracted launcher directory is ordinary,
+non-destructive uninstall and leaves the stopped VM and data intact.
+
+An optional destructive reset is a separate, warned operation: after stopping,
+delete only the named `iolbox-debian13` Lima machine and move only the two
+named iolbox data paths plus the launcher attestation to unique Trash names,
+after literal path/existence/status checks. Do not use a glob, `rm -rf`, or a
+broad `.lima`/`.iolbox` move. This reset is recoverable from Trash where the
+host permits it and is not ordinary uninstall.
+
+### Sizing and security
+
+The shipped profiles request 4 vCPUs, 4 GiB memory, and a 15 GiB guest disk.
+An 8 GB Mac may need other reusable Lima machines stopped for headroom; do not
+delete them or touch `iol22` without a separate owner decision. Lima fetches
+the pinned guest image and apt packages at provisioning time; they are not in
+the archive.
+
+The GUI has no authentication. Keep every GUI/console/capture forward on
+loopback or use an explicitly secured tunnel. Do not expose it on a LAN.
 
 `iolbox-launcher diagnose` reports measured `guest_arch`, `execution`,
 `guest_kernel`, `canary_verdict`, `service`, `http`, `hello`, and
 `capability_policy` predicates. Values read from the host structural file are
 labelled `last attested`; they are not live guest measurements.
+
+**It worked if:** `./iolbox start` exits successfully, the named Lima machine
+is running, the live canary is PASS, `./iolbox status` and `./iolbox diagnose`
+report readiness, and `http://127.0.0.1:4001` renders the GUI.
