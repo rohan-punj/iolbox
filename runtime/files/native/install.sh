@@ -191,8 +191,39 @@ install -d -m 0755 "$PREFIX/labs"
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/supervisor" "$PREFIX/supervisor"
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/vpcs" "$PREFIX/vpcs"
 
+# iolbox-toollaunch's path is hardcoded in the supervisor (launchNativePath,
+# internal/tool/launch.go) to /opt/iolbox/iolbox-toollaunch — it only lands
+# there correctly when --prefix is left at the default.
+install -m 0755 -o root -g root "$SCRIPT_DIR/bin/iolbox-toollaunch" "$PREFIX/iolbox-toollaunch"
+
 install -m 0755 -o root -g root "$SCRIPT_DIR/opt-iolbox/firstboot-iourc.sh" "$PREFIX/firstboot-iourc.sh"
 install -m 0755 -o root -g root "$SCRIPT_DIR/opt-iolbox/prestart-clean.sh" "$PREFIX/prestart-clean.sh"
+
+# Tool packs (kind=="pc" netprobe + kind=="tool" learning-tool nodes). The
+# supervisor discovers these under $PREFIX/tools/packs by default
+# (ToolPacksDir in internal/server/server.go); without them those node
+# kinds fail to boot even though IOL/VPCS nodes work fine.
+echo "install.sh: installing tool packs"
+install -d -m 0755 -o root -g root "$PREFIX/tools"
+install -d -m 0755 -o root -g root "$PREFIX/tools/packs"
+for pack_dir in "$SCRIPT_DIR"/tools/packs/*/; do
+    pack="$(basename "$pack_dir")"
+    install -d -m 0755 -o root -g root "$PREFIX/tools/packs/$pack"
+    cp -a "$pack_dir." "$PREFIX/tools/packs/$pack/"
+    chown -R root:root "$PREFIX/tools/packs/$pack"
+done
+
+# pack GUIs run as the unprivileged "ioltool" account (T0.5's proven tool
+# boundary); iolbox-toollaunch drops from root to this user right before
+# exec'ing the pack binary. Same useradd invocation build-rootfs.sh runs
+# inside the appliance rootfs, made idempotent for re-installs/upgrades.
+if ! id -u ioltool >/dev/null 2>&1; then
+    echo "install.sh: creating ioltool system account"
+    NOLOGIN_SHELL="/usr/sbin/nologin"
+    [ -x "$NOLOGIN_SHELL" ] || NOLOGIN_SHELL="/sbin/nologin"
+    [ -x "$NOLOGIN_SHELL" ] || NOLOGIN_SHELL="/bin/false"
+    useradd -r -M -s "$NOLOGIN_SHELL" ioltool
+fi
 
 echo "install.sh: installing systemd units"
 install -m 0644 "$SCRIPT_DIR/systemd/iolbox-supervisor.service" \

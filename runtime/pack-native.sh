@@ -7,8 +7,10 @@
 #
 # Unlike pack-wsl.sh/pack-vmware.sh, this does NOT consume the debootstrap
 # rootfs from build-rootfs.sh — a native install runs on the OPERATOR's own
-# distro, whatever it already has, so this script only needs the two
-# binaries (supervisor, vpcs) plus the support files under
+# distro, whatever it already has, so this script only needs the supervisor
+# and vpcs binaries, the tool-pack GUIs (built here, the same way
+# build-rootfs.sh builds them — see that script's Stage 1), the
+# iolbox-toollaunch helper, plus the support files under
 # runtime/files/{,native/}. No root required to run this script.
 #
 # Output: runtime/build/iolbox-server-<version>.tar.gz
@@ -31,6 +33,23 @@ SUPERVISOR_BIN=""
 VPCS_BIN_DEFAULT="$BUILD_DIR/vpcs/vpcs"     # fetch-vpcs.sh's output path
 VPCS_BIN=""
 OUT_DIR="$BUILD_DIR"
+
+# Tool-pack GUIs + iolbox-toollaunch: these are what let kind=="pc" (the
+# built-in netprobe virtual PC) and kind=="tool" nodes boot at all — see
+# supervisor/internal/server/toolpacks.go and internal/tool/launch.go
+# (launchNativePath is hardcoded to /opt/iolbox/iolbox-toollaunch). They
+# are plain stdlib-only Go binaries with no debootstrap/root dependency,
+# so this script builds them itself rather than requiring build-rootfs.sh
+# to have run first.
+TOOLLAUNCH_SOURCE="$SCRIPT_DIR/../tools/iolbox-toollaunch"
+TOOLLAUNCH_BIN="$BUILD_DIR/iolbox-toollaunch"
+SECBENCH_GUI_BIN="$BUILD_DIR/secbench-gui"
+SECBENCH_ATTACKS_SRC="$SCRIPT_DIR/../tools/secbench-attacks-go"
+SECBENCH_BIN_STAGE="$BUILD_DIR/secbench-bin"
+# P3 network-tool packs, same set build-rootfs.sh builds/installs. "pc" is
+# the netprobe virtual PC (kind=="pc" in the lab schema); the others are
+# kind=="tool" learning-tool nodes.
+TOOL_PACKS="aaa webserver httpclient syslog netsvc pc"
 
 usage() {
     cat <<EOF
@@ -136,11 +155,57 @@ for f in \
     "$NATIVE_DIR/10-bind.conf.tmpl" \
     "$NATIVE_DIR/iolbox-bind.env.local" \
     "$NATIVE_DIR/iolbox-bind.env.all" \
+    "$FILES_DIR/tools/packs/secbench/pack.json" \
     ; do
     if [ ! -f "$f" ]; then
         echo "pack-native: required source file missing: $f" >&2
         exit 1
     fi
+done
+for pack in $TOOL_PACKS; do
+    if [ ! -f "$FILES_DIR/tools/packs/$pack/pack.json" ]; then
+        echo "pack-native: required source file missing: $FILES_DIR/tools/packs/$pack/pack.json" >&2
+        exit 1
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Build the tool-pack GUIs + iolbox-toollaunch helper
+# ---------------------------------------------------------------------------
+# Same build as build-rootfs.sh's Stage 1 (see that script for the fuller
+# go vet/go test gate used in the release pipeline); kept lighter here since
+# this script is also meant to be runnable standalone by an operator who
+# just wants a native install.
+echo "== pack-native: building tool launch helper (linux/amd64) =="
+(
+    cd "$TOOLLAUNCH_SOURCE"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$TOOLLAUNCH_BIN" .
+)
+
+echo "== pack-native: building secbench pack GUI (linux/amd64) =="
+(
+    cd "$FILES_DIR/tools/packs/secbench/gui"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$SECBENCH_GUI_BIN" .
+)
+
+echo "== pack-native: building secbench attack binaries (linux/amd64) =="
+rm -rf "$SECBENCH_BIN_STAGE"; mkdir -p "$SECBENCH_BIN_STAGE"
+(
+    cd "$SECBENCH_ATTACKS_SRC"
+    for d in cmd/*/; do
+        key="$(basename "$d")"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -o "$SECBENCH_BIN_STAGE/$key" "./$d"
+    done
+)
+
+for pack in $TOOL_PACKS; do
+    echo "== pack-native: building $pack pack GUI (linux/amd64) =="
+    (
+        cd "$FILES_DIR/tools/packs/$pack/gui"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -o "$BUILD_DIR/$pack-gui" .
+    )
 done
 
 # ---------------------------------------------------------------------------
@@ -156,11 +221,35 @@ install -d -m 0755 "$STAGE_DIR/bin"
 install -d -m 0755 "$STAGE_DIR/opt-iolbox"
 install -d -m 0755 "$STAGE_DIR/systemd"
 install -d -m 0755 "$STAGE_DIR/etc"
+install -d -m 0755 "$STAGE_DIR/tools/packs"
 
 # Binaries — 0755 (a 0644 supervisor binary fails fork/exec; see
 # runtime/build-rootfs.sh's install invocation and install.sh's comment).
 install -m 0755 "$SUPERVISOR_BIN" "$STAGE_DIR/bin/supervisor"
 install -m 0755 "$VPCS_BIN" "$STAGE_DIR/bin/vpcs"
+install -m 0755 "$TOOLLAUNCH_BIN" "$STAGE_DIR/bin/iolbox-toollaunch"
+
+# Tool packs: without these, every kind=="pc" (netprobe) and kind=="tool"
+# node has no GUI/service binary to launch and fails to boot, even though
+# the supervisor itself starts fine (toolpacksLoad only logs a warning when
+# the packs dir is empty/missing — see internal/server/toolpacks.go).
+install -d -m 0755 "$STAGE_DIR/tools/packs/secbench"
+install -d -m 0755 "$STAGE_DIR/tools/packs/secbench/bin"
+install -m 0644 "$FILES_DIR/tools/packs/secbench/pack.json" \
+    "$STAGE_DIR/tools/packs/secbench/pack.json"
+install -m 0755 "$SECBENCH_GUI_BIN" \
+    "$STAGE_DIR/tools/packs/secbench/secbench-gui"
+for bin in "$SECBENCH_BIN_STAGE"/*; do
+    install -m 0755 "$bin" \
+        "$STAGE_DIR/tools/packs/secbench/bin/$(basename "$bin")"
+done
+for pack in $TOOL_PACKS; do
+    install -d -m 0755 "$STAGE_DIR/tools/packs/$pack"
+    install -m 0644 "$FILES_DIR/tools/packs/$pack/pack.json" \
+        "$STAGE_DIR/tools/packs/$pack/pack.json"
+    install -m 0755 "$BUILD_DIR/$pack-gui" \
+        "$STAGE_DIR/tools/packs/$pack/$pack-gui"
+done
 
 # Reused verbatim from runtime/files/ — same scripts the WSL/VMware rootfs
 # ships, no VMware-specific path assumptions in either (both are plain
