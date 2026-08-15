@@ -152,8 +152,8 @@ func Launch(spec LaunchSpec) (*exec.Cmd, error) {
 		mode = "native"
 	}
 
-	inner := launchTransitionArgv(mode, spec, !useCgroupFD)
-	cmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, inner), useCgroupFD)
+	inner := launchTransitionArgv(mode, spec, !useCgroupFD, -1)
+	cmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, inner), useCgroupFD, nil)
 	// StartAndAdd holds the registry lock across the fork+exec and the PID
 	// registration: this direct child is owned by its caller's cmd.Wait, not by
 	// the supervisor subreaper loop, and the loop must not be able to observe it
@@ -164,19 +164,37 @@ func Launch(spec LaunchSpec) (*exec.Cmd, error) {
 		return nil, fmt.Errorf("tool: start %s launcher: %w", mode, err)
 	} else {
 		firstErr := err
-		// A failed UseCgroupFD start can mean an older kernel or an unavailable
-		// fd placement path. Do not attempt a Go-side cgroup.procs write: Go
-		// offers no safe arbitrary pre-exec hook from its threaded runtime.
-		// Retry only through the native helper, which writes its own pid to
-		// --cgroup while root and before its privilege transition/final execve.
-		// An un-caged setpriv retry is forbidden because limits must bind before
-		// the target can allocate.
-		if spec.CgroupPath == "" {
-			return nil, fmt.Errorf("tool: cgroup-fd launch failed: %w; native fallback requires cgroup path", firstErr)
+		// A failed UseCgroupFD start can mean an older kernel, an unavailable
+		// fd placement path, or (proven on real Apple Silicon hardware, where
+		// clone3's CLONE_INTO_CGROUP does not take effect through this
+		// process's Rosetta-translated syscalls) a host whose clone3 simply
+		// never places the child despite returning success upstream. Do not
+		// attempt a Go-side cgroup.procs write: Go offers no safe arbitrary
+		// pre-exec hook from its threaded runtime. Retry only through the
+		// native helper, which writes its own pid while still root and before
+		// its privilege transition/final execve. Prefer handing it the same
+		// already-open cgroup dir fd (via ExtraFiles + --cgroup-fd): this
+		// process runs wrapped in `ip netns exec`, whose fresh mount
+		// namespace for /sys hides any cgroup2 path from the parent
+		// namespace, so a path-based --cgroup write reliably fails "no such
+		// file or directory" for a directory that plainly exists. The fd
+		// route has no such problem — it resolves via the fd table, not a
+		// path lookup. Fall back to the path only if no fd was ever opened.
+		// An un-caged setpriv retry is forbidden because limits must bind
+		// before the target can allocate.
+		if spec.CgroupFD == nil && spec.CgroupPath == "" {
+			return nil, fmt.Errorf("tool: cgroup-fd launch failed: %w; native fallback requires a cgroup fd or path", firstErr)
 		}
 		mode = "native"
-		fallback := launchTransitionArgv(mode, spec, true)
-		fallbackCmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, fallback), false)
+		var fallback []string
+		var fallbackExtraFD *os.File
+		if spec.CgroupFD != nil {
+			fallback = launchTransitionArgv(mode, spec, true, 3)
+			fallbackExtraFD = spec.CgroupFD
+		} else {
+			fallback = launchTransitionArgv(mode, spec, true, -1)
+		}
+		fallbackCmd := launchBuildCommand(spec, NetnsExecArgs(spec.NodeID, fallback), false, fallbackExtraFD)
 		// The fallback registers under the same lock for the same reason;
 		// cmd.Wait owns this direct child's status from this point onward.
 		if fallbackErr := Registry.StartAndAdd(fallbackCmd.Start, func() int { return fallbackCmd.Process.Pid }); fallbackErr != nil {
@@ -188,16 +206,23 @@ func Launch(spec LaunchSpec) (*exec.Cmd, error) {
 
 // launchTransitionArgv chooses only the transition portion; namespace entry
 // is assembled by Launch through the shared NetnsExecArgs contract.
-func launchTransitionArgv(mode string, spec LaunchSpec, withCgroup bool) []string {
+// cgroupFDArg is forwarded to launchNativeArgv unchanged (-1 for path-based
+// or no-cgroup); it has no effect on the setpriv mode, which never carries a
+// cgroup flag of its own (see Launch: setpriv is only selected when
+// useCgroupFD placed the process before exec, via SysProcAttr).
+func launchTransitionArgv(mode string, spec LaunchSpec, withCgroup bool, cgroupFDArg int) []string {
 	if mode == "native" {
-		return launchNativeArgv(spec, withCgroup)
+		return launchNativeArgv(spec, withCgroup, cgroupFDArg)
 	}
 	return launchSetprivArgv(spec)
 }
 
 // launchBuildCommand keeps process attributes identical for setpriv and the
 // native fallback, including a private process group for bounded shutdown.
-func launchBuildCommand(spec LaunchSpec, argv []string, useCgroupFD bool) *exec.Cmd {
+// extraCgroupFD, when non-nil, is inherited by the child as the lowest
+// available fd (ExtraFiles start at 3) so the native helper can join the
+// cgroup via /proc/self/fd/N instead of a path lookup — see launchNativeArgv.
+func launchBuildCommand(spec LaunchSpec, argv []string, useCgroupFD bool, extraCgroupFD *os.File) *exec.Cmd {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = ScrubEnv(launchEnvMap(spec.Env))
 	cmd.Dir = spec.WorkDir
@@ -207,6 +232,9 @@ func launchBuildCommand(spec LaunchSpec, argv []string, useCgroupFD bool) *exec.
 		procAttr.UseCgroupFD = true
 	}
 	cmd.SysProcAttr = procAttr
+	if extraCgroupFD != nil {
+		cmd.ExtraFiles = []*os.File{extraCgroupFD}
+	}
 	return cmd
 }
 

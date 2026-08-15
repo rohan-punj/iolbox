@@ -2,6 +2,7 @@ package tool
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -113,9 +114,18 @@ func launchSetprivArgv(spec LaunchSpec) []string {
 // launchNativeArgv builds the standalone helper invocation. The helper must
 // see --cgroup before the transition flags so it can place itself while still
 // root; after the separator, the target receives the exact requested argv.
-func launchNativeArgv(spec LaunchSpec, withCgroup bool) []string {
+// cgroupFDArg is the fd number inherited via cmd.ExtraFiles, or -1 to fall
+// back to a path-based --cgroup PATH. FD-based placement is strongly
+// preferred whenever a cgroup dir fd is available (see Launch's fallback
+// branch in launch_linux.go for why: a path lookup breaks once this process
+// is wrapped in `ip netns exec`, whose fresh mount namespace hides the
+// parent's cgroup2 view; an inherited fd does not have that problem).
+func launchNativeArgv(spec LaunchSpec, withCgroup bool, cgroupFDArg int) []string {
 	argv := []string{launchNativePath}
-	if withCgroup {
+	switch {
+	case withCgroup && cgroupFDArg >= 0:
+		argv = append(argv, "--cgroup-fd", strconv.Itoa(cgroupFDArg))
+	case withCgroup:
 		argv = append(argv, "--cgroup", spec.CgroupPath)
 	}
 	argv = append(argv, "--user", "ioltool", "--caps", capListValue(spec.AmbientCaps), "--", spec.Binary)

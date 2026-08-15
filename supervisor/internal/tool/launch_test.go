@@ -84,7 +84,29 @@ func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 		"--user", "ioltool", "--caps", "cap_net_raw", "--",
 		"/opt/pack/tool", "--serve",
 	}
-	if got := launchNativeArgv(spec, true); !reflect.DeepEqual(got, want) {
+	if got := launchNativeArgv(spec, true, -1); !reflect.DeepEqual(got, want) {
+		t.Fatalf("native argv = %#v, want %#v", got, want)
+	}
+}
+
+// TestLaunchNativeArgvWithCgroupFD covers the fd-based placement path taken
+// whenever a cgroup dir fd is available (the normal case in production —
+// see Launch's fallback branch for why path-based --cgroup is unreliable
+// once this process is wrapped in `ip netns exec`).
+func TestLaunchNativeArgvWithCgroupFD(t *testing.T) {
+	spec := LaunchSpec{
+		CgroupPath:  "/sys/fs/cgroup/tool-7",
+		Binary:      "/opt/pack/tool",
+		Args:        []string{"--serve"},
+		AmbientCaps: []string{"NET_RAW"},
+	}
+	want := []string{
+		"/opt/iolbox/iolbox-toollaunch",
+		"--cgroup-fd", "3",
+		"--user", "ioltool", "--caps", "cap_net_raw", "--",
+		"/opt/pack/tool", "--serve",
+	}
+	if got := launchNativeArgv(spec, true, 3); !reflect.DeepEqual(got, want) {
 		t.Fatalf("native argv = %#v, want %#v", got, want)
 	}
 }
@@ -93,7 +115,7 @@ func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 // two-capability pack as TestLaunchSetprivArgvMultiCap.
 func TestLaunchNativeArgvMultiCap(t *testing.T) {
 	spec := LaunchSpec{Binary: "/opt/pack/pc-gui", AmbientCaps: []string{"NET_RAW", "NET_ADMIN"}}
-	got := launchNativeArgv(spec, false)
+	got := launchNativeArgv(spec, false, -1)
 	if !launchContainsInOrder(got, "--caps", "cap_net_raw,cap_net_admin") {
 		t.Fatalf("native argv %#v missing --caps cap_net_raw,cap_net_admin", got)
 	}
