@@ -17,8 +17,8 @@ target) on `noble-builder-vm` (192.168.226.10), the project's existing
 Ubuntu 24.04 build box, owner-directed for this specific check. Full
 per-criterion evidence in `docs/macos-m5-result.md` §1–4.
 
-**M5 is not merged anywhere and nothing has been committed** — see §7 below
-for exactly what's uncommitted. "PASS" here means the acceptance criteria are
+**M5 is committed (`cf19f2f` on `luna/macos-m5-honest-caps`) but not merged
+anywhere** — see §7 below. "PASS" here means the acceptance criteria are
 proven, not that the branch has landed.
 
 ---
@@ -165,14 +165,34 @@ of each.
 - Same SSH-from-Windows access pattern as prior sessions worked fine here:
   `ssh -i "J:\Claude code\iolab-m5-wt\.m5-ssh\iolbox_mac_m0"
   rohansharma@192.168.101.166`.
-- `git status` on this worktree shows a large uncommitted diff spanning both
-  Luna's implementation and this session's two Svelte fixes, plus build
-  byproducts (`supervisor/internal/web/dist/*`, `.m5-go-cache/`,
-  `tools/.m5-build/`, `tools/tools/`). None of this has been committed —
-  the owner should decide the commit/squash shape before merging anywhere.
-- `supervisor/internal/web/dist/index.html` etc. being modified in `git
-  status` is expected: it's the tracked placeholder that gets overwritten by
-  `npm run build:embed` and is meant to be restored by `build-release.sh`'s
-  own placeholder-restore step for a real release build — this session did
-  not run that restore since no release build was being produced, only
-  focused hardware-test binaries.
+- Luna's implementation and both continuation sessions' fixes (the two Svelte
+  defects, `docs/macos-m5-result.md`, `docs/macos-m5-handoff.md`) are all in
+  a single commit, `cf19f2f` on `luna/macos-m5-honest-caps` — the owner
+  committed it directly rather than splitting it into separate commits. Note
+  its message body still reads as if criterion 2 were unattempted/blocked;
+  that text predates the criterion-2 closure and was left as-is by owner
+  choice. Trust the committed *files* (this doc, the result doc) over the
+  commit message's prose for current status. The owner should still decide
+  the squash/rebase shape before merging this branch anywhere.
+- Local build byproducts generated while working this branch
+  (`.m5-go-cache/`, `tools/.m5-build/`, `tools/tools/`) were never tracked
+  and have been deleted from the worktree — they aren't part of the commit.
+- **`supervisor/internal/web/dist/index.html` is currently NOT the
+  placeholder — it's the real built `index.html` from this work's last
+  `npm run build:embed`, and it is committed in `cf19f2f`.** Verified:
+  `git show HEAD:supervisor/internal/web/dist/index.html` now shows a real
+  `<script type="module" src="/assets/index-BpZ2-fiG.js">` reference, not
+  the "iolbox GUI not bundled in this build" placeholder every prior commit
+  had. `.gitignore` excludes everything else under `dist/` (`/supervisor/
+  internal/web/dist/*` with `!.../index.html` as the one exception), so the
+  actual `index-BpZ2-fiG.js`/`.css` assets that `index.html` now points at
+  were **never committed** — they only exist in build output on whichever
+  machine last ran `npm run build:embed`. **A fresh checkout of this branch
+  has a `dist/index.html` referencing JS/CSS files that don't exist in the
+  repo.** `build-release.sh`'s own placeholder-restore step (meant to
+  prevent exactly this) was not run because this work was producing focused
+  hardware-test binaries, not a release build. Before cutting any release
+  build from this branch, either restore `index.html` to the placeholder
+  (check out its version from `0f6f5d5` or earlier) or re-run
+  `npm run build:embed` fresh so `index.html` and its assets are
+  regenerated together and stay consistent.
