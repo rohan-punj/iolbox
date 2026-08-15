@@ -18,6 +18,8 @@
   const node = $derived(labStore.lab.nodes.find((n) => n.id === nodeId));
 
   async function pick(imageId: string) {
+    const img = labStore.images.find((candidate) => candidate.id === imageId);
+    if (img && !labStore.imageSupport(img).supported) return;
     await labStore.setNodeImage(nodeId, imageId);
     onClose();
   }
@@ -29,9 +31,11 @@
   <div class="title">Change image — {node?.name}</div>
   <div class="list">
     {#each labStore.images as img (img.id)}
-      <button class="row" class:active={node?.image?.id === img.id} onclick={() => pick(img.id)}>
+      {@const support = labStore.imageSupport(img)}
+      <button class="row" class:active={node?.image?.id === img.id} disabled={!support.supported} title={support.reason ?? img.filename} onclick={() => pick(img.id)}>
         <span class="badge" class:l2={img.class === "l2"}>{img.class.toUpperCase()}</span>
         <span class="fname">{img.filename}</span>
+        {#if !support.supported}<span class="unsupported">Unsupported</span>{/if}
       </button>
     {/each}
     {#if labStore.images.length === 0}

@@ -440,3 +440,17 @@ reports "GUI is up".
   the equivalent per-target regeneration steps (delete the generated
   `iourc` and restart the `iolbox-firstboot-iourc` unit, then the
   supervisor).
+
+## Apple Silicon macOS (Lima)
+
+The macOS launcher provisions an arm64 Linux guest and runs the x86_64
+supervisor/IOL payload through Lima Rosetta. A qualified Apple Silicon guest
+omits `i386` from `hello.features`; the GUI keeps ELF32 images visible for
+inventory but disables their palette, picker, replacement, and start controls
+with the measured capability reason. x86_64 IOL images remain supported. The
+supervisor's `arch` field describes the guest/runtime, not the IOL ELF.
+
+`iolbox-launcher diagnose` reports measured `guest_arch`, `execution`,
+`guest_kernel`, `canary_verdict`, `service`, `http`, `hello`, and
+`capability_policy` predicates. Values read from the host structural file are
+labelled `last attested`; they are not live guest measurements.

@@ -109,6 +109,20 @@ The GUI port is configurable with `IOLBOX_M4_GUI_PORT` or the orchestrator's
 use `IOLBOX_GUI_PORT` for both socket and `GET /` readiness; it must not rely
 on the default `4001` by coincidence.
 
+## Apple Silicon M5 capability policy
+
+On a qualified arm64 Lima guest, the supervisor drop-in sets
+`IOLBOX_DISABLE_I386=1` after the Rosetta loader canary passes. The hello
+handshake then omits `i386`; no extra hello architecture field is used. The
+GUI uses that one feature signal, so registered ELF32 images remain listed but
+cannot be placed or started, while x86_64 images remain available.
+
+Diagnostics keep these predicates separate: live guest architecture, Rosetta
+binfmt registration, and a live passing loader canary determine
+`execution=rosetta-amd64`; service, HTTP, hello, and capability-policy status
+are reported independently. A stopped machine shows unavailable values and
+labels host-mirrored evidence as last attested.
+
 ## Other flags
 
 Run `iolbox-launcher.exe -h` for the full list (`--backend`, `--mem`, `--smp`,

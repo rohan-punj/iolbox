@@ -30,6 +30,12 @@
       labStore.lab.nodes.find((n) => n.id === nodeId)?.kind ?? ""
     )
   );
+  // Unsupported IOL image (e.g. i386 on Apple Silicon): disable Start/Restart
+  // and surface the reason, mirroring the lab-level and context-menu guards.
+  const unsupportedReason = $derived.by(() => {
+    const node = labStore.lab.nodes.find((n) => n.id === nodeId);
+    return node && node.kind === "iol" ? labStore.nodeImageSupport(node).reason : undefined;
+  });
   let macPopover = $state<{ x: number; y: number } | null>(null);
 
   function start() {
@@ -65,7 +71,7 @@
     </span>
   {:else}
   {#if !isBusy}
-    <button class="na-btn" title="Start" aria-label="Start" onpointerdown={(e) => e.stopPropagation()} onclick={start}
+    <button class="na-btn" title={unsupportedReason ?? "Start"} aria-label="Start" disabled={!!unsupportedReason} onpointerdown={(e) => e.stopPropagation()} onclick={start}
       >{@html uiSvg("play", 12)}</button>
   {/if}
   {#if isBusy}
@@ -81,7 +87,7 @@
       >{@html uiSvg("net", 12)}</button>
   {/if}
   {#if isRunning}
-    <button class="na-btn" title="Restart" aria-label="Restart" onpointerdown={(e) => e.stopPropagation()} onclick={restart}
+    <button class="na-btn" title={unsupportedReason ?? "Restart"} aria-label="Restart" disabled={!!unsupportedReason} onpointerdown={(e) => e.stopPropagation()} onclick={restart}
       >{@html uiSvg("reset", 12)}</button>
   {/if}
   {#if isRunning && isIol}

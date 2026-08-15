@@ -11,6 +11,7 @@ import (
 
 const (
 	defaultDarwinGUIPort = 4001
+	darwinGUIGuestPort   = 4001
 	darwinControlPort    = 4000
 	darwinConsoleStart   = 9000
 	darwinConsoleEnd     = 9049
@@ -22,16 +23,28 @@ const (
 // and capture ranges are deliberately fixed: their allocators must agree with
 // the guest and with the browser-visible port facts.
 type darwinPortContract struct {
-	GUIPort int
+	GUIPort          int
+	ConsoleHostStart int
+	CaptureHostStart int
 }
 
 type darwinPortForwardRule map[string]string
 
 func newDarwinPortContract(guiPort int) (darwinPortContract, error) {
+	return newDarwinPortContractWithRanges(guiPort, darwinConsoleStart, darwinCaptureStart)
+}
+
+func newDarwinPortContractWithRanges(guiPort, consoleHostStart, captureHostStart int) (darwinPortContract, error) {
 	if guiPort == 0 {
 		guiPort = defaultDarwinGUIPort
 	}
-	contract := darwinPortContract{GUIPort: guiPort}
+	if consoleHostStart == 0 {
+		consoleHostStart = darwinConsoleStart
+	}
+	if captureHostStart == 0 {
+		captureHostStart = darwinCaptureStart
+	}
+	contract := darwinPortContract{GUIPort: guiPort, ConsoleHostStart: consoleHostStart, CaptureHostStart: captureHostStart}
 	if err := contract.validate(); err != nil {
 		return darwinPortContract{}, err
 	}
@@ -45,11 +58,22 @@ func (p darwinPortContract) validate() error {
 	if p.GUIPort == darwinControlPort {
 		return fmt.Errorf("Darwin GUI port %d is reserved for the guest-only control listener", darwinControlPort)
 	}
-	if p.GUIPort >= darwinConsoleStart && p.GUIPort <= darwinConsoleEnd {
-		return fmt.Errorf("Darwin GUI port %d overlaps the console range %d-%d", p.GUIPort, darwinConsoleStart, darwinConsoleEnd)
+	consoleEnd := p.ConsoleHostStart + darwinConsoleEnd - darwinConsoleStart
+	captureEnd := p.CaptureHostStart + darwinCaptureEnd - darwinCaptureStart
+	if p.ConsoleHostStart < 1 || consoleEnd > 65535 {
+		return fmt.Errorf("Darwin console host range %d-%d is invalid", p.ConsoleHostStart, consoleEnd)
 	}
-	if p.GUIPort >= darwinCaptureStart && p.GUIPort <= darwinCaptureEnd {
-		return fmt.Errorf("Darwin GUI port %d overlaps the capture range %d-%d", p.GUIPort, darwinCaptureStart, darwinCaptureEnd)
+	if p.CaptureHostStart < 1 || captureEnd > 65535 {
+		return fmt.Errorf("Darwin capture host range %d-%d is invalid", p.CaptureHostStart, captureEnd)
+	}
+	if p.GUIPort >= p.ConsoleHostStart && p.GUIPort <= consoleEnd {
+		return fmt.Errorf("Darwin GUI port %d overlaps the console range %d-%d", p.GUIPort, p.ConsoleHostStart, consoleEnd)
+	}
+	if p.GUIPort >= p.CaptureHostStart && p.GUIPort <= captureEnd {
+		return fmt.Errorf("Darwin GUI port %d overlaps the capture range %d-%d", p.GUIPort, p.CaptureHostStart, captureEnd)
+	}
+	if p.ConsoleHostStart <= captureEnd && p.CaptureHostStart <= consoleEnd {
+		return fmt.Errorf("Darwin console and capture host ranges overlap")
 	}
 	return nil
 }
@@ -59,10 +83,10 @@ func (p darwinPortContract) validate() error {
 // 81 host ports in the contract.
 func (p darwinPortContract) requiredPorts() []int {
 	ports := []int{p.GUIPort}
-	for port := darwinConsoleStart; port <= darwinConsoleEnd; port++ {
+	for port := p.ConsoleHostStart; port <= p.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart; port++ {
 		ports = append(ports, port)
 	}
-	for port := darwinCaptureStart; port <= darwinCaptureEnd; port++ {
+	for port := p.CaptureHostStart; port <= p.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart; port++ {
 		ports = append(ports, port)
 	}
 	return ports
@@ -86,9 +110,9 @@ func (p darwinPortContract) yamlPortForwards() string {
     guestPortRange: [1, 65535]
     proto: "any"
     ignore: true`,
-		p.GUIPort, p.GUIPort,
-		darwinConsoleStart, darwinConsoleEnd, darwinConsoleStart, darwinConsoleEnd,
-		darwinCaptureStart, darwinCaptureEnd, darwinCaptureStart, darwinCaptureEnd)
+		darwinGUIGuestPort, p.GUIPort,
+		darwinConsoleStart, darwinConsoleEnd, p.ConsoleHostStart, p.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart,
+		darwinCaptureStart, darwinCaptureEnd, p.CaptureHostStart, p.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart)
 }
 
 // limaSetExpression is the single YAML value passed to limactl start --set
@@ -97,9 +121,9 @@ func (p darwinPortContract) yamlPortForwards() string {
 // spaces elsewhere in the launcher command line.
 func (p darwinPortContract) limaSetExpression() string {
 	return fmt.Sprintf(`.portForwards=[{"guestPort": %d, "hostPort": %d, "hostIP": "127.0.0.1", "proto": "tcp"},{"guestPortRange": [%d,%d], "hostPortRange": [%d,%d], "hostIP": "127.0.0.1", "proto": "tcp"},{"guestPortRange": [%d,%d], "hostPortRange": [%d,%d], "hostIP": "127.0.0.1", "proto": "tcp"},{"guestIP": "127.0.0.1", "guestPortRange": [1,65535], "proto": "any", "ignore": true}]`,
-		p.GUIPort, p.GUIPort,
-		darwinConsoleStart, darwinConsoleEnd, darwinConsoleStart, darwinConsoleEnd,
-		darwinCaptureStart, darwinCaptureEnd, darwinCaptureStart, darwinCaptureEnd)
+		darwinGUIGuestPort, p.GUIPort,
+		darwinConsoleStart, darwinConsoleEnd, p.ConsoleHostStart, p.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart,
+		darwinCaptureStart, darwinCaptureEnd, p.CaptureHostStart, p.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart)
 }
 
 func (p darwinPortContract) limaStartSetArg() string {
@@ -108,10 +132,16 @@ func (p darwinPortContract) limaStartSetArg() string {
 }
 
 func expectedDarwinPortForwardRules(p darwinPortContract) []darwinPortForwardRule {
+	if p.ConsoleHostStart == 0 {
+		p.ConsoleHostStart = darwinConsoleStart
+	}
+	if p.CaptureHostStart == 0 {
+		p.CaptureHostStart = darwinCaptureStart
+	}
 	return []darwinPortForwardRule{
-		{"guestPort": strconv.Itoa(p.GUIPort), "hostPort": strconv.Itoa(p.GUIPort), "hostIP": "127.0.0.1", "proto": "tcp"},
-		{"guestPortRange": "[9000,9049]", "hostPortRange": "[9000,9049]", "hostIP": "127.0.0.1", "proto": "tcp"},
-		{"guestPortRange": "[5500,5529]", "hostPortRange": "[5500,5529]", "hostIP": "127.0.0.1", "proto": "tcp"},
+		{"guestPort": strconv.Itoa(darwinGUIGuestPort), "hostPort": strconv.Itoa(p.GUIPort), "hostIP": "127.0.0.1", "proto": "tcp"},
+		{"guestPortRange": "[9000,9049]", "hostPortRange": fmt.Sprintf("[%d,%d]", p.ConsoleHostStart, p.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart), "hostIP": "127.0.0.1", "proto": "tcp"},
+		{"guestPortRange": "[5500,5529]", "hostPortRange": fmt.Sprintf("[%d,%d]", p.CaptureHostStart, p.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart), "hostIP": "127.0.0.1", "proto": "tcp"},
 		{"guestIP": "127.0.0.1", "guestPortRange": "[1,65535]", "proto": "any", "ignore": "true"},
 	}
 }

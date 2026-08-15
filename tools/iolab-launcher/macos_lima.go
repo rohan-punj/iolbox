@@ -176,6 +176,10 @@ func renderTemplateForPort(template []byte, p macOSProfile, guiPort int) ([]byte
 		return nil, err
 	}
 	rendered := string(template)
+	// The supervisor's GUI listener remains fixed at the guest-side 4001
+	// socket.  IOLBOX_GUI_PORT is a host-side escape hatch for Macs where the
+	// default forwarding port is already occupied by another Lima machine.
+	rendered = strings.ReplaceAll(rendered, "guestPort: @IOLBOX_GUI_PORT@", fmt.Sprintf("guestPort: %d", darwinGUIGuestPort))
 	replacements := map[string]string{
 		"@IOLBOX_IMAGE_URL@":    p.ImageURL,
 		"@IOLBOX_IMAGE_DIGEST@": p.ImageDigest,

@@ -51,6 +51,7 @@ install_canary_drop_in() {
     printf '%s\n' \
         '[Service]' \
         '# Structural macOS/Lima gate: every boot, restart, crash-restart, and manual start runs the executable canary first.' \
+        'Environment=IOLBOX_DISABLE_I386=1' \
         'ExecStartPre=/opt/iolbox-provision/30-canary.sh --quiet' > "$drop_in_tmp"
     chmod 0644 -- "$drop_in_tmp" || die "$IOLBOX_EXIT_PREFLIGHT" \
         'could not set supervisor canary drop-in permissions'
@@ -77,6 +78,11 @@ verify_gated_unit() {
             "systemctl cat iolbox-supervisor.service failed: $unit_text"
     fi
     case "$unit_text" in
+        *'Environment=IOLBOX_DISABLE_I386=1'*) : ;;
+        *) die "$IOLBOX_EXIT_VERIFY" \
+            'systemctl cat does not show the honest Apple Silicon i386 capability policy' ;;
+    esac
+    case "$unit_text" in
         *"ExecStartPre=/opt/iolbox-provision/30-canary.sh --quiet"*) : ;;
         *) die "$IOLBOX_EXIT_VERIFY" \
             'systemctl cat does not show the required macOS canary ExecStartPre' ;;
@@ -90,10 +96,15 @@ verify_gated_unit() {
     # systemd orders every ExecStartPre before ExecStart regardless of the
     # backing-file concatenation order used by systemctl cat. Confirm the
     # effective properties as well as the human-auditable cat output.
-    if ! show_text="$(systemctl show iolbox-supervisor.service -p ExecStartPre -p ExecStart 2>&1)"; then
+    if ! show_text="$(systemctl show iolbox-supervisor.service -p Environment -p ExecStartPre -p ExecStart 2>&1)"; then
         die "$IOLBOX_EXIT_VERIFY" \
             "systemctl show of the gated supervisor failed: $show_text"
     fi
+    case "$show_text" in
+        *'Environment='*'IOLBOX_DISABLE_I386=1'*) : ;;
+        *) die "$IOLBOX_EXIT_VERIFY" \
+            'systemctl show does not expose the honest i386 capability policy' ;;
+    esac
     case "$show_text" in
         *'ExecStartPre='*'/opt/iolbox-provision/30-canary.sh --quiet'*) : ;;
         *) die "$IOLBOX_EXIT_VERIFY" \

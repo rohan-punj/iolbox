@@ -187,7 +187,10 @@ func guestEnvironment(p macOSProfile, facts hostFacts, limaVersion, machine, pay
 		"IOLBOX_PROVISION_DIR":      "/opt/iolbox-provision",
 		"IOLBOX_PAYLOAD_TARBALL":    "/opt/iolbox-provision/payload/" + payloadBase,
 		"IOLBOX_BIND":               bind,
-		"IOLBOX_GUI_PORT":           strconv.Itoa(guiPort),
+		// This is consumed inside the guest by the provisioning and verify
+		// scripts.  The host-side forwarding port is allowed to differ when
+		// another Lima machine owns 4001.
+		"IOLBOX_GUI_PORT": strconv.Itoa(darwinGUIGuestPort),
 	}
 }
 

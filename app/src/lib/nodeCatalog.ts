@@ -112,7 +112,8 @@ export function nodeCatalog(): CatalogEntry[] {
   for (const img of labStore.images) {
     const isL2 = img.class === "l2";
     const name = isL2 ? "Switch" : "Router";
-    const sub = `${img.class.toUpperCase()} · ${img.arch}`;
+    const support = labStore.imageSupport(img);
+    const sub = support.reason ?? `${img.class.toUpperCase()} · ${img.arch}`;
     entries.push({
       id: `iol:${img.id}`,
       group: "IOL images",
@@ -121,6 +122,7 @@ export function nodeCatalog(): CatalogEntry[] {
       icon: isL2 ? "switch" : "router",
       search: `${name} ${sub} ${img.filename} ${img.arch} ${img.class}`.toLowerCase(),
       drag: { kind: "iol", imageId: img.id },
+      disabled: support.reason,
     });
   }
 

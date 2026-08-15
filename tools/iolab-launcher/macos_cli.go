@@ -14,31 +14,35 @@ import (
 )
 
 type darwinOptions struct {
-	Command     string
-	Profile     string
-	Machine     string
-	AssetsDir   string
-	Limactl     string
-	Tarball     string
-	BootTimeout time.Duration
-	NoBrowser   bool
-	NoSync      bool
-	ImagesDir   string
-	LabsDir     string
-	Bind        string
-	GUIPort     int
+	Command          string
+	Profile          string
+	Machine          string
+	AssetsDir        string
+	Limactl          string
+	Tarball          string
+	BootTimeout      time.Duration
+	NoBrowser        bool
+	NoSync           bool
+	ImagesDir        string
+	LabsDir          string
+	Bind             string
+	GUIPort          int
+	ConsoleHostStart int
+	CaptureHostStart int
 }
 
 func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
 	opts := darwinOptions{
-		Command:     "start",
-		Profile:     os.Getenv("IOLBOX_PROFILE"),
-		Machine:     os.Getenv("IOLBOX_MACHINE"),
-		Limactl:     os.Getenv("LIMACTL"),
-		Tarball:     os.Getenv("IOLBOX_TARBALL"),
-		BootTimeout: 6 * time.Minute,
-		Bind:        os.Getenv("IOLBOX_BIND"),
-		GUIPort:     4001,
+		Command:          "start",
+		Profile:          os.Getenv("IOLBOX_PROFILE"),
+		Machine:          os.Getenv("IOLBOX_MACHINE"),
+		Limactl:          os.Getenv("LIMACTL"),
+		Tarball:          os.Getenv("IOLBOX_TARBALL"),
+		BootTimeout:      6 * time.Minute,
+		Bind:             os.Getenv("IOLBOX_BIND"),
+		GUIPort:          4001,
+		ConsoleHostStart: darwinConsoleStart,
+		CaptureHostStart: darwinCaptureStart,
 	}
 	if opts.Bind == "" {
 		opts.Bind = "all"
@@ -49,6 +53,21 @@ func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
 			return darwinOptions{}, fmt.Errorf("invalid IOLBOX_GUI_PORT %q", value)
 		}
 		opts.GUIPort = port
+	}
+	for _, setting := range []struct {
+		name string
+		dest *int
+	}{
+		{"IOLBOX_CONSOLE_HOST_START", &opts.ConsoleHostStart},
+		{"IOLBOX_CAPTURE_HOST_START", &opts.CaptureHostStart},
+	} {
+		if value := os.Getenv(setting.name); value != "" {
+			port, err := strconv.Atoi(value)
+			if err != nil || port < 1 || port > 65535 {
+				return darwinOptions{}, fmt.Errorf("invalid %s %q", setting.name, value)
+			}
+			*setting.dest = port
+		}
 	}
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		opts.Command = args[0]
@@ -70,13 +89,15 @@ func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
 	fs.BoolVar(&opts.NoSync, "no-sync", false, "disable macOS host folder sync")
 	fs.StringVar(&opts.ImagesDir, "images-dir", "", "override the macOS images folder")
 	fs.StringVar(&opts.LabsDir, "labs-dir", "", "override the macOS labs folder")
+	fs.IntVar(&opts.ConsoleHostStart, "console-host-start", opts.ConsoleHostStart, "host port for guest console range 9000-9049")
+	fs.IntVar(&opts.CaptureHostStart, "capture-host-start", opts.CaptureHostStart, "host port for guest capture range 5500-5529")
 	if err := fs.Parse(args); err != nil {
 		return darwinOptions{}, err
 	}
 	if fs.NArg() != 0 {
 		return darwinOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if _, err := newDarwinPortContract(opts.GUIPort); err != nil {
+	if _, err := newDarwinPortContractWithRanges(opts.GUIPort, opts.ConsoleHostStart, opts.CaptureHostStart); err != nil {
 		return darwinOptions{}, err
 	}
 	return opts, nil
@@ -192,7 +213,7 @@ func runDarwinCLI(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return exitCode(err)
 		}
-		ports, portErr := newDarwinPortContract(opts.GUIPort)
+		ports, portErr := newDarwinPortContractWithRanges(opts.GUIPort, opts.ConsoleHostStart, opts.CaptureHostStart)
 		if portErr != nil {
 			fmt.Fprintln(os.Stderr, portErr)
 			return exitUsage
@@ -243,9 +264,9 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 	}
 	state, exists := findMachine(machines, opts.Machine)
 	fmt.Println("iolbox status")
-	ports, portErr := newDarwinPortContract(opts.GUIPort)
+	ports, portErr := newDarwinPortContractWithRanges(opts.GUIPort, opts.ConsoleHostStart, opts.CaptureHostStart)
 	if portErr == nil {
-		fmt.Printf("  GUI port: 127.0.0.1:%d\n  console ports: 127.0.0.1:%d-%d\n  capture ports: 127.0.0.1:%d-%d\n  guest control port: not forwarded (127.0.0.1:%d host check)\n", ports.GUIPort, darwinConsoleStart, darwinConsoleEnd, darwinCaptureStart, darwinCaptureEnd, darwinControlPort)
+		fmt.Printf("  GUI port: 127.0.0.1:%d\n  console ports: 127.0.0.1:%d-%d\n  capture ports: 127.0.0.1:%d-%d\n  guest control port: not forwarded (127.0.0.1:%d host check)\n", ports.GUIPort, ports.ConsoleHostStart, ports.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart, ports.CaptureHostStart, ports.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart, darwinControlPort)
 	}
 	printDarwinSyncFacts(opts)
 	q := qualificationFor(table, profile.Name, facts.Product, facts.Build)
@@ -254,6 +275,18 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 	for _, line := range strings.Split(readCanaryState(opts.Machine), "\n") {
 		fmt.Println("    " + line)
 	}
+	var helloFn func() (helloResult, error)
+	if exists && strings.EqualFold(state, "running") {
+		helloFn = func() (helloResult, error) {
+			control, err := dialControlWS(fmt.Sprintf("127.0.0.1:%d", opts.GUIPort))
+			if err != nil {
+				return helloResult{}, err
+			}
+			defer control.Close()
+			return control.hello()
+		}
+	}
+	printDiagnosticSummary(os.Stdout, collectDarwinDiagnostics(context.Background(), client, opts.Machine, state, profile, facts, info, diagnosticsOptions{GUIPort: opts.GUIPort, hello: helloFn}))
 	if !exists || !strings.EqualFold(state, "running") {
 		fmt.Println("  guest kernel: unavailable (machine is not running)")
 		return exitOK
@@ -262,18 +295,18 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 	fmt.Println("  guest arch:", guestValue(context.Background(), client, opts.Machine, "uname", "-m"))
 	fmt.Println("  Rosetta binfmt:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "cat", "/proc/sys/fs/binfmt_misc/rosetta"))
 	fmt.Println("  supervisor service:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "systemctl", "is-active", "iolbox-supervisor.service"))
-	fmt.Println("  GET /:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "curl", "--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/", opts.GUIPort)))
+	fmt.Println("  GET /:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "curl", "--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/", darwinGUIGuestPort)))
 	return exitOK
 }
 
 func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts) int {
 	fmt.Println("iolbox diagnose")
-	if ports, err := newDarwinPortContract(opts.GUIPort); err == nil {
-		fmt.Printf("port contract: GUI=127.0.0.1:%d consoles=127.0.0.1:%d-%d captures=127.0.0.1:%d-%d guest-control=not-forwarded\n", ports.GUIPort, darwinConsoleStart, darwinConsoleEnd, darwinCaptureStart, darwinCaptureEnd)
+	if ports, err := newDarwinPortContractWithRanges(opts.GUIPort, opts.ConsoleHostStart, opts.CaptureHostStart); err == nil {
+		fmt.Printf("port contract: GUI=127.0.0.1:%d consoles=127.0.0.1:%d-%d captures=127.0.0.1:%d-%d guest-control=not-forwarded\n", ports.GUIPort, ports.ConsoleHostStart, ports.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart, ports.CaptureHostStart, ports.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart)
 	}
 	printDarwinSyncFacts(opts)
 	q := qualificationFor(table, profile.Name, facts.Product, facts.Build)
-	fmt.Printf("profile: %s (%s)\nguest: %s\nkernel pin: %s\nqualification: %s\nmacOS product/build: %s\nhost arch: %s\nexecution=rosetta-amd64\nguest_arch=aarch64\n", profile.Name, profile.Role, profile.GuestLabel, profile.ExpectedUnameR, q.String(), hostMACOSString(facts), facts.Arch)
+	fmt.Printf("profile: %s (%s)\nguest: %s\nkernel pin: %s\nqualification: %s\nmacOS product/build: %s\nhost arch: %s\n", profile.Name, profile.Role, profile.GuestLabel, profile.ExpectedUnameR, q.String(), hostMACOSString(facts), facts.Arch)
 	if facts.FreeDiskErr != nil {
 		fmt.Println("free disk: unavailable (", facts.FreeDiskErr, ")")
 	} else {
@@ -309,7 +342,7 @@ func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, f
 				fmt.Println("guest arch:", guestValue(context.Background(), client, opts.Machine, "uname", "-m"))
 				fmt.Println("Rosetta binfmt:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "cat", "/proc/sys/fs/binfmt_misc/rosetta"))
 				fmt.Println("supervisor service:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "systemctl", "is-active", "iolbox-supervisor.service"))
-				fmt.Println("GET /:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "curl", "--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/", opts.GUIPort)))
+				fmt.Println("GET /:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "curl", "--silent", "--show-error", "--output", "/dev/null", "--write-out", "%{http_code}", fmt.Sprintf("http://127.0.0.1:%d/", darwinGUIGuestPort)))
 				attestationPath, _ := hostAttestationPath(opts.Machine)
 				if err := requireAttestation(attestationPath, profile, facts, info.Version); err != nil {
 					fmt.Println("host attestation: INVALID (", err, ")")
@@ -339,6 +372,19 @@ func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, f
 			}
 		}
 	}
+	state, exists := findMachine(machines, opts.Machine)
+	var helloFn func() (helloResult, error)
+	if exists && strings.EqualFold(state, "running") {
+		helloFn = func() (helloResult, error) {
+			control, err := dialControlWS(fmt.Sprintf("127.0.0.1:%d", opts.GUIPort))
+			if err != nil {
+				return helloResult{}, err
+			}
+			defer control.Close()
+			return control.hello()
+		}
+	}
+	printDiagnosticSummary(os.Stdout, collectDarwinDiagnostics(context.Background(), client, opts.Machine, state, profile, facts, info, diagnosticsOptions{GUIPort: opts.GUIPort, hello: helloFn}))
 	printDiagnosticRemediation(opts.Machine)
 	return exitOK
 }

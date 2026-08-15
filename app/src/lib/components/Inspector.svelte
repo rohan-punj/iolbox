@@ -9,6 +9,7 @@
   const nodeState = $derived(node ? labStore.nodeStates[node.id] ?? "stopped" : "stopped");
   const running = $derived(nodeState === "running" || nodeState === "starting");
   const image = $derived(labStore.images.find((i) => i.id === node?.image?.id));
+  const imageSupport = $derived(image ? labStore.imageSupport(image) : { supported: true });
   const isIol = $derived(node?.kind === "iol");
   const isTool = $derived(node?.kind === "tool");
   const isPc = $derived(node?.kind === "pc");
@@ -159,12 +160,17 @@
             Change
           </button>
         </div>
+        {#if !imageSupport.supported}
+          <span class="warn" title={imageSupport.reason}>{imageSupport.reason}</span>
+        {/if}
         {#if showImagePicker}
           <div class="image-picker">
             {#each labStore.images as img (img.id)}
-              <button class="image-opt" onclick={() => changeImage(img.id)}>
+              {@const support = labStore.imageSupport(img)}
+              <button class="image-opt" disabled={!support.supported} title={support.reason ?? img.filename} onclick={() => changeImage(img.id)}>
                 <span class="badge" class:l2={img.class === "l2"}>{img.class.toUpperCase()}</span>
                 {img.filename}
+                {#if !support.supported}<span class="warn">Unsupported</span>{/if}
               </button>
             {/each}
           </div>

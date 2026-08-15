@@ -772,12 +772,15 @@
     // WS1: while an action is in flight on this node, disable sibling actions
     // (Console stays enabled — it's client-side, no WS).
     const locked = labStore.nodeLocks[nid] != null;
-    const isIol = labStore.lab.nodes.find((n) => n.id === nid)?.kind === "iol";
+    const targetNode = labStore.lab.nodes.find((n) => n.id === nid);
+    const isIol = targetNode?.kind === "iol";
+    const unsupportedReason = targetNode && isIol ? labStore.nodeImageSupport(targetNode).reason : undefined;
     return [
       {
         id: "node-start",
         label: "Start",
-        disabled: locked || nodeState === "running" || nodeState === "starting",
+        disabled: locked || nodeState === "running" || nodeState === "starting" || !!unsupportedReason,
+        title: unsupportedReason,
         action: () => void labStore.startNode(nid),
       },
       {
@@ -865,7 +868,15 @@
   function buildSelectionMenuItems(menu: { ids: number[] }): MenuItem[] {
     const ids = menu.ids;
     const stateOf = (id: number) => labStore.nodeStates[id] ?? "stopped";
-    const startable = ids.filter((id) => stateOf(id) !== "running" && stateOf(id) !== "starting");
+    const unsupportedReason = ids
+      .map((id) => labStore.lab.nodes.find((node) => node.id === id))
+      .map((node) => node && node.kind === "iol" ? labStore.nodeImageSupport(node).reason : undefined)
+      .find(Boolean);
+    const startable = ids.filter((id) => {
+      if (stateOf(id) === "running" || stateOf(id) === "starting") return false;
+      const node = labStore.lab.nodes.find((candidate) => candidate.id === id);
+      return !node || !labStore.nodeImageSupport(node).reason;
+    });
     const stoppable = ids.filter((id) => stateOf(id) === "running" || stateOf(id) === "starting");
     const running = ids.filter((id) => stateOf(id) === "running");
     // WS1: a bulk action is disabled when ANY selected node is mid-action.
@@ -877,6 +888,7 @@
         id: "selection-start",
         label: "Start",
         disabled: anyLocked || startable.length === 0,
+        title: unsupportedReason,
         action: () => {
           for (const id of startable) void labStore.startNode(id);
         },

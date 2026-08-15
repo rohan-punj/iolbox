@@ -19,6 +19,7 @@ lab_id='m1-hardware-two-router'
 lab_file=''
 image_id=''
 console_port=''
+console_boot_timeout="${IOLBOX_CONSOLE_BOOT_TIMEOUT:-180}"
 last_success=''
 ping_percent=''
 
@@ -586,7 +587,7 @@ run_ping_and_record() {
     local console_output
     [ -n "$console_port" ] || die 'R1 console port is missing'
     if ! console_output="$(printf '%s' "$CONSOLE_PING_PY" | $limactl_bin shell "$machine" \
-        sudo python3 - "$console_port" 180 2>&1)"; then
+        sudo python3 - "$console_port" "$console_boot_timeout" 2>&1)"; then
         printf '%s\n' "$console_output" > "$evidence_dir/r1-console.txt"
         die 'could not drive R1 console to a usable prompt'
     fi

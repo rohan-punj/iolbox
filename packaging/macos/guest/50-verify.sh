@@ -162,6 +162,40 @@ get_registered_image_count() {
     esac
 }
 
+verify_capability_hello() {
+    local request_id='macos-verify-hello' response
+
+    if ! exec 3<>/dev/tcp/127.0.0.1/4000; then
+        return 1
+    fi
+    if ! printf '%s\n' '{"id":"macos-verify-hello","op":"hello","args":{"client":"50-verify"}}' >&3; then
+        exec 3>&-
+        exec 3<&-
+        return 1
+    fi
+    response=''
+    while IFS= read -r -t 5 response <&3; do
+        case "$response" in
+            *'"id":"'"$request_id"'"'*) break ;;
+        esac
+    done
+    exec 3>&-
+    exec 3<&-
+    case "$response" in
+        *'"id":"'"$request_id"'"'*'"ok":true'*) : ;;
+        *) return 1 ;;
+    esac
+    case "$response" in
+        *'"arch":"x86_64"'*) : ;;
+        *) return 1 ;;
+    esac
+    case "$response" in
+        *'"features"'*'"i386"'*) return 1 ;;
+        *) : ;;
+    esac
+    capability_hello_line="$response"
+}
+
 get_image_cache_count() {
     if [ ! -f "$IOLBOX_IMAGE_CACHE_FILE" ]; then
         printf '0\n'
@@ -241,7 +275,7 @@ check_persistence() {
 
 main() {
     local persistence=0 kernel_series_value host_id iourc_value cache_count
-    local loader_output loader_line supervisor_version registered_images
+    local loader_output loader_line supervisor_version registered_images capability_hello_line
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -282,6 +316,11 @@ main() {
     fi
 
     verify_structural_attestation
+
+    if ! verify_capability_hello; then
+        die "$IOLBOX_EXIT_VERIFY" \
+            'capability assertion: correlated hello did not prove i386 is absent with runtime arch x86_64'
+    fi
 
     if loader_output="$("$IOLBOX_LOADER" --version 2>&1)"; then
         loader_line="${loader_output%%$'\n'*}"
@@ -324,6 +363,7 @@ main() {
     printf 'guest_arch=%s\n' "$(uname -m)"
     printf 'rosetta_binfmt=%s\n' "$(rosetta_binfmt_state)"
     printf 'glibc_loader_canary=%s\n' "$loader_line"
+    printf 'capability_hello=%s\n' "$capability_hello_line"
     printf 'supervisor_version=%s status=%s\n' "$supervisor_version" "$supervisor_status"
     printf 'host_id=%s\n' "$host_id"
     printf 'iourc_exists=%s\n' "$iourc_value"

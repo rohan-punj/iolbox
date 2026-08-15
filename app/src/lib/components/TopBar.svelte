@@ -10,6 +10,7 @@
   import { tick } from "svelte";
 
   const anyRunning = $derived(labStore.labRunning);
+  const labUnsupportedReason = $derived(labStore.labUnsupportedReason);
   const providerLabel = $derived(
     labStore.activeProvider ? labStore.activeProvider : "—"
   );
@@ -290,7 +291,7 @@
     />
   {/if}
 
-  <button class="btn btn-primary" onclick={toggleLab}>
+  <button class="btn btn-primary" onclick={toggleLab} disabled={!anyRunning && !!labUnsupportedReason} title={!anyRunning && labUnsupportedReason ? labUnsupportedReason : anyRunning ? "Stop the running lab" : "Start the lab"}>
     {@html uiSvg(anyRunning ? "stop" : "play", 12)}
     {anyRunning ? "Stop lab" : "Start lab"}
   </button>

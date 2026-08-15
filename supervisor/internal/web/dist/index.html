@@ -1,15 +1,28 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>iolbox</title>
-<style>
-  body { font: 15px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #ddd; background: #1a1a1a; }
-  code { background: #2a2a2a; padding: 0.1em 0.4em; border-radius: 3px; }
-  h1 { font-size: 1.4rem; }
-</style>
-<h1>iolbox GUI not bundled in this build</h1>
-<p>This supervisor binary was built without the frontend embedded. To bundle it,
-run the frontend build so its output overwrites this directory:</p>
-<p><code>cd app &amp;&amp; npm run build:embed</code></p>
-<p>then rebuild the supervisor. The build writes to
-<code>supervisor/internal/web/dist</code> via
-<code>vite build --outDir ../supervisor/internal/web/dist</code>.</p>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>iolbox</title>
+    <script>
+      // Set the persisted theme before first paint to avoid a flash of the
+      // wrong surface. themeStore reconciles this on boot.
+      (function () {
+        try {
+          var t = localStorage.getItem("iolbox.theme");
+          document.documentElement.setAttribute(
+            "data-theme",
+            t === "glass" ? "glass" : "bench"
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "bench");
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BpZ2-fiG.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BN6iZyrv.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

@@ -74,10 +74,14 @@ Event (server push, no id correlation required):
 ### `hello`
 Handshake + capability/version negotiation. First message.
 - args: `{ "client": "iolbox-gui/0.1.0" }`
-- result: `{ "supervisor": "0.1.0", "runtime": "debian-slim-12", "arch": "x86_64", "features": ["nvram","capture","i386"] }`
+- result: `{ "supervisor": "0.1.0", "runtime": "debian-slim-12", "arch": "x86_64", "features": ["nvram","capture","i386"] }` (Apple Silicon macOS omits `i386` after its Rosetta canary qualifies.)
 
-The `features` array always contains the base capabilities `nvram`, `capture`,
-`i386`. It additionally contains:
+The `features` array always contains the base capabilities `nvram`, `capture`.
+Non-Mac runtimes and fail-open deployments additionally advertise `i386`.
+Apple Silicon macOS advertises only the IOL architectures it can honestly
+start, so its qualified hello omits `i386`; there is no separate architecture
+field. The supervisor's `arch` remains the runtime/guest architecture and is
+not the ELF architecture of an IOL image. The array additionally contains:
 - `natgw` — the runtime supports **nat** nodes (has `/dev/net/tun` and
   passwordless `sudo`).
 - `mgmt` — the runtime supports **mgmt** nodes (the above plus a usable
@@ -86,6 +90,14 @@ The `features` array always contains the base capabilities `nvram`, `capture`,
 These are detected once at supervisor startup. Starting a `nat`/`mgmt` node on a
 runtime that did not advertise the matching feature returns an `unsupported`
 error (`"runtime does not support nat/mgmt nodes"`).
+
+When the Apple Silicon capability policy is enabled, a stopped IOL node whose
+registered image is ELF32/EM_386 fails `node.start` or bulk `lab.start` with a
+per-node `image_arch_mismatch` entry before capture, fabric, or lab-directory
+preparation. A running node remains idempotently reported as running by start;
+restart stops it and then reports the mismatch. `lab.load`, autosave, and
+same-topology adoption do not apply this start-time restriction. Unknown image
+architecture remains allowed and is handled by the normal image path.
 
 ### `image.list`
 - result: `{ "images": [ { "id","filename","class","arch","sha256","size" } ] }`

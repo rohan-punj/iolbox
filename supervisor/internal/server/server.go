@@ -58,6 +58,10 @@ type Config struct {
 	Runtime string
 	Arch    string
 	Version string
+	// DisableI386 is a deployment-provided capability restriction. It is set by
+	// the Apple Silicon macOS drop-in after the Rosetta canary qualifies the
+	// guest. A zero value deliberately preserves the legacy non-Mac contract.
+	DisableI386 bool
 	// Egress is the -egress flag value ("auto"|"slirp"|"routed"). "auto" (the
 	// default) runs the egress detector at startup; the resolved "slirp"/"routed"
 	// value is advertised in hello so the GUI can badge the NAT node when it can't
