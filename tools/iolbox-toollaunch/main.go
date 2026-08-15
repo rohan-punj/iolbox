@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const usageText = "usage: iolbox-toollaunch [--cgroup PATH] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
+const usageText = "usage: iolbox-toollaunch [--cgroup PATH | --cgroup-fd N] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
 
 // knownCapNumbers is the portable name->Linux-capability-number map (plain
 // integers, not syscalls, so this stays buildable on every platform even
@@ -66,11 +66,12 @@ const (
 )
 
 type launchOptions struct {
-	cgroup string
-	user   string
-	caps   []string
-	target string
-	args   []string
+	cgroup   string
+	cgroupFD int // -1 means unset; see parseLaunchArgs
+	user     string
+	caps     []string
+	target   string
+	args     []string
 }
 
 // launchFailure carries a machine-distinguishable failure step while keeping
@@ -100,7 +101,7 @@ func main() {
 		os.Exit(launchExitUsage)
 	}
 
-	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.caps); err != nil {
+	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.cgroupFD, opts.caps); err != nil {
 		code := launchExitExec
 		var failure *launchFailure
 		if errors.As(err, &failure) {
@@ -112,11 +113,12 @@ func main() {
 }
 
 func parseLaunchArgs(argv []string) (launchOptions, error) {
-	var opts launchOptions
+	opts := launchOptions{cgroupFD: -1}
 	separator := -1
 	seenUser := false
 	seenCaps := false
 	seenCgroup := false
+	seenCgroupFD := false
 
 	for i := 0; i < len(argv); i++ {
 		if argv[i] == "--" {
@@ -125,11 +127,34 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 		}
 		switch argv[i] {
 		case "--cgroup":
-			if seenCgroup || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
-				return launchOptions{}, errors.New("--cgroup requires one non-empty path before --")
+			if seenCgroup || seenCgroupFD || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
+				return launchOptions{}, errors.New("--cgroup requires one non-empty path before -- and cannot combine with --cgroup-fd")
 			}
 			opts.cgroup = argv[i+1]
 			seenCgroup = true
+			i++
+		case "--cgroup-fd":
+			// FD-based placement exists because this process is normally
+			// invoked wrapped in `ip netns exec`, which unshares a fresh mount
+			// namespace for its /sys view — that new namespace has no
+			// visibility into a cgroup2 path created moments earlier in the
+			// parent's mount namespace (reproduced on real Apple Silicon
+			// hardware: --cgroup PATH fails "no such file or directory" for a
+			// directory that plainly exists outside the netns-exec'd child).
+			// A file descriptor inherited via ExtraFiles has no such problem:
+			// it resolves through the kernel's per-process fd table, not a
+			// path lookup in the current mount namespace, so /proc/self/fd/N
+			// reaches the cgroup regardless of what the caller's `ip netns
+			// exec` did to /sys.
+			if seenCgroup || seenCgroupFD || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
+				return launchOptions{}, errors.New("--cgroup-fd requires one non-empty fd number before -- and cannot combine with --cgroup")
+			}
+			fd, err := strconv.Atoi(argv[i+1])
+			if err != nil || fd < 0 {
+				return launchOptions{}, fmt.Errorf("--cgroup-fd: invalid fd number %q", argv[i+1])
+			}
+			opts.cgroupFD = fd
+			seenCgroupFD = true
 			i++
 		case "--user":
 			if seenUser || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
@@ -176,14 +201,28 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 // process is still root and still holds the capabilities needed to write a
 // delegated cgroup.procs; after capset/setuid it no longer has that authority.
 // The target inherits this membership through the final execve, so its limits
-// bind before it can allocate. An absent path is intentional: the supervisor
-// has already placed the process through SysProcAttr.CgroupFD in that case.
-func writeCgroupMembership(cgroupPath string) error {
-	if cgroupPath == "" {
+// bind before it can allocate. Absent path and fd is intentional: the
+// supervisor has already placed the process through SysProcAttr.CgroupFD in
+// that case (the clone3 CLONE_INTO_CGROUP path, used when it works).
+//
+// cgroupFD (>= 0) takes precedence over cgroupPath when both happen to be
+// set, and is what the supervisor actually sends in practice: this process
+// normally runs wrapped in `ip netns exec`, whose fresh mount namespace for
+// /sys hides any cgroup2 path created in the parent namespace, so a path-based
+// write reliably fails "no such file or directory" even though the directory
+// exists. /proc/self/fd/N sidesteps that: it resolves via this process's own
+// fd table, which survives both execve and the mount-namespace switch.
+func writeCgroupMembership(cgroupPath string, cgroupFD int) error {
+	var procsPath string
+	switch {
+	case cgroupFD >= 0:
+		procsPath = filepath.Join("/proc/self/fd", strconv.Itoa(cgroupFD), "cgroup.procs")
+	case cgroupPath != "":
+		procsPath = filepath.Join(cgroupPath, "cgroup.procs")
+	default:
 		return nil
 	}
 
-	procsPath := filepath.Join(cgroupPath, "cgroup.procs")
 	pid := []byte(strconv.Itoa(os.Getpid()))
 	if err := os.WriteFile(procsPath, pid, 0); err != nil {
 		return newLaunchFailure(launchExitCgroup, "cgroup placement", fmt.Errorf("write %s: %w", procsPath, err))
@@ -191,11 +230,11 @@ func writeCgroupMembership(cgroupPath string) error {
 	return nil
 }
 
-func launchAs(user, target string, args []string, cgroupPath string, caps []string) error {
+func launchAs(user, target string, args []string, cgroupPath string, cgroupFD int, caps []string) error {
 	if user == "" || target == "" {
 		return newLaunchFailure(launchExitUsage, "arguments", errors.New("user and target are required"))
 	}
-	if err := writeCgroupMembership(cgroupPath); err != nil {
+	if err := writeCgroupMembership(cgroupPath, cgroupFD); err != nil {
 		return err
 	}
 	return launchTransition(user, target, args, caps)
