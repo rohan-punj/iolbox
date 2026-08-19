@@ -1,0 +1,69 @@
+# iolbox native-arm64 Lima/VZ template — render this file before giving it
+# to Lima; the @...@ tokens are replaced from pinned-image-native-arm64.env
+# at run time, same rendering contract as the other iolbox-*.yaml templates.
+#
+# This is Phase 4's launcher-native counterpart of the reviewed Phase 3
+# template (docs/macos-m7-phase3-execution-plan.md section 3's "effective
+# template"): vmType vz, arch aarch64, and Rosetta EXPLICITLY disabled (both
+# enabled/binfmt false) -- native-arm64's whole point is a guest that never
+# depends on Rosetta. It reuses the same Debian 13/trixie arm64 cloud image
+# family the rosetta-amd64 profile already pins (same OS, no Rosetta-vs-
+# native compatibility difference in the base image itself); only the
+# execution mode (Rosetta translation vs. a native arm64 supervisor/vpcs
+# payload plus an in-guest qemu-user translator for the still-x86_64-only
+# IOL binary) differs. See pinned-image-native-arm64.env for the exact
+# pinned URL/digest.
+#
+# mounts are NOT empty here (unlike Phase 3's own template, which used
+# mounts: [] deliberately for its narrow correctness measurement) -- Phase 4
+# item 4 requires native-arm64 to ALSO prove separate VM/state paths with
+# correct host sync, which needs the same virtiofs home mount every other
+# profile gets. This is a deliberate, judgment-call departure from Phase 3's
+# exact bytes, recorded in docs/m7-phase4-file-mapping.md.
+
+images:
+  - location: "@IOLBOX_IMAGE_URL@"
+    arch: aarch64
+    digest: "@IOLBOX_IMAGE_DIGEST@"
+
+vmType: "vz"
+rosetta:
+  enabled: false
+  binfmt: false
+
+cpus: @CPUS@
+memory: "@MEMORY@"
+disk: "@DISK@"
+
+mountType: "virtiofs"
+mounts:
+  - location: "~"
+    writable: false
+
+portForwards:
+  - guestPort: @IOLBOX_GUI_PORT@
+    hostPort: @IOLBOX_GUI_PORT@
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [9000, 9049]
+    hostPortRange: [9000, 9049]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [5500, 5529]
+    hostPortRange: [5500, 5529]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    proto: "any"
+    ignore: true
+
+# No provision scripts or readiness probes here, same convention as the
+# rosetta-amd64 templates. NOTE: the shared guest/30-canary.sh and
+# guest/40-install-payload.sh steps are Rosetta-specific hard gates (they
+# execute an amd64 loader through Rosetta and verify an
+# IOLBOX_DISABLE_I386=1 + amd64-ExecStart unit) and must NOT be reused
+# unmodified for this profile -- a native-arm64-specific canary/install-
+# payload pair (verifying no Rosetta/binfmt present, a native arm64
+# supervisor ExecStart, and in-guest qemu-user translator presence instead)
+# is still an OPEN GAP for this profile; see docs/m7-phase4-file-mapping.md.

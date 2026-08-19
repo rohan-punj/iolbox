@@ -154,7 +154,37 @@ func runDarwinCLI(args []string) int {
 		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
 		return exitUsage
 	}
-	table, profile, err := loadMacOSProfile(assetRoot, opts.Profile)
+	// Resolve the logical profile SELECTION (auto/rosetta-amd64/native-arm64,
+	// or a legacy direct profile-table row name) before loading the concrete
+	// profileTable row. This is where the plan's explicit-flag > persisted >
+	// auto precedence and native-arm64's fail-closed preflight/fallback
+	// live; loadMacOSProfile below only ever sees a concrete row name.
+	earlyTable, err := loadProfileTableOnly(assetRoot)
+	if err != nil {
+		if opts.Command == "diagnose" {
+			fmt.Println("iolbox diagnose")
+			fmt.Println("  profile:", err)
+			return exitOK
+		}
+		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+		return exitCode(err)
+	}
+	preflightFacts := collectHostFacts(context.Background())
+	preflightLimactl, _ := discoverLimactl(opts.Limactl, os.Getenv("LIMACTL"), nil)
+	selection, err := resolveProfileSelection(context.Background(), opts.Profile, earlyTable, preflightFacts, preflightLimactl, nil, testPreferNativeFromEnv(nil))
+	if err != nil {
+		if opts.Command == "diagnose" {
+			fmt.Println("iolbox diagnose")
+			fmt.Println("  profile selection:", err)
+			return exitOK
+		}
+		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+		return exitPreflight
+	}
+	if selection.FallbackReason != "" {
+		fmt.Fprintf(os.Stderr, "iolbox-launcher: requested profile %q fell back to %q (%s): %s\n", selection.Requested, selection.Selected, selection.Source, selection.FallbackReason)
+	}
+	table, profile, err := loadMacOSProfile(assetRoot, selection.ProfileName)
 	if err != nil {
 		if opts.Command == "diagnose" {
 			fmt.Println("iolbox diagnose")
@@ -167,7 +197,7 @@ func runDarwinCLI(args []string) int {
 	if opts.Machine == "" {
 		opts.Machine = "iolbox-" + profile.Name
 	}
-	facts := collectHostFacts(context.Background())
+	facts := preflightFacts // same collectHostFacts() call the selection resolution already ran
 	if opts.Command == "diagnose" {
 		return runDiagnose(opts, table, profile, facts)
 	}

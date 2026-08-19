@@ -273,6 +273,24 @@ func loadMacOSProfile(assetRoot, selected string) (profileTable, macOSProfile, e
 	return table, p, nil
 }
 
+// loadProfileTableOnly parses profiles.env without validating any single
+// profile's pin/guest assets. resolveProfileSelection needs the table (row
+// names, DEFAULT) before it knows which row it is going to select; the
+// selected row's pin/guest assets are validated afterwards by the normal
+// loadMacOSProfile call.
+func loadProfileTableOnly(assetRoot string) (profileTable, error) {
+	profilePath := filepath.Join(assetRoot, "lima", "profiles.env")
+	data, err := os.ReadFile(profilePath)
+	if err != nil {
+		return profileTable{}, codedError(exitUsage, "read profile table: %v", err)
+	}
+	table, err := parseProfilesEnv(string(data))
+	if err != nil {
+		return profileTable{}, codedError(exitUsage, "parse profile table: %v", err)
+	}
+	return table, nil
+}
+
 func validatePinMustKeepValues(data, pinPath string) (map[string]string, error) {
 	values, err := parsePinEnv(data)
 	if err != nil {
