@@ -11,7 +11,7 @@ import (
 )
 
 // TUNSETIFF and the IFF_* flags used to attach /dev/net/tun to an existing
-// persistent tap device, linux/amd64 values (there is no golang.org/x/sys
+// persistent tap device, Linux values (there is no golang.org/x/sys
 // dependency in this module, so these are the raw ioctl constants rather
 // than symbolic ones from a syscall package).
 const (
@@ -55,7 +55,7 @@ func openTap(name string) (*os.File, error) {
 	}
 
 	// ifreq layout: 16-byte name field followed by a uint16 flags field,
-	// padded out to the kernel's struct ifreq size (40 bytes on amd64).
+	// padded out to the kernel's struct ifreq size (40 bytes on 64-bit Linux).
 	var req [40]byte
 	copy(req[:16], name)
 	binary.LittleEndian.PutUint16(req[16:], iffTap|iffNoPI)

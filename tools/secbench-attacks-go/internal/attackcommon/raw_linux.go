@@ -10,7 +10,7 @@ import (
 )
 
 // Linux AF_PACKET expects the protocol in network byte order. ETH_P_ALL is
-// 0x0003 in host notation, hence 0x0300 on the little-endian amd64 target.
+// 0x0003 in host notation, hence 0x0300 on a little-endian Linux target.
 const rawProtocol uint16 = 0x0300
 
 type RawSender struct {

@@ -32,7 +32,7 @@ const snapLen = 128
 
 // ethPAll is ETH_P_ALL in network byte order for the socket protocol field, so
 // the AF_PACKET socket sees every ethertype in both directions.
-const ethPAll = 0x0300 // htons(ETH_P_ALL) on little-endian amd64
+const ethPAll = 0x0300 // htons(ETH_P_ALL) on little-endian 64-bit Linux
 
 // packetOutgoing is sll_pkttype PACKET_OUTGOING: a frame the host TRANSMITTED
 // out this tap (bridge->node). Everything else (HOST/BROADCAST/MULTICAST/

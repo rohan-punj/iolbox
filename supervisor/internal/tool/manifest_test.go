@@ -1,17 +1,30 @@
 package tool
 
 import (
+	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 )
 
+// These fixtures are deliberately compiled into the test binary. The test
+// suite runs cross-compiled Linux binaries on a different filesystem from the
+// source checkout, so runtime.Caller cannot provide a durable fixture path.
+// Each test materializes the bytes below into t.TempDir(), which is native to
+// the target OS and therefore preserves symlink semantics.
+var (
+	//go:embed testdata/packs/stub/pack.json
+	manifestTestStubPackJSON []byte
+
+	//go:embed testdata/packs/stub/tool-stubgui
+	manifestTestStubGUI []byte
+)
+
 func TestLoadPackStubFixture(t *testing.T) {
-	root := manifestTestFixtureRoot()
+	root := manifestTestFixtureRoot(t)
 	pack, err := LoadPack(root)
 	if err != nil {
 		t.Fatalf("LoadPack() error = %v", err)
@@ -163,13 +176,19 @@ func TestLoadPacksMissingDirectory(t *testing.T) {
 	}
 }
 
-func manifestTestFixtureRoot() string {
-	_, filename, _, _ := runtime.Caller(0)
-	root, err := filepath.Abs(filepath.Join(filepath.Dir(filename), "testdata", "packs", "stub"))
-	if err != nil {
-		panic(err)
+func manifestTestFixtureRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "stub")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	return filepath.Clean(root)
+	if err := os.WriteFile(filepath.Join(root, "pack.json"), manifestTestStubPackJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tool-stubgui"), manifestTestStubGUI, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func manifestTestWritePack(t *testing.T, edit func(*Manifest)) string {
@@ -182,10 +201,8 @@ func manifestTestWritePackAt(t *testing.T, root string, edit func(*Manifest)) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(manifestTestFixtureRoot(), "pack.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := manifestTestStubPackJSON
+	var err error
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
@@ -198,11 +215,7 @@ func manifestTestWritePackAt(t *testing.T, root string, edit func(*Manifest)) {
 	if err := os.WriteFile(filepath.Join(root, "pack.json"), append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gui, err := os.ReadFile(filepath.Join(manifestTestFixtureRoot(), "tool-stubgui"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "tool-stubgui"), gui, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "tool-stubgui"), manifestTestStubGUI, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

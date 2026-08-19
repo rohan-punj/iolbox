@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 
 	"github.com/rohanpunj/iolbox/supervisor/internal/egress"
@@ -134,7 +135,7 @@ func New(cfg Config) *Server {
 		cfg.Runtime = "debian-slim-12"
 	}
 	if cfg.Arch == "" {
-		cfg.Arch = "x86_64"
+		cfg.Arch = defaultHelloArch()
 	}
 	if cfg.LabsDir == "" {
 		cfg.LabsDir = "/opt/iolbox/labs"
@@ -168,6 +169,19 @@ func New(cfg Config) *Server {
 	s.egress = egress.Resolve(cfg.Egress)
 	s.register()
 	return s
+}
+
+// defaultHelloArch maps Go's build target names to the protocol's established
+// architecture names. amd64 has always been advertised as x86_64; a native
+// arm64 supervisor (M7) must identify itself as arm64 so hello/status stay
+// truthful about guest/supervisor architecture. This does not touch
+// DisableI386, which is a separate, deployment-provided capability
+// restriction unrelated to the advertised build arch.
+func defaultHelloArch() string {
+	if runtime.GOARCH == "amd64" {
+		return "x86_64"
+	}
+	return runtime.GOARCH
 }
 
 // InitRuntime performs the kernel-affecting tool startup sequence only for

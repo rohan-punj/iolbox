@@ -59,7 +59,7 @@ func parseHexLEIP(s string) net.IP {
 		return nil
 	}
 	v := binary.LittleEndian.Uint32(b)
-	return net.IPv4(byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	return net.IPv4(byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
 }
 
 // primaryAddrs returns the IPv4 unicast addresses of every up, non-loopback

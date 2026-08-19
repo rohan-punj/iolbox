@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -161,13 +162,48 @@ func TestHelloVerb(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &r); err != nil {
 		t.Fatal(err)
 	}
-	if r.Supervisor != "test" || r.Arch == "" {
+	wantArch := runtime.GOARCH
+	if wantArch == "amd64" {
+		wantArch = "x86_64"
+	}
+	if r.Supervisor != "test" || r.Arch != wantArch {
 		t.Fatalf("hello result: %+v", r)
 	}
 	// Egress is always resolved to a concrete value ("slirp" or "routed"); the
 	// GUI reads it to badge the NAT node. The test box is not behind slirp.
 	if r.Egress != "slirp" && r.Egress != "routed" {
 		t.Fatalf("hello egress = %q, want slirp or routed", r.Egress)
+	}
+}
+
+func TestHelloArchExplicitTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		arch string
+	}{
+		{name: "amd64", arch: "x86_64"},
+		{name: "arm64", arch: "arm64"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(Config{
+				ControlAddr: "127.0.0.1:0",
+				ImageDir:    t.TempDir(),
+				RunDir:      t.TempDir(),
+				Version:     "test",
+				Arch:        tc.arch,
+			})
+			resp := dispatch(t, s, "hello", protocol.HelloArgs{Client: "test"})
+			if !resp.OK {
+				t.Fatalf("hello failed: %+v", resp.Error)
+			}
+			var result protocol.HelloResult
+			if err := json.Unmarshal(resp.Result, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Arch != tc.arch {
+				t.Fatalf("hello arch = %q, want %q", result.Arch, tc.arch)
+			}
+		})
 	}
 }
 
