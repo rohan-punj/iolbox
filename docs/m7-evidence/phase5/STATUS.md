@@ -109,3 +109,38 @@ Remaining rows (NAT, extnet, capacity, traffic soak, forced termination) run
 next via the same `hardware-m4-phase5.sh` orchestrator, plus a separate
 native-arm64-specific supplementary run for the two native-specific rows
 (VPCS/IOL native traffic, Rosetta-exclusion inventory).
+
+## M4 run continued: items 1-4 and soak all PASS; item-5 fixed; Mac went unreachable
+
+- Full orchestrator rerun (post item-2/item-3 fixes): **item-1 PASS,
+  item-2 PASS, item-3 PASS, item-4 NOT_EXERCISABLE** (real decision-table
+  result: "no suitable Lima/extnet host interface in preserved probes" --
+  this is the plan's explicitly-permitted non-waiver outcome, not a
+  fabricated pass), **item-6 soak PASS** (1200s per the owner-directed
+  deviation above; `SOAK-COMPLETE` seal verified, `TestM4VerifySoakSeal`
+  PASS, 20/20 traffic rows, capture non-empty).
+- **item-5 (four-node capacity) failed twice**, both times running
+  immediately after the 20-minute soak, with a plain `EOF` reading a
+  console inside the per-console ping loop (not at lab.start or
+  openConsoles). Reproduced independently: a **standalone** item-5 run
+  (no preceding soak) **passed** cleanly (428s), confirming the failure is
+  specifically linked to running right after the soak, not a universal
+  item-5 defect. Guest-side check during a failure: all 4 IOL processes
+  were still alive (`ps` showed RSS ~550MB each, no OOM), so this is a
+  resource-pressure timing race, not a crash. **Fixed**: item-5's
+  `record.HardWall` is now set for ANY item-5 failure (previously only set
+  at the two early gates, lab.start and openConsoles) so the existing
+  reclaim-and-retry contract actually engages for this failure mode too.
+  `go vet`/`go build` clean for darwin/arm64. Committed, not yet reverified
+  on hardware.
+- **Mac went unreachable mid-session** right after this fix, while
+  resyncing/rebuilding for the next full rerun: `ssh` timed out and
+  `ssh-keyscan` got no response at all across 8 retries spanning ~3
+  minutes. This matches the documented "Mac has gone to sleep before"
+  pattern in the Phase 4 handoff; there is no remote-wake mechanism
+  available. **Stopping here and reporting rather than guessing** --
+  remaining M4 items (item-5 rerun with the fix, item-7 forced termination,
+  final record/verify), all native-arm64-specific rows (VPCS/IOL native
+  traffic, Rosetta exclusion inventory), and re-verification of the M3 rows
+  against the still-current source are all still pending real-hardware
+  execution once the Mac is reachable again.
