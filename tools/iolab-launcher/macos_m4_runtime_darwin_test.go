@@ -736,6 +736,22 @@ func (r *m4Runtime) basicPhase(phase, fixtureName string, nodes []int) (record m
 		if retErr != nil && record.Status == "PASS" {
 			record.Status = "UNVERIFIED"
 		}
+		// Item 5 (four concurrent 1024 MB IOL nodes on the same 4 GiB guest)
+		// is capacity-sensitive by construction, not just at the two
+		// early gates (lab.start, openConsoles) that already set HardWall
+		// explicitly above. Found on real hardware: running item 5
+		// immediately after the 20-minute item-6 soak reproducibly failed
+		// later, inside the per-console command/ping loop, with a plain
+		// "EOF" reading a console -- a real capacity symptom (all 4 IOL
+		// processes were still alive afterward, so not an OOM kill; most
+		// likely a soak-accumulated resource-pressure timing race) that
+		// the retry-after-reclaim path (see main()'s item-5 handling in
+		// hardware-m4.sh/hardware-m4-phase5.sh) exists specifically to
+		// recover from, but only fires when HardWall is set. Standalone
+		// item-5 runs without a preceding soak did not reproduce this.
+		if retErr != nil && phase == "item-5" {
+			record.HardWall = true
+		}
 	}()
 	if err = r.connect(dir); err != nil {
 		return record, err
