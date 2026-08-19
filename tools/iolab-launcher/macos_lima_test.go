@@ -48,6 +48,36 @@ func TestParseMachineListingSkipsLimactlLogNoiseButStillFailsClosed(t *testing.T
 	}
 }
 
+// TestLimaHomePathHonorsLimaHomeEnv is a regression test for a real bug
+// found on physical hardware (2026-08-19): readStoredLimaConfig (used to
+// detect an existing machine's port contract, including on a recovery
+// retry against a half-created machine) built its path with
+// homePath(".lima", machine, "lima.yaml"), which always resolves to the
+// real default ~/.lima regardless of $LIMA_HOME. Every Phase 4 scenario
+// runs under an isolated, non-default LIMA_HOME (exactly what this
+// project's own isolation rules require), so the file was never where the
+// launcher looked: "could not inspect Lima port contract for running
+// machine ...: open ~/.lima/iolbox-native-arm64/lima.yaml: no such file or
+// directory" even though the machine and its lima.yaml were both real, one
+// directory tree over at $LIMA_HOME.
+func TestLimaHomePathHonorsLimaHomeEnv(t *testing.T) {
+	t.Setenv("LIMA_HOME", "")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := limaHomePath("m1", "lima.yaml"); err != nil || got != filepath.Join(home, ".lima", "m1", "lima.yaml") {
+		t.Fatalf("default LIMA_HOME: got (%q, %v), want %q", got, err, filepath.Join(home, ".lima", "m1", "lima.yaml"))
+	}
+
+	isolated := filepath.Join(t.TempDir(), "phase4-lima-home")
+	t.Setenv("LIMA_HOME", isolated)
+	want := filepath.Join(isolated, "m1", "lima.yaml")
+	if got, err := limaHomePath("m1", "lima.yaml"); err != nil || got != want {
+		t.Fatalf("isolated LIMA_HOME=%s: got (%q, %v), want %q", isolated, got, err, want)
+	}
+}
+
 func TestLimaStartWithPortContractKeepsExpressionInOneArg(t *testing.T) {
 	runner := &sequenceRunner{}
 	client := &limaClient{info: limaInfo{Path: "limactl"}, runner: runner}

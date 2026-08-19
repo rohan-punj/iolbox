@@ -87,6 +87,40 @@ func homePath(parts ...string) (string, error) {
 	return filepath.Join(append([]string{home}, parts...)...), nil
 }
 
+// limaHomeDir resolves Lima's own data directory the same way limactl
+// itself does: $LIMA_HOME when set (any isolated Phase 4 LIMA_HOME
+// included), else ~/.lima. Every path this launcher builds to read a
+// machine's OWN Lima-managed files (its lima.yaml, its hostagent log) must
+// go through this, never a hardcoded ".lima".
+func limaHomeDir() (string, error) {
+	if dir := os.Getenv("LIMA_HOME"); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".lima"), nil
+}
+
+// limaHomePath joins limaHomeDir() with parts. Found on real hardware
+// (2026-08-19, physical Mac): every caller of this used to build
+// homePath(".lima", machine, ...) instead, which always resolved to the
+// real default ~/.lima regardless of $LIMA_HOME. Running under Phase 4's
+// own required isolated LIMA_HOME, a recovery attempt against an existing
+// (half-created) machine failed with "could not inspect Lima port contract
+// for running machine ...: open /Users/.../.lima/iolbox-native-arm64/
+// lima.yaml: no such file or directory" -- the real file was one directory
+// tree over, at $LIMA_HOME/iolbox-native-arm64/lima.yaml. M1-M6 never hit
+// this because they always ran against the real default ~/.lima.
+func limaHomePath(parts ...string) (string, error) {
+	dir, err := limaHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(append([]string{dir}, parts...)...), nil
+}
+
 func hostAttestationPath(machine string) (string, error) {
 	return homePath(".iolbox", "macos", machine+"-structural-gate.json")
 }
@@ -233,7 +267,7 @@ func guestValue(ctx context.Context, l *limaClient, machine string, args ...stri
 }
 
 func hostAgentWarningText(machine string) (string, bool) {
-	path, err := homePath(".lima", machine, "ha.stderr.log")
+	path, err := limaHomePath(machine, "ha.stderr.log")
 	if err != nil {
 		return "", false
 	}

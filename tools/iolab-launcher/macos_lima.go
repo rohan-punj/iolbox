@@ -156,7 +156,7 @@ func (l *limaClient) list(ctx context.Context) ([]machineInfo, error) {
 }
 
 func readStoredLimaConfig(machine string) ([]byte, error) {
-	path, err := homePath(".lima", machine, "lima.yaml")
+	path, err := limaHomePath(machine, "lima.yaml")
 	if err != nil {
 		return nil, err
 	}
