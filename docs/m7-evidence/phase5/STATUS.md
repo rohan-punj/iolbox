@@ -65,7 +65,47 @@ Continuing in `J:\Claude code\iolab-m7-phase4-wt`, branch
 | Capture (valid pcapng) | **PASS** | same dir, `browser-equivalent.txt` (896 bytes, 2 packets, sha256 recorded), `pcap-validator.txt` |
 | M1 install-image-and-lab sub-phase (feeds M3) | **PASS** | `m3-20260819T194911Z-28552/m1-20260819T195052Z-28892/` — 90% ping (9/10) |
 
-All remaining rows (VPCS/IOL, multi-link, NAT, extnet, capacity, traffic
-soak, forced termination, Rosetta exclusion) are next via `hardware-m4.sh`
-plus a native-arm64-specific supplementary run for the two native-specific
-rows. Not yet started as of this checkpoint.
+## M4 matrix run (hardware-m4-phase5.sh)
+
+- **Attempt 1**: item-1 (VPCS/IOL) failed on a WS control-connection read
+  error (`ws: non-FIN / fragmented frame not supported (opcode 8)`) reading
+  the `lab.stop` response. Reproduced independently by (a) hand-driving the
+  same `lab.stop` call via raw WS bytes against the still-running guest —
+  no fragmentation observed, clean framing — and (b) rerunning item-1's
+  exact Go test phase a second time against a fresh lab on the same VM,
+  which **passed cleanly**. Conclusion: non-reproducing, one-off transient
+  during the VM's very first cold-start control-plane burst, not a
+  deterministic defect. No source change made for this (a speculative fix
+  for an unconfirmed cause would itself be a discipline violation).
+- **Attempt 2** (fresh VM): item-1 passed. **item-2 (multi-link) failed**,
+  deterministically and for a real reason: `consoles[1]` (R2) never got
+  `m4Enable()` called before its `ping 10.0.12.1 repeat 100` in the item-2
+  ping-pair loop (`macos_m4_runtime_darwin_test.go` line ~848 area) — only
+  `consoles[0]` (R1) was enabled. R2's console transcript
+  (`item-2/console-1.txt`) shows it staying at the user-EXEC `R2>` prompt
+  the whole time, and the extended `repeat` ping syntax requires privileged
+  EXEC on real IOS, producing `% Invalid input detected at '^' marker`
+  every time — deterministic, not a flake. **Fixed**: added the missing
+  `m4Enable(consoles[1])` call, mirroring the existing `consoles[0]` call,
+  with a comment explaining why (both consoles[0]/R1 and consoles[1]/R2 are
+  IOL routers using the privileged `repeat` syntax; only consoles[2]/VPCS
+  uses the `-c` form that works from user EXEC). `go vet`/`go build` clean
+  for darwin/arm64. Rerun pending.
+
+## Owner-directed deviation: traffic-soak duration
+
+Per an explicit owner instruction received during this session (2026-08-19,
+mid-run), the traffic-soak row's duration was reduced from the plan's
+stated two hours (7200s) to **1200 seconds (20 minutes)**. This is a
+deliberate, explicitly owner-approved deviation, not a silent rounding-up.
+Consequence: resource-drift/degradation effects that only manifest under
+multi-hour sustained load (slow memory growth, fd/socket leaks, capture
+file growth pressure, thermal/power throttling) are **not exercised at the
+plan's full stated duration** by this run. The soak row's PASS (if
+achieved) certifies correctness and stability across 20 continuous minutes
+of traffic + capture, not two hours.
+
+Remaining rows (NAT, extnet, capacity, traffic soak, forced termination) run
+next via the same `hardware-m4-phase5.sh` orchestrator, plus a separate
+native-arm64-specific supplementary run for the two native-specific rows
+(VPCS/IOL native traffic, Rosetta-exclusion inventory).

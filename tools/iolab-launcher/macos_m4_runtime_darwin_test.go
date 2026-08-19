@@ -846,7 +846,17 @@ func (r *m4Runtime) basicPhase(phase, fixtureName string, nodes []int) (record m
 			}
 		}
 	} else if phase == "item-2" {
+		// Both consoles[0] (R1) and consoles[1] (R2) are IOL routers issuing
+		// the extended "ping <target> repeat <n>" syntax below, which
+		// requires privileged EXEC on real IOS -- only consoles[2] (VPCS)
+		// uses the "-c" form that works from user EXEC. Found on real
+		// hardware: R2 was never enabled here, so its ping in the pair loop
+		// below ("ping 10.0.12.1 repeat 100") failed at the user-EXEC "R2>"
+		// prompt with "% Invalid input detected at '^' marker" every time.
 		if err := m4Enable(consoles[0]); err != nil {
+			return record, err
+		}
+		if err := m4Enable(consoles[1]); err != nil {
 			return record, err
 		}
 		if err := r.captureShort(dir, labID, consoles[0], nil); err != nil {
