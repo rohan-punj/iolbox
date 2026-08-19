@@ -240,7 +240,25 @@ func parseLimaVZSupport(raw []byte) (bool, string) {
 // item 3 requires before a native-arm64 attempt: Apple Silicon, Lima/VZ,
 // digests, translator, and resources. It never creates, starts, or mutates
 // a Lima machine or any host file.
-func nativePreflight(ctx context.Context, facts hostFacts, table profileTable, limactlPath string) nativePreflightResult {
+//
+// assetRoot is needed for the digests check ONLY when table came from
+// loadProfileTableOnly (the real production path: resolveProfileSelection
+// must decide the logical selection BEFORE it knows which concrete row to
+// hand loadMacOSProfile, so it necessarily only has the shallow,
+// pin-file-unaware row shape). Found on real hardware (2026-08-19,
+// physical Mac, first live "forced native-arm64" attempt): with a real
+// profiles.env row present, this check failed every single time with
+// "native-arm64 profile is missing a pinned image URL/digest" — table.
+// Profiles[native-arm64].ImageDigest/ImageURL are ONLY ever populated by
+// loadMacOSProfile (which reads the pin file), never by
+// parseProfilesEnv/loadProfileTableOnly alone, so forced native-arm64 could
+// never structurally pass this check. Unit tests never caught it because
+// testProfileTable() pre-populates ImageURL/ImageDigest directly on a
+// synthetic table, bypassing the real loadProfileTableOnly code path
+// entirely. Fix: when the table's own row is unpopulated, read and
+// validate the pin file directly instead of trusting fields that are
+// simply never set at this call site.
+func nativePreflight(ctx context.Context, facts hostFacts, table profileTable, limactlPath, assetRoot string) nativePreflightResult {
 	var r nativePreflightResult
 	r.OK = true // flipped false by the first failing record() call
 
@@ -251,12 +269,23 @@ func nativePreflight(ctx context.Context, facts hostFacts, table profileTable, l
 	r.record("lima_vz", vzOK, vzDetail)
 
 	profile, hasProfile := table.Profiles[nativeProfileTableName]
-	if !hasProfile {
+	switch {
+	case !hasProfile:
 		r.record("digests", false, "native-arm64 row missing from profiles.env")
-	} else if profile.ImageDigest == "" || profile.ImageURL == "" {
-		r.record("digests", false, "native-arm64 profile is missing a pinned image URL/digest")
-	} else {
+	case profile.ImageDigest != "" && profile.ImageURL != "":
 		r.record("digests", true, "image digest "+profile.ImageDigest)
+	case assetRoot == "" || profile.PinEnv == "":
+		r.record("digests", false, "native-arm64 profile is missing a pinned image URL/digest")
+	default:
+		pinPath := filepath.Join(assetRoot, "lima", profile.PinEnv)
+		pinData, err := os.ReadFile(pinPath)
+		if err != nil {
+			r.record("digests", false, "could not read native-arm64 pin file "+pinPath+": "+err.Error())
+		} else if values, verr := validatePinMustKeepValues(string(pinData), pinPath); verr != nil {
+			r.record("digests", false, "native-arm64 pin file "+pinPath+" is invalid: "+verr.Error())
+		} else {
+			r.record("digests", true, "image digest "+values["IOLBOX_IMAGE_DIGEST"]+" (read from "+pinPath+")")
+		}
 	}
 
 	r.record("translator", nativeTranslatorName != "", "declared translator: "+nativeTranslatorName)
@@ -278,7 +307,7 @@ func nativePreflight(ctx context.Context, facts hostFacts, table profileTable, l
 // preflight is returned as an error (never silently downgraded), while an
 // AUTO selection that fails native preflight falls back to rosetta-amd64
 // with FallbackReason set.
-func resolveProfileSelection(ctx context.Context, explicitFlag string, table profileTable, facts hostFacts, limactlPath string, configDir func() (string, error), testPreferNative bool) (profileSelectionResult, error) {
+func resolveProfileSelection(ctx context.Context, explicitFlag string, table profileTable, facts hostFacts, limactlPath, assetRoot string, configDir func() (string, error), testPreferNative bool) (profileSelectionResult, error) {
 	if explicitFlag != "" && explicitFlag != selectionAuto {
 		// Direct legacy profile-table name or one of the two logical modes.
 		name, err := resolveProfileSelectionName(explicitFlag, table)
@@ -286,7 +315,7 @@ func resolveProfileSelection(ctx context.Context, explicitFlag string, table pro
 			return profileSelectionResult{}, err
 		}
 		if explicitFlag == selectionNativeARM64 {
-			pf := nativePreflight(ctx, facts, table, limactlPath)
+			pf := nativePreflight(ctx, facts, table, limactlPath, assetRoot)
 			if !pf.OK {
 				return profileSelectionResult{}, fmt.Errorf("forced native-arm64 failed preflight, refusing to fall back (fail-closed): %s\n%s", pf.Reason, pf.String())
 			}
@@ -309,7 +338,7 @@ func resolveProfileSelection(ctx context.Context, explicitFlag string, table pro
 		name, err := resolveProfileSelectionName(persisted, table)
 		if err == nil {
 			if persisted == selectionNativeARM64 {
-				pf := nativePreflight(ctx, facts, table, limactlPath)
+				pf := nativePreflight(ctx, facts, table, limactlPath, assetRoot)
 				if !pf.OK {
 					rosettaName, rerr := resolveProfileSelectionName(selectionRosettaAMD64, table)
 					if rerr != nil {
@@ -338,7 +367,7 @@ func resolveProfileSelection(ctx context.Context, explicitFlag string, table pro
 	if nerr != nil {
 		return profileSelectionResult{Requested: selectionAuto, Selected: selectionRosettaAMD64, ProfileName: rosettaName, Source: "auto-fallback-rosetta", FallbackReason: nerr.Error()}, nil
 	}
-	pf := nativePreflight(ctx, facts, table, limactlPath)
+	pf := nativePreflight(ctx, facts, table, limactlPath, assetRoot)
 	if !pf.OK {
 		return profileSelectionResult{Requested: selectionAuto, Selected: selectionRosettaAMD64, ProfileName: rosettaName, Source: "auto-fallback-rosetta", FallbackReason: pf.Reason}, nil
 	}

@@ -70,7 +70,7 @@ func TestResolveProfileSelectionExplicitFlagWins(t *testing.T) {
 	if err := persistProfileChoice(selectionNativeARM64, configDir); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveProfileSelection(context.Background(), selectionRosettaAMD64, table, passingFacts(), "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), selectionRosettaAMD64, table, passingFacts(), "", "", configDir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestResolveProfileSelectionForcedNativeFailsClosed(t *testing.T) {
 	configDir := tempConfigDir(t)
 	badFacts := hostFacts{System: "Darwin", Arch: "amd64"} // not Apple Silicon -> preflight must fail
 
-	_, err := resolveProfileSelection(context.Background(), selectionNativeARM64, table, badFacts, "", configDir, false)
+	_, err := resolveProfileSelection(context.Background(), selectionNativeARM64, table, badFacts, "", "", configDir, false)
 	if err == nil {
 		t.Fatal("expected forced native-arm64 to fail closed on a non-Apple-Silicon host, got nil error")
 	}
@@ -93,7 +93,7 @@ func TestResolveProfileSelectionForcedNativeFailsClosed(t *testing.T) {
 func TestResolveProfileSelectionAutoDefaultsToRosetta(t *testing.T) {
 	table := testProfileTable(t, true)
 	configDir := tempConfigDir(t)
-	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestResolveProfileSelectionAutoWithTestPolicyStillFallsBackWithoutLimactl(t
 	configDir := tempConfigDir(t)
 	// No real limactl on this dev box -> lima_vz preflight check fails closed
 	// -> auto-with-test-policy must fall back to rosetta-amd64, never error.
-	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", configDir, true)
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestResolveProfileSelectionPersistedChoiceHonored(t *testing.T) {
 	if err := persistProfileChoice(selectionRosettaAMD64, configDir); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestResolveProfileSelectionPersistedNativeFallsBackOnFailedPreflight(t *tes
 		t.Fatal(err)
 	}
 	badFacts := hostFacts{System: "Darwin", Arch: "amd64"}
-	res, err := resolveProfileSelection(context.Background(), "", table, badFacts, "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), "", table, badFacts, "", "", configDir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestNativePreflightFailsClosedOnEachCheck(t *testing.T) {
 	table := testProfileTable(t, true)
 
 	// Apple Silicon check fails.
-	pf := nativePreflight(context.Background(), hostFacts{System: "Darwin", Arch: "amd64", FreeDiskKB: 64 * 1024 * 1024}, table, "")
+	pf := nativePreflight(context.Background(), hostFacts{System: "Darwin", Arch: "amd64", FreeDiskKB: 64 * 1024 * 1024}, table, "", "")
 	if pf.OK {
 		t.Fatal("expected apple_silicon check to fail closed")
 	}
@@ -185,16 +185,46 @@ func TestNativePreflightFailsClosedOnEachCheck(t *testing.T) {
 	}
 
 	// Missing native profile row -> digests check fails.
-	pf2 := nativePreflight(context.Background(), passingFacts(), testProfileTable(t, false), "")
+	pf2 := nativePreflight(context.Background(), passingFacts(), testProfileTable(t, false), "", "")
 	if pf2.OK || pf2.Checks["digests"] == "" {
 		t.Fatalf("expected digests check to fail closed when native-arm64 row is absent: %+v", pf2)
 	}
 
 	// Low disk -> resources check fails.
 	lowDisk := hostFacts{System: "Darwin", Arch: "arm64", FreeDiskKB: 1}
-	pf3 := nativePreflight(context.Background(), lowDisk, table, "")
+	pf3 := nativePreflight(context.Background(), lowDisk, table, "", "")
 	if pf3.OK || pf3.Checks["resources"] == "" {
 		t.Fatalf("expected resources check to fail closed on low disk: %+v", pf3)
+	}
+}
+
+// TestNativePreflightDigestsPassOnTheRealShallowTable is a regression test
+// for a real bug found on physical hardware (2026-08-19): the production
+// call chain (resolveProfileSelection <- loadProfileTableOnly, NOT the
+// fully-populated loadMacOSProfile) only ever gives nativePreflight a
+// macOSProfile whose ImageURL/ImageDigest were never set -- those fields
+// are populated exclusively by loadMacOSProfile's own pin-file read. Every
+// existing test up to this one used testProfileTable(), which pre-populates
+// ImageURL/ImageDigest directly and so could never catch this: on the
+// actual Mac, "forced native-arm64" failed preflight's digests check with
+// "native-arm64 profile is missing a pinned image URL/digest" on every
+// single attempt, because the table it received really did have those
+// fields empty. This test exercises the exact real path -- parse the
+// shipped profiles.env with loadProfileTableOnly, then run nativePreflight
+// with the real assetRoot -- so a regression here fails loudly again.
+func TestNativePreflightDigestsPassOnTheRealShallowTable(t *testing.T) {
+	assetRoot := filepath.Join("..", "..", "packaging", "macos")
+	table, err := loadProfileTableOnly(assetRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shallow := table.Profiles[nativeProfileTableName]
+	if shallow.ImageDigest != "" || shallow.ImageURL != "" {
+		t.Fatalf("test premise violated: loadProfileTableOnly unexpectedly populated pin fields: %+v", shallow)
+	}
+	pf := nativePreflight(context.Background(), passingFacts(), table, "", assetRoot)
+	if got := pf.Checks["digests"]; got == "" || got[:4] != "PASS" {
+		t.Fatalf("digests check = %q, want a PASS derived from the real pin file at %s", got, filepath.Join(assetRoot, "lima", shallow.PinEnv))
 	}
 }
 

@@ -429,14 +429,34 @@ install -d -m 0755 "$OUT_DIR"
 OUT_TAR="$OUT_DIR/$PKG_NAME.tar.gz"
 
 echo "== pack-native: creating $OUT_TAR =="
-tar \
-    --create --gzip \
-    --file "$OUT_TAR" \
-    --directory "$STAGE_ROOT" \
-    --numeric-owner \
-    --owner=0 --group=0 \
-    --sort=name \
-    "$PKG_NAME"
+# GNU tar (the historical Linux-builder assumption) and bsdtar (macOS's
+# bundled /usr/bin/tar, which this profile's own workflow now runs this
+# script under directly per docs/m7-phase4-file-mapping.md) accept
+# different owner-zeroing flag spellings, and bsdtar has no --sort at all.
+# Found running this exact command on a real Mac (macOS 26.6.2/25G83,
+# bsdtar 3.5.3/libarchive 3.7.4): "tar: Option --sort=name is not
+# supported", exit 1 — pack-native.sh had only ever been exercised on a
+# GNU-tar Linux builder before. Detect which flavor is on PATH and use its
+# real flags; --sort=name is reproducibility-nice-to-have, not correctness-
+# critical, so bsdtar's build simply omits it rather than gaining a second
+# dependency.
+if tar --version 2>/dev/null | grep -q GNU; then
+    tar \
+        --create --gzip \
+        --file "$OUT_TAR" \
+        --directory "$STAGE_ROOT" \
+        --numeric-owner \
+        --owner=0 --group=0 \
+        --sort=name \
+        "$PKG_NAME"
+else
+    tar \
+        --create --gzip \
+        --file "$OUT_TAR" \
+        --directory "$STAGE_ROOT" \
+        --uid 0 --gid 0 \
+        "$PKG_NAME"
+fi
 
 rm -rf "$STAGE_ROOT"
 
