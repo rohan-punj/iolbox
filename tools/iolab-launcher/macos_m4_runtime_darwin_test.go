@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -772,16 +773,27 @@ func (r *m4Runtime) basicPhase(phase, fixtureName string, nodes []int) (record m
 	if err := r.sampleResources(dir, 0, m4StartedPIDs(started)); err != nil {
 		return record, err
 	}
+	// Restrict console probing/opening to nodes lab.start actually reported a
+	// console for. Item 3's "nat" infrastructure node (fixture node 2) has no
+	// telnet console -- lab.start's own response already says so
+	// (consolePort 0, matching item-3/phase.json on real hardware) -- but
+	// this loop used to probe/open a console for every id in the raw `nodes`
+	// argument regardless, so item 3 deterministically failed with "ws
+	// handshake: expected 101, got 502" dialing /console/2, a route with no
+	// real backend to proxy to. lab.start's `nodes` argument (used just
+	// above) must still list every node so the nat node actually gets
+	// started; only the console step needs the narrower list.
+	consoleNodes := m4ConsoleableNodes(started)
 	// Probe each console route before opening the live console sessions. VPCS
 	// owns its telnet server and can only service one client reliably; a
 	// browser-equivalent auth probe that opens and closes a second session
 	// after the live session is established can strand the original bridge.
-	for _, node := range nodes {
+	for _, node := range consoleNodes {
 		if err := m4AuthProbeRoute(dir, r.guiAddr, fmt.Sprintf("/console/%d", node)); err != nil {
 			return record, err
 		}
 	}
-	consoles, err := r.openConsoles(nodes, 150*time.Second)
+	consoles, err := r.openConsoles(consoleNodes, 150*time.Second)
 	if err != nil {
 		record.Status = "UNVERIFIED"
 		record.HardWall = phase == "item-5"
@@ -1443,6 +1455,28 @@ func m4StartedPIDs(started []map[string]any) []int {
 			result = append(result, int(value))
 		}
 	}
+	return result
+}
+
+// m4ConsoleableNodes returns the node ids lab.start reported a real telnet
+// console for (consolePort > 0), sorted ascending. Infrastructure nodes like
+// the "nat" node have no console -- lab.start's own response already says so
+// via consolePort 0 -- and probing/dialing /console/<id> for one of those
+// ids fails the WS handshake against a route with no backend to proxy to.
+func m4ConsoleableNodes(started []map[string]any) []int {
+	result := []int{}
+	for _, entry := range started {
+		port, ok := entry["consolePort"].(float64)
+		if !ok || port <= 0 {
+			continue
+		}
+		id, ok := entry["node"].(float64)
+		if !ok {
+			continue
+		}
+		result = append(result, int(id))
+	}
+	sort.Ints(result)
 	return result
 }
 
