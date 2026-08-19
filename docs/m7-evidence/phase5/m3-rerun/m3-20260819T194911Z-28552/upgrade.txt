@@ -1,0 +1,14 @@
+profile=debian13 role=DEFAULT guest=Debian 13 trixie qualification=UNMEASURED — CANARY REQUIRED
+[iolbox]   images folder: /Users/rohansharma/Library/Application Support/iolbox/images  (drop .bin/.iol IOL images here)
+[iolbox]   labs folder:   /Users/rohansharma/Library/Application Support/iolbox/labs  (saved labs persist here as <id>.yml)
+[iolbox] Darwin folder sync: rescued 0 guest lab(s) into /Users/rohansharma/Library/Application Support/iolbox/labs
+[iolbox]   lab m1-hardware-two-router.yml: synced in (id=m1-hardware-two-router)
+[iolbox]   lab seed-2-routers.yml: synced in (id=seed-2-routers)
+[iolbox]   lab seed-3-switches.yml: synced in (id=seed-3-switches)
+[iolbox]   lab seed-4-switches.yml: synced in (id=seed-4-switches)
+[iolbox]   lab seed-campus.yml: synced in (id=seed-campus)
+[iolbox]   lab seed-ccna-capstone.yml: synced in (id=seed-ccna-capstone)
+[iolbox]   lab seed-ccnp-core.yml: synced in (id=seed-ccnp-core)
+[iolbox]   lab seed-router-triangle.yml: synced in (id=seed-router-triangle)
+[iolbox] Darwin folder sync: imported 8 host lab(s) from /Users/rohansharma/Library/Application Support/iolbox/labs
+[iolbox] Darwin folder sync: imported 0 host image(s) from /Users/rohansharma/Library/Application Support/iolbox/images

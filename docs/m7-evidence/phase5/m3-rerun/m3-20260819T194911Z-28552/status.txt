@@ -1,0 +1,44 @@
+profile=debian13 role=DEFAULT guest=Debian 13 trixie qualification=UNMEASURED — CANARY REQUIRED
+iolbox status
+  GUI port: 127.0.0.1:4001
+  console ports: 127.0.0.1:9000-9049
+  capture ports: 127.0.0.1:5500-5529
+  guest control port: not forwarded (127.0.0.1:4000 host check)
+sync images: /Users/rohansharma/Library/Application Support/iolbox/images
+sync labs: /Users/rohansharma/Library/Application Support/iolbox/labs
+  profile: debian13
+  role: DEFAULT
+  guest: Debian 13 trixie
+  kernel pin: 6.12.101+deb13-cloud-arm64
+  macOS: 26.6.2 (25G83)
+  host_arch: arm64
+  qualification: UNMEASURED — CANARY REQUIRED
+  lima: 2.2.0 (/opt/homebrew/bin/limactl)
+  machine: iolbox-p5-m3-e2e
+  state: Stopped
+  last canary:
+    result=pass
+    exit=0
+    host_macos=26.6.2 (25G83)
+    host_lima=2.2.0
+    recorded_utc=2026-08-19T19:53:23Z
+requested_profile=rosetta-amd64
+selected_profile=rosetta-amd64
+profile_source=explicit-flag
+fallback_reason=
+backend=lima-vz
+translator=rosetta
+guest_arch=unavailable (machine is not running)
+supervisor_arch=unavailable (machine is not running)
+execution=unavailable (machine is not running)
+guest_kernel=unavailable (machine is not running)
+canary_verdict=last attested canary_verdict=PASS
+service=unavailable (machine is not running)
+http=unavailable (machine is not running)
+hello=unavailable (machine is not running)
+capability_policy=unavailable (machine is not running; last attested only)
+rosetta_binfmt=unavailable (machine is not running)
+rosetta_present=unavailable (machine is not running)
+structural_attestation=last attested canary_verdict=PASS
+effective_drop_in=unavailable (machine is not running; last attested only)
+  guest kernel: unavailable (machine is not running)

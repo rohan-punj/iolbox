@@ -1,0 +1,36 @@
+ok: real IOL image copied into the guest image directory
+ok: IOL image is executable (0755) so the supervisor can exec it
+ok: systemd structural gate contains canary ExecStartPre
+ok: supervisor active after structural-gate restart
+ok: supervisor reaches active through the structural gate
+Aug 19 15:50:46 lima-iolbox-p5-m3-e2e systemd[1]: Starting iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI)...
+Aug 19 15:50:46 lima-iolbox-p5-m3-e2e 30-canary.sh[5082]: PASS
+Aug 19 15:50:46 lima-iolbox-p5-m3-e2e systemd[1]: Started iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI).
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e sudo[5122]:     root : PWD=/opt/iolbox ; USER=root ; COMMAND=/usr/bin/true
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e sudo[5122]: pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e sudo[5122]: pam_unix(sudo:session): session closed for user root
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:47 iolbox supervisor v0.5.2-22-g0f6f5d5-dirty listening on 127.0.0.1:4000 (images=/opt/iolbox/images run=/opt/iolbox/run)
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:47 seeded 7 starter labs into /opt/iolbox/labs
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:47 iolbox supervisor ws bridge listening on 0.0.0.0:4001 (/control, /console/{nodeId})
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Stopping iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI)...
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:55 iolbox supervisor shut down cleanly
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: iolbox-supervisor.service: Deactivated successfully.
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Stopped iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI).
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Starting iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI)...
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e 30-canary.sh[5447]: PASS
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Started iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI).
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e sudo[5485]:     root : PWD=/opt/iolbox ; USER=root ; COMMAND=/usr/bin/true
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e sudo[5485]: pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e sudo[5485]: pam_unix(sudo:session): session closed for user rootok: GET / readiness status is 200 (< 500, after 0s)
+ok: control image.register
+ok: control image.list
+ok: image.list finds the registered image
+ok: control lab.saveDoc
+ok: control lab.listDocs
+ok: lab.listDocs returns the saved raw YAML lab
+ok: control lab.load
+ok: control lab.start
+ok: both routers report running
+console LAST Success rate: Success rate is 90 percent (9/10), round-trip min/avg/max = 1/22/193 ms
+ok: last console Success rate is 90% (>= 80%)
+PASS: M1 hardware acceptance evidence collected in /Users/rohansharma/iolbox-p5-build/src/evidence-p5/m3-20260819T194911Z-28552/m1-20260819T195052Z-28892

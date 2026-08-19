@@ -1,0 +1,128 @@
+����]0;R1
+
+IOS On Unix - Cisco Systems confidential, internal use only
+Port 0/0 is connected to:
+ 	500:0/0
+Port 0/1 is connected to:
+ 	501:0/0
+Port 0/2 is connected to:
+ 	502:0/0
+Port 0/3 is connected to:
+ 	503:0/0
+
+Warning: Abnormal ciscoversion string, please notify the IOU team
+with the name of this branch
+Warning: we parsed - NULL
+
+              Restricted Rights Legend
+
+Use, duplication, or disclosure by the Government is
+subject to restrictions as set forth in subparagraph
+(c) of the Commercial Computer Software - Restricted
+Rights clause at FAR sec. 52.227-19 and subparagraph
+(c) (1) (ii) of the Rights in Technical Data and Computer
+Software clause at DFARS sec. 252.227-7013.
+
+           Cisco Systems, Inc.
+           170 West Tasman Drive
+           San Jose, California 95134-1706
+
+
+
+Cisco IOS Software [IOSXE], Linux Software (X86_64BI_LINUX-ADVENTERPRISEK9-M), Version 17.18.2, RELEASE SOFTWARE (fc3)
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2025 by Cisco Systems, Inc.
+Compiled Fri 19-Dec-25 03:28 by mcpre
+
+
+PM unix notify udp ports APP_ID:0 DISABLE Port1:0 Port2:0
+PM unix notify udp ports APP_ID:1 DISABLE Port1:0 Port2:0Linux Unix (i686) processor with 798662K bytes of memory.
+Processor board ID 1
+4 Ethernet interfaces
+4 Serial interfaces
+65K bytes of NVRAM.
+
+SETUP: new interface Ethernet0/1 placed in "shutdown" state
+SETUP: new interface Ethernet0/2 placed in "shutdown" state
+SETUP: new interface Ethernet0/3 placed in "shutdown" state
+SETUP: new interface Serial1/0 placed in "shutdown" state
+SETUP: new interface Serial1/1 placed in "shutdown" state
+SETUP: new interface Serial1/2 placed in "shutdown" state
+SETUP: new interface Serial1/3 placed in "shutdown" state
+
+
+Press RETURN to get started!
+
+
+*Aug 19 19:51:05.529: Bootstrap Emulator called with code 135
+*Aug 19 19:51:05.709: %CRYPTO-5-SELF_TEST_START: Crypto algorithms release (Rel5b), Entropy release (3.4.1)
+       begin Crypto Module self-tests
+*Aug 19 19:51:05.711: %CRYPTO-0-SELF_TEST_FAILURE: Crypto self-test - (Crypto Module Integrity Test Bypassed)
+*Aug 19 19:51:06.069: %CRYPTO-5-SELF_TEST_END: Crypto Algorithm self-test completed successfully
+       All tests passed.
+*Aug 19 19:51:15.199: %SSH-4-SSH_COMPLIANCE_SSH_RSA_DISABLED: Please note that ssh-rsa algorithm stands disabled from IOS-XE release 17.16.1 onwards and will not be part of the preferred publickey or hostkey algorithms by default. Users may choose to configure them explicitly if required
+*Aug 19 19:51:15.989: TODCLK-STUB: REGISTERED
+*Aug 19 19:51:16.208: ISIS-GRACEFUL-RELOAD: Init State GR_NONE
+*Aug 19 19:51:16.395: PTP-ENGINE: REGISTERED
+*Aug 19 19:51:21.163: %TLSCLIENT-5-TLSCLIENT_IOS: TLS Client is IOS based
+*Aug 19 19:51:22.918: %CRYPTO_ENGINE-5-CSDL_COMPLIANCE_ENFORCED: Cisco PSB security compliance is being enforced
+*Aug 19 19:51:35.162: %SYS-3-CPUHOG: Task is running for (2641)msecs, more than (2000)msecs (0/0),process = mDNS.
+-Traceback= E6C414Bz E6F6C0Ez E6F3BF4z E71648Dz E70122Az E7016CCz 762CFF6z 7611792z 7620836z 760B775z 75FF8B6z 
+*Aug 19 19:51:38.654: %SYS-3-CPUHOG: Task is running for (2225)msecs, more than (2000)msecs (0/0),process = Crypto IKEv2.
+-Traceback= E26849Bz E264F24z E2E7B3Cz E31E38Az 
+*Aug 19 19:51:39.207: %PNP-6-PNP_DISCOVERY_STARTED: PnP Discovery started
+*Aug 19 19:51:39.692: %SYS-7-NVRAM_INIT_WAIT_TIME: Waited 0 seconds for NVRAM to be available
+*Aug 19 19:51:39.808: %LINK-3-UPDOWN: Interface Ethernet0/0, changed state to up
+*Aug 19 19:51:41.145: %LINK-3-UPDOWN: Interface Ethernet0/1, changed state to up
+*Aug 19 19:51:41.146: %LINK-3-UPDOWN: Interface Ethernet0/2, changed state to up
+*Aug 19 19:51:41.146: %LINK-3-UPDOWN: Interface Ethernet0/3, changed state to up
+*Aug 19 19:51:41.146: %LINK-3-UPDOWN: Interface Serial1/0, changed state to up
+*Aug 19 19:51:41.516: %LINK-3-UPDOWN: Interface Serial1/1, changed state to up
+*Aug 19 19:51:41.516: %LINK-3-UPDOWN: Interface Serial1/2, changed state to up
+*Aug 19 19:51:41.516: %LINK-3-UPDOWN: Interface Serial1/3, changed state to up
+*Aug 19 19:51:41.594: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/0, changed state to up
+*Aug 19 19:51:42.340: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/1, changed state to up
+*Aug 19 19:51:42.340: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/2, changed state to up
+*Aug 19 19:51:42.341: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/3, changed state to up
+*Aug 19 19:51:42.341: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/0, changed state to up
+*Aug 19 19:51:42.649: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/1, changed state to up
+*Aug 19 19:51:42.649: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/2, changed state to up
+*Aug 19 19:51:42.649: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/3, changed state to up
+*Aug 19 19:51:43.973: %SYS-5-CONFIG_I: Configured from memory by console
+*Aug 19 19:51:44.456: %SYS-5-RESTART: System restarted --
+Cisco IOS Software [IOSXE], Linux Software (X86_64BI_LINUX-ADVENTERPRISEK9-M), Version 17.18.2, RELEASE SOFTWARE (fc3)
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2025 by Cisco Systems, Inc.
+Compiled Fri 19-Dec-25 03:28 by mcpre
+*Aug 19 19:51:45.117: %CRYPTO-5-SELF_TEST_START: Crypto algorithms release (Rel5b), Entropy release (3.4.1)
+       begin Crypto Module self-tests
+*Aug 19 19:51:46.539: %LINK-5-CHANGED: Interface Ethernet0/1, changed state to administratively down
+*Aug 19 19:51:46.546: %LINK-5-CHANGED: Interface Ethernet0/2, changed state to administratively down
+*Aug 19 19:51:46.546: %LINK-5-CHANGED: Interface Ethernet0/3, changed state to administratively down
+*Aug 19 19:51:46.546: %LINK-5-CHANGED: Interface Serial1/0, changed state to administratively down
+*Aug 19 19:51:46.547: %LINK-5-CHANGED: Interface Serial1/1, changed state to administratively down
+*Aug 19 19:51:46.547: %LINK-5-CHANGED: Interface Serial1/2, changed state to administratively down
+*Aug 19 19:51:46.547: %LINK-5-CHANGED: Interface Serial1/3, changed state to administratively down
+*Aug 19 19:51:46.673: %SYS-5-CONFIG_I: Configured from console by console
+*Aug 19 19:51:47.106: %CRYPTO-5-SELF_TEST_END: Crypto Algorithm self-test completed successfully
+       All tests passed.
+*Aug 19 19:51:47.553: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/1, changed state to down
+*Aug 19 19:51:47.573: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/2, changed state to down
+*Aug 19 19:51:47.573: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet0/3, changed state to down
+*Aug 19 19:51:47.573: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/0, changed state to down
+*Aug 19 19:51:47.573: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/1, changed state to down
+*Aug 19 19:51:47.573: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/2, changed state to down
+*Aug 19 19:51:47.573: %LINEPROTO-5-UPDOWN: Line protocol on Interface Serial1/3, changed state to down
+R1>
+R1>
+R1>
+R1>enable
+R1#ping 10.0.0.2 repeat 10
+Type escape sequence to abort.
+Sending 10, 100-byte ICMP Echos to 10.0.0.2, timeout is 2 seconds:
+
+*Aug 19 19:51:51.601: %PNP-6-PNP_GOOD_UDI_UPDATE: Good UDI [PID:Unix,VID:,SN:1] identified via (platform-registry)
+*Aug 19 19:51:51.604: %PNP-6-PNP_CDP_UPDATE: Device UDI [PID:Unix,VID:,SN:1] identified for CDP
+*Aug 19 19:51:51.671: %PNP-6-PNP_DISCOVERY_STOPPED: PnP Discovery stopped (Startup Config Present).!!!!!!!!!
+Success rate is 90 percent (9/10), round-trip min/avg/max = 1/22/193 ms
+R1#

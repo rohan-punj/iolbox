@@ -1,0 +1,19 @@
+Aug 19 15:50:46 lima-iolbox-p5-m3-e2e systemd[1]: Starting iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI)...
+Aug 19 15:50:46 lima-iolbox-p5-m3-e2e 30-canary.sh[5082]: PASS
+Aug 19 15:50:46 lima-iolbox-p5-m3-e2e systemd[1]: Started iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI).
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e sudo[5122]:     root : PWD=/opt/iolbox ; USER=root ; COMMAND=/usr/bin/true
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e sudo[5122]: pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e sudo[5122]: pam_unix(sudo:session): session closed for user root
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:47 iolbox supervisor v0.5.2-22-g0f6f5d5-dirty listening on 127.0.0.1:4000 (images=/opt/iolbox/images run=/opt/iolbox/run)
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:47 seeded 7 starter labs into /opt/iolbox/labs
+Aug 19 15:50:47 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:47 iolbox supervisor ws bridge listening on 0.0.0.0:4001 (/control, /console/{nodeId})
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Stopping iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI)...
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e supervisor[5114]: 2026/08/19 15:50:55 iolbox supervisor shut down cleanly
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: iolbox-supervisor.service: Deactivated successfully.
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Stopped iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI).
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Starting iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI)...
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e 30-canary.sh[5447]: PASS
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e systemd[1]: Started iolbox-supervisor.service - iolbox supervisor (IOL/VPCS control plane + GUI).
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e sudo[5485]:     root : PWD=/opt/iolbox ; USER=root ; COMMAND=/usr/bin/true
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e sudo[5485]: pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+Aug 19 15:50:55 lima-iolbox-p5-m3-e2e sudo[5485]: pam_unix(sudo:session): session closed for user root

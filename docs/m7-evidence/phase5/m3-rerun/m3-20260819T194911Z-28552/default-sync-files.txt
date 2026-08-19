@@ -1,0 +1,13 @@
+/Users/rohansharma/Library/Application Support/iolbox/images/.iolbox-image-cache.json
+/Users/rohansharma/Library/Application Support/iolbox/labs/m1-hardware-two-router.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-2-routers.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-3-switches.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-4-switches.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-campus.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-ccna-capstone.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-ccnp-core.yml
+/Users/rohansharma/Library/Application Support/iolbox/labs/seed-router-triangle.yml
+/Users/rohansharma/Library/Application Support/iolbox/lima-canary-iolbox-debian13.txt
+/Users/rohansharma/Library/Application Support/iolbox/lima-canary-iolbox-native-arm64.txt
+/Users/rohansharma/Library/Application Support/iolbox/lima-canary-iolbox-p5-m3-e2e.txt
+/Users/rohansharma/Library/Application Support/iolbox/profile-choice.env

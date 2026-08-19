@@ -1,0 +1,4 @@
+profile=debian13 role=DEFAULT guest=Debian 13 trixie qualification=UNMEASURED — CANARY REQUIRED
+[iolbox]   images folder: /Users/rohansharma/Library/Application Support/iolbox/images  (drop .bin/.iol IOL images here)
+[iolbox]   labs folder:   /Users/rohansharma/Library/Application Support/iolbox/labs  (saved labs persist here as <id>.yml)
+[iolbox] Darwin folder sync: exported 1 lab(s) to /Users/rohansharma/Library/Application Support/iolbox/labs before Lima stop

@@ -27,10 +27,36 @@ import (
 const (
 	m4DefaultMachine = "iolbox-m4-e2e"
 	m4DefaultGUI     = 4001
-	m4SoakSeconds    = 600
+	// m4SoakSecondsDefault is the M4-owner-approved reduced soak duration
+	// (600s, not the original two hours) recorded in
+	// docs/m7-evidence/phase0/m3-m4-inputs.md's "Inputs still open" record.
+	// M7 Phase 5 (docs/macos-m7-plan.md section 11) requires its own
+	// traffic-soak row to actually run two hours continuous, which is a
+	// stricter bar than M4's own approved reduction -- so this is
+	// overridable via IOLBOX_M4_SOAK_SECONDS for that Phase 5 run only,
+	// while every other caller of this same M4 harness keeps the exact
+	// historical 600s default unchanged.
+	m4SoakSecondsDefault = 600
 )
 
-var m4ProcessStart = time.Now()
+var (
+	m4ProcessStart = time.Now()
+	m4SoakSeconds  = m4ResolveSoakSeconds()
+)
+
+func m4ResolveSoakSeconds() int {
+	raw := os.Getenv("IOLBOX_M4_SOAK_SECONDS")
+	if raw == "" {
+		return m4SoakSecondsDefault
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 || value%60 != 0 {
+		// Malformed override must not silently fall back to a shorter,
+		// easier-to-pass soak -- fail loudly at process start instead.
+		panic(fmt.Sprintf("invalid IOLBOX_M4_SOAK_SECONDS %q: must be a positive multiple of 60", raw))
+	}
+	return value
+}
 
 var (
 	m4IOSPingRE     = regexp.MustCompile(`(?i)Success rate is ([0-9]+) percent \(([0-9]+)/([0-9]+)\)`)
@@ -1258,7 +1284,8 @@ func (r *m4Runtime) soak() (m4PhaseRecord, error) {
 	checkpointDone := make(chan struct{})
 	go func() {
 		defer close(checkpointDone)
-		for checkpoint, offset := range []time.Duration{150 * time.Second, 300 * time.Second, 450 * time.Second, 600 * time.Second} {
+		soakDuration := time.Duration(m4SoakSeconds) * time.Second
+		for checkpoint, offset := range []time.Duration{soakDuration / 4, soakDuration / 2, soakDuration * 3 / 4, soakDuration} {
 			timer := time.NewTimer(time.Until(measurementStart.Add(offset)))
 			if timerDuration := time.Until(measurementStart.Add(offset)); timerDuration <= 0 {
 				if !timer.Stop() {
@@ -1328,8 +1355,8 @@ func (r *m4Runtime) soak() (m4PhaseRecord, error) {
 	if captureErr != nil {
 		return fail(captureErr)
 	}
-	if time.Since(measurementStart) < m4SoakSeconds*time.Second {
-		return fail(errors.New("soak measurement window was shorter than 600 seconds"))
+	if time.Since(measurementStart) < time.Duration(m4SoakSeconds)*time.Second {
+		return fail(fmt.Errorf("soak measurement window was shorter than %d seconds", m4SoakSeconds))
 	}
 	if err := r.powerAudit(dir, "end"); err != nil {
 		return fail(err)

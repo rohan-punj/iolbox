@@ -1,0 +1,47 @@
+iolbox diagnose
+port contract: GUI=127.0.0.1:4001 consoles=127.0.0.1:9000-9049 captures=127.0.0.1:5500-5529 guest-control=not-forwarded
+sync images: /Users/rohansharma/Library/Application Support/iolbox/images
+sync labs: /Users/rohansharma/Library/Application Support/iolbox/labs
+profile: debian13 (DEFAULT)
+guest: Debian 13 trixie
+kernel pin: 6.12.101+deb13-cloud-arm64
+qualification: UNMEASURED — CANARY REQUIRED
+macOS product/build: 26.6.2 (25G83)
+host arch: arm64
+free disk: 22.08 GiB
+lima executable: /opt/homebrew/bin/limactl
+lima raw version: limactl version 2.2.0
+lima version: 2.2.0
+IOLBOX_HOST_LIMA=2.2.0
+machine listing:
+  iolbox-m5-e2e|Stopped
+  iolbox-p5-m3-e2e|Stopped
+selected machine state: Stopped
+requested_profile=rosetta-amd64
+selected_profile=rosetta-amd64
+profile_source=explicit-flag
+fallback_reason=
+backend=lima-vz
+translator=rosetta
+guest_arch=unavailable (machine is not running)
+supervisor_arch=unavailable (machine is not running)
+execution=unavailable (machine is not running)
+guest_kernel=unavailable (machine is not running)
+canary_verdict=last attested canary_verdict=PASS
+service=unavailable (machine is not running)
+http=unavailable (machine is not running)
+hello=unavailable (machine is not running)
+capability_policy=unavailable (machine is not running; last attested only)
+rosetta_binfmt=unavailable (machine is not running)
+rosetta_present=unavailable (machine is not running)
+structural_attestation=last attested canary_verdict=PASS
+effective_drop_in=unavailable (machine is not running; last attested only)
+last canary:
+  result=pass
+exit=0
+host_macos=26.6.2 (25G83)
+host_lima=2.2.0
+recorded_utc=2026-08-19T19:53:23Z
+hostagent Rosetta warning: none found or log unavailable
+remediation: brew reinstall lima
+brew upgrade lima may be a no-op when the current version is already installed; Lima READY is not proof Rosetta was mounted
