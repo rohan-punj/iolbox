@@ -56,13 +56,24 @@ func rosettaBinfmtEnabled(raw string) bool {
 func rosettaPresenceString(raw string) string {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
 	switch {
+	// Checked BEFORE the generic "unavailable" fallback: unavailableValue()
+	// wraps a failed `cat` as "unavailable (cat: ... No such file or
+	// directory)", and on a genuine native-arm64 guest that specific
+	// failure IS the truthful answer (the file plainly does not exist,
+	// i.e. Rosetta is absent) — not an unknown result. Found on real
+	// hardware (2026-08-19): the unqualified "unavailable" prefix check
+	// used to run first and reported "unknown (unavailable (cat: ...No
+	// such file or directory)))" for a perfectly healthy, correctly
+	// Rosetta-less native-arm64 guest.
+	case strings.Contains(normalized, "no such file") || strings.Contains(normalized, "cannot open"):
+		return "false"
 	case strings.HasPrefix(normalized, "unavailable"):
 		return "unknown (" + raw + ")"
 	case strings.Contains(normalized, "enabled"):
 		return "true"
 	case strings.Contains(normalized, "disabled"):
 		return "true (registered but disabled)"
-	case strings.Contains(normalized, "no such file") || strings.Contains(normalized, "cannot open") || raw == "":
+	case raw == "":
 		return "false"
 	default:
 		return "unknown (" + raw + ")"

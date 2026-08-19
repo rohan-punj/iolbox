@@ -18,6 +18,36 @@ func TestParseMachineListing(t *testing.T) {
 	}
 }
 
+// TestParseMachineListingSkipsLimactlLogNoiseButStillFailsClosed is a
+// regression test for a real bug found on physical hardware (2026-08-19):
+// `limactl list` against a genuinely empty LIMA_HOME writes a logrus-style
+// warning to stderr, which execRunner.Run's CombinedOutput merges into this
+// parser's input, and it was previously treated as an invalid data line --
+// meaning `list()` could never succeed against a fresh, isolated LIMA_HOME
+// (exactly what Phase 4's own VM isolation requires). Zero real machines
+// plus that one noise line must parse as an empty, error-free listing; a
+// genuinely malformed data line must still fail closed.
+func TestParseMachineListingSkipsLimactlLogNoiseButStillFailsClosed(t *testing.T) {
+	noisy := `time="2026-08-19T14:23:44-04:00" level=warning msg="No instance found. Run ` + "`limactl create`" + ` to create an instance."` + "\n"
+	machines, err := parseMachineListing(noisy)
+	if err != nil {
+		t.Fatalf("expected the empty-listing warning line to be treated as noise, got error: %v", err)
+	}
+	if len(machines) != 0 {
+		t.Fatalf("expected zero machines from a pure noise line, got %#v", machines)
+	}
+
+	mixed := noisy + "m1|Running\n"
+	machines, err = parseMachineListing(mixed)
+	if err != nil || len(machines) != 1 || machines[0].Name != "m1" {
+		t.Fatalf("machines/error for noise+real line = %#v/%v", machines, err)
+	}
+
+	if _, err := parseMachineListing(noisy + "totally-broken-line-no-pipe\n"); err == nil {
+		t.Fatal("a genuinely malformed data line alongside the noise line must still fail closed")
+	}
+}
+
 func TestLimaStartWithPortContractKeepsExpressionInOneArg(t *testing.T) {
 	runner := &sequenceRunner{}
 	client := &limaClient{info: limaInfo{Path: "limactl"}, runner: runner}

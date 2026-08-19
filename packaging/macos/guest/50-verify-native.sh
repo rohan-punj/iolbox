@@ -199,10 +199,19 @@ verify_capability_hello() {
         *) return 1 ;;
     esac
     # Truthfulness-critical: a native-arm64 guest whose supervisor still
-    # reports arch x86_64 has not proven it is running a native binary, even
-    # though the loader canary and everything else above passed.
+    # reports a translated/foreign arch has not proven it is running a
+    # native binary, even though the loader canary and everything else
+    # above passed. The expected value is "arm64" (Go's GOARCH spelling,
+    # per supervisor/internal/server/server.go's defaultHelloArch() — a
+    # deliberate M7 protocol choice, NOT uname -m's "aarch64" spelling).
+    # Found on real hardware (2026-08-19, physical Mac): this check
+    # originally required literal "aarch64" and failed every native-arm64
+    # verify with "capability assertion: ... did not prove i386 is absent
+    # with runtime arch x86_64" even though a live correlated hello showed
+    # `"arch":"arm64"` — a genuinely native supervisor rejected by a check
+    # that was testing for the wrong spelling, not by any real problem.
     case "$response" in
-        *'"arch":"aarch64"'*) : ;;
+        *'"arch":"arm64"'*) : ;;
         *) return 1 ;;
     esac
     case "$response" in
@@ -335,7 +344,7 @@ main() {
 
     if ! verify_capability_hello; then
         die "$IOLBOX_EXIT_VERIFY" \
-            'capability assertion: correlated hello did not prove i386 is absent with runtime arch x86_64'
+            'capability assertion: correlated hello did not prove i386 is absent with runtime arch arm64'
     fi
 
     if loader_output="$("$IOLBOX_LOADER" --version 2>&1)"; then

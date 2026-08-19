@@ -113,11 +113,29 @@ func collectLimaInfo(ctx context.Context, path string, runner commandRunner) lim
 	return info
 }
 
+// isLimaLogNoise recognizes limactl's own logrus-style diagnostic lines
+// (e.g. `time="2026-08-19T14:23:44-04:00" level=warning msg="No instance
+// found. Run \`limactl create\` to create an instance."`), which land in
+// this parser's input because execRunner.Run uses CombinedOutput (stdout+
+// stderr merged) and limactl writes that particular warning to stderr.
+// Found on real hardware (2026-08-19, physical Mac): every M1-M6 session up
+// to now ran `limactl list` against ~/.lima, which by then already had a
+// machine registered from earlier development, so this line never
+// appeared. The very first Phase 4 run against a genuinely empty, isolated
+// LIMA_HOME (exactly the isolation scenario plan section 10 item 4 asks
+// for) hit it immediately: "iolbox-launcher: invalid Lima machine listing
+// line 1: ...No instance found...". A truly malformed data line (wrong
+// field count, empty name/state) must still fail closed; only limactl's own
+// recognizable log-line shape is treated as noise.
+func isLimaLogNoise(line string) bool {
+	return strings.HasPrefix(line, `time="`) && strings.Contains(line, "level=")
+}
+
 func parseMachineListing(output string) ([]machineInfo, error) {
 	var machines []machineInfo
 	for lineNo, line := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || isLimaLogNoise(line) {
 			continue
 		}
 		fields := strings.Split(line, "|")
