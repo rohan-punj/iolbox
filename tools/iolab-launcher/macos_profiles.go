@@ -43,16 +43,51 @@ type macOSProfile struct {
 	KernelHoldStep string
 	KernelSeries   string
 	ExpectedUnameR string
-	PinPath        string
-	TemplatePath   string
-	GuestDir       string
-	AssetRoot      string
-	ImageURL       string
-	ImageDigest    string
-	ImageBytes     int64
-	CPUs           string
-	Memory         string
-	Disk           string
+	// CanaryStep/InstallStep/VerifyStep are Phase-4-era per-profile guest step
+	// overrides (native-arm64 needs its own canary/install/verify scripts
+	// because the shared Rosetta-era 30-canary.sh/40-install-payload.sh/
+	// 50-verify.sh hard-assert Rosetta translation). Empty is the pre-Phase-4
+	// default: use canaryStep()/installStep()/verifyStep() below, which fall
+	// back to the historical fixed filenames so every profiles.env row (and
+	// every existing macOSProfile{} test literal) that never set these three
+	// columns keeps its exact old behavior.
+	CanaryStep  string
+	InstallStep string
+	VerifyStep  string
+	PinPath     string
+	TemplatePath string
+	GuestDir     string
+	AssetRoot    string
+	ImageURL     string
+	ImageDigest  string
+	ImageBytes   int64
+	CPUs         string
+	Memory       string
+	Disk         string
+}
+
+// canaryStep/installStep/verifyStep resolve the profile's guest step
+// filenames, defaulting to the historical Rosetta-era fixed names when a
+// profile (or a test literal) never set the Phase-4 override columns.
+func (p macOSProfile) canaryStep() string {
+	if p.CanaryStep != "" {
+		return p.CanaryStep
+	}
+	return "30-canary.sh"
+}
+
+func (p macOSProfile) installStep() string {
+	if p.InstallStep != "" {
+		return p.InstallStep
+	}
+	return "40-install-payload.sh"
+}
+
+func (p macOSProfile) verifyStep() string {
+	if p.VerifyStep != "" {
+		return p.VerifyStep
+	}
+	return "50-verify.sh"
 }
 
 type qualification struct {
@@ -110,6 +145,36 @@ func splitTableRows(value string, wantFields int, label string) ([][]string, err
 	return rows, nil
 }
 
+// splitProfileRows tolerates the pre-Phase-4 9-field row shape (name|role|
+// guest_label|pin_env|yaml_template|multiarch_step|kernel_hold_step|
+// kernel_series|expected_uname_r) alongside the Phase-4 12-field shape that
+// appends canary_step|install_step|verify_step. A 9-field row is padded with
+// three empty trailing fields, which macOSProfile.canaryStep()/installStep()/
+// verifyStep() then resolve to the historical fixed filenames.
+func splitProfileRows(value, label string) ([][]string, error) {
+	var rows [][]string
+	for lineNo, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "|")
+		switch len(fields) {
+		case 9:
+			fields = append(fields, "", "", "")
+		case 12:
+			// already the Phase-4 shape
+		default:
+			return nil, fmt.Errorf("%s row %d has %d fields, want 9 or 12", label, lineNo+1, len(fields))
+		}
+		for i := range fields {
+			fields[i] = strings.TrimSpace(fields[i])
+		}
+		rows = append(rows, fields)
+	}
+	return rows, nil
+}
+
 func parseProfilesEnv(data string) (profileTable, error) {
 	profilesText, err := extractQuotedAssignment(data, "IOLBOX_PROFILE_TABLE")
 	if err != nil {
@@ -119,7 +184,7 @@ func parseProfilesEnv(data string) (profileTable, error) {
 	if err != nil {
 		return profileTable{}, err
 	}
-	profileRows, err := splitTableRows(profilesText, 9, "profile")
+	profileRows, err := splitProfileRows(profilesText, "profile")
 	if err != nil {
 		return profileTable{}, err
 	}
@@ -149,6 +214,9 @@ func parseProfilesEnv(data string) (profileTable, error) {
 			KernelHoldStep: row[6],
 			KernelSeries:   row[7],
 			ExpectedUnameR: row[8],
+			CanaryStep:     row[9],
+			InstallStep:    row[10],
+			VerifyStep:     row[11],
 		}
 		if p.Role == "DEFAULT" {
 			defaults++
@@ -265,7 +333,7 @@ func loadMacOSProfile(assetRoot, selected string) (profileTable, macOSProfile, e
 	p.CPUs = values["IOLBOX_CPUS"]
 	p.Memory = values["IOLBOX_MEMORY"]
 	p.Disk = values["IOLBOX_DISK"]
-	for _, path := range []string{p.TemplatePath, p.GuestDir, filepath.Join(p.GuestDir, "lib.sh"), filepath.Join(p.GuestDir, p.MultiarchStep), filepath.Join(p.GuestDir, p.KernelHoldStep), filepath.Join(p.GuestDir, "30-canary.sh"), filepath.Join(p.GuestDir, "40-install-payload.sh"), filepath.Join(p.GuestDir, "50-verify.sh")} {
+	for _, path := range []string{p.TemplatePath, p.GuestDir, filepath.Join(p.GuestDir, "lib.sh"), filepath.Join(p.GuestDir, p.MultiarchStep), filepath.Join(p.GuestDir, p.KernelHoldStep), filepath.Join(p.GuestDir, p.canaryStep()), filepath.Join(p.GuestDir, p.installStep()), filepath.Join(p.GuestDir, p.verifyStep())} {
 		if _, err := os.Stat(path); err != nil {
 			return profileTable{}, macOSProfile{}, codedError(exitUsage, "profile asset is missing: %s", path)
 		}

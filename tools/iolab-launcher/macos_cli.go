@@ -199,7 +199,7 @@ func runDarwinCLI(args []string) int {
 	}
 	facts := preflightFacts // same collectHostFacts() call the selection resolution already ran
 	if opts.Command == "diagnose" {
-		return runDiagnose(opts, table, profile, facts)
+		return runDiagnose(opts, table, profile, facts, selection)
 	}
 	if opts.Command == "start" || opts.Command == "upgrade" {
 		if facts.System != "Darwin" || facts.Arch != "arm64" {
@@ -280,13 +280,13 @@ func runDarwinCLI(args []string) int {
 		}
 		return exitOK
 	case "status":
-		return runStatus(client, opts, table, profile, facts, info)
+		return runStatus(client, opts, table, profile, facts, info, selection)
 	default:
 		return exitUsage
 	}
 }
 
-func runStatus(client *limaClient, opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts, info limaInfo) int {
+func runStatus(client *limaClient, opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts, info limaInfo, selection profileSelectionResult) int {
 	machines, err := client.list(context.Background())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -316,7 +316,7 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 			return control.hello()
 		}
 	}
-	printDiagnosticSummary(os.Stdout, collectDarwinDiagnostics(context.Background(), client, opts.Machine, state, profile, facts, info, diagnosticsOptions{GUIPort: opts.GUIPort, hello: helloFn}))
+	printDiagnosticSummary(os.Stdout, collectDarwinDiagnostics(context.Background(), client, opts.Machine, state, profile, facts, info, diagnosticsOptions{GUIPort: opts.GUIPort, hello: helloFn, Selection: selection}))
 	if !exists || !strings.EqualFold(state, "running") {
 		fmt.Println("  guest kernel: unavailable (machine is not running)")
 		return exitOK
@@ -329,7 +329,7 @@ func runStatus(client *limaClient, opts darwinOptions, table profileTable, profi
 	return exitOK
 }
 
-func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts) int {
+func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, facts hostFacts, selection profileSelectionResult) int {
 	fmt.Println("iolbox diagnose")
 	if ports, err := newDarwinPortContractWithRanges(opts.GUIPort, opts.ConsoleHostStart, opts.CaptureHostStart); err == nil {
 		fmt.Printf("port contract: GUI=127.0.0.1:%d consoles=127.0.0.1:%d-%d captures=127.0.0.1:%d-%d guest-control=not-forwarded\n", ports.GUIPort, ports.ConsoleHostStart, ports.ConsoleHostStart+darwinConsoleEnd-darwinConsoleStart, ports.CaptureHostStart, ports.CaptureHostStart+darwinCaptureEnd-darwinCaptureStart)
@@ -381,7 +381,7 @@ func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, f
 				}
 				fmt.Println("guest structural-gate drop-in:", guestValue(context.Background(), client, opts.Machine, "sudo", "-n", "cat", expectedCanaryDropIn))
 				env := guestEnvironment(profile, facts, info.Version, opts.Machine, "unknown.tar.gz", lifecycleConfig{Bind: opts.Bind, GUIPort: opts.GUIPort})
-				canaryOut, canaryErr := client.shell(context.Background(), opts.Machine, guestStepArgs("30-canary.sh", env, "--quiet")...)
+				canaryOut, canaryErr := client.shell(context.Background(), opts.Machine, guestStepArgs(profile.canaryStep(), env, "--quiet")...)
 				if canaryErr != nil {
 					fmt.Printf("live canary: FAIL (%v): %s\n", canaryErr, strings.TrimSpace(string(canaryOut)))
 				} else {
@@ -414,7 +414,7 @@ func runDiagnose(opts darwinOptions, table profileTable, profile macOSProfile, f
 			return control.hello()
 		}
 	}
-	printDiagnosticSummary(os.Stdout, collectDarwinDiagnostics(context.Background(), client, opts.Machine, state, profile, facts, info, diagnosticsOptions{GUIPort: opts.GUIPort, hello: helloFn}))
+	printDiagnosticSummary(os.Stdout, collectDarwinDiagnostics(context.Background(), client, opts.Machine, state, profile, facts, info, diagnosticsOptions{GUIPort: opts.GUIPort, hello: helloFn, Selection: selection}))
 	printDiagnosticRemediation(opts.Machine)
 	return exitOK
 }

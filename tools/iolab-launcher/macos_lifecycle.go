@@ -274,10 +274,11 @@ func runnerOrExec(runner commandRunner) commandRunner {
 
 func runGuestSequence(ctx context.Context, l *limaClient, machine string, p macOSProfile, facts hostFacts, limaVersion, payloadBase string, config lifecycleConfig) error {
 	env := guestEnvironment(p, facts, limaVersion, machine, payloadBase, config)
-	steps := []string{p.MultiarchStep, p.KernelHoldStep, "30-canary.sh", "40-install-payload.sh", "50-verify.sh"}
+	canaryStep := p.canaryStep()
+	steps := []string{p.MultiarchStep, p.KernelHoldStep, canaryStep, p.installStep(), p.verifyStep()}
 	for _, step := range steps {
 		err := guestStep(ctx, l, machine, step, env)
-		if step == "30-canary.sh" {
+		if step == canaryStep {
 			if err != nil {
 				_ = recordCanary(machine, facts, limaVersion, "fail", exitCodeFor(err))
 				return err

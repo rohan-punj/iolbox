@@ -16,8 +16,17 @@ func TestParseProfilesEnvAndExactQualification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if table.Default != "debian13" || len(table.Profiles) != 3 {
+	if table.Default != "debian13" || len(table.Profiles) != 4 {
 		t.Fatalf("default/profiles = %q/%d", table.Default, len(table.Profiles))
+	}
+	if _, ok := table.Profiles["native-arm64"]; !ok {
+		t.Fatal("native-arm64 profile row is missing from the shipped profiles.env")
+	}
+	if got := table.Profiles["native-arm64"].canaryStep(); got != "30-canary-native.sh" {
+		t.Errorf("native-arm64 canaryStep() = %q, want 30-canary-native.sh", got)
+	}
+	if got := table.Profiles["debian13"].canaryStep(); got != "30-canary.sh" {
+		t.Errorf("debian13 canaryStep() = %q, want 30-canary.sh", got)
 	}
 	if table.Profiles["jammy"].ExpectedUnameR != "" {
 		t.Errorf("jammy exact kernel field = %q, want empty", table.Profiles["jammy"].ExpectedUnameR)
@@ -47,6 +56,23 @@ func TestLoadShippedProfileResolvesReferencedAssets(t *testing.T) {
 	}
 	if profile.ImageBytes != 337313792 || profile.CPUs != "4" || profile.Memory != "4GiB" || profile.Disk != "15GiB" {
 		t.Fatalf("pin values = %+v", profile)
+	}
+}
+
+func TestLoadShippedNativeProfileResolvesItsOwnGuestSteps(t *testing.T) {
+	root := filepath.Join("..", "..", "packaging", "macos")
+	_, profile, err := loadMacOSProfile(root, "native-arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.PinPath == "" || profile.TemplatePath == "" || profile.GuestDir == "" || profile.ImageDigest == "" {
+		t.Fatalf("incomplete resolved native-arm64 profile: %+v", profile)
+	}
+	if profile.canaryStep() != "30-canary-native.sh" || profile.installStep() != "40-install-payload-native.sh" || profile.verifyStep() != "50-verify-native.sh" {
+		t.Fatalf("native-arm64 did not resolve its own guest steps: %+v", profile)
+	}
+	if profile.MultiarchStep != "10-multiarch-native.sh" {
+		t.Fatalf("native-arm64 MultiarchStep = %q, want 10-multiarch-native.sh", profile.MultiarchStep)
 	}
 }
 
