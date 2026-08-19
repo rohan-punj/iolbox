@@ -72,7 +72,42 @@ if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
 fi
 
 ARCH="$(uname -m)"
-if [ "$ARCH" != "x86_64" ]; then
+
+# The explicit arm64 archive carries a manifest.env (see pack-native.sh's
+# TARGET_ARCH=arm64 branch: version/os/arch/supervisor_sha256/vpcs_sha256).
+# The no-argument and explicit-amd64 archives never carry one -- that is the
+# fixed no-arg-amd64-compatibility contract, so its absence here means this
+# is the historical amd64 payload and the old warning-only check below still
+# applies unchanged. When manifest.env IS present, its declared arch is
+# authoritative and a mismatch is a hard, fail-closed refusal -- no
+# directory is created, no file is copied, and systemctl is never invoked.
+if [ -f "$SCRIPT_DIR/manifest.env" ]; then
+    # A plain KEY=value file written by this project's own pack-native.sh;
+    # sourcing it is safe (not attacker-controlled input at this point --
+    # it shipped inside the same signed-by-build archive as the binaries).
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/manifest.env"
+    MANIFEST_ARCH="${arch:-}"
+    case "$MANIFEST_ARCH" in
+        arm64) EXPECTED_UNAME=aarch64 ;;
+        amd64) EXPECTED_UNAME=x86_64 ;;
+        *)
+            echo "install.sh: manifest.env has an unrecognized or missing arch= field ('$MANIFEST_ARCH')." >&2
+            echo "  Refusing to install: cannot verify an architecture-mismatch-safe package." >&2
+            exit 1
+            ;;
+    esac
+    if [ "$ARCH" != "$EXPECTED_UNAME" ]; then
+        echo "install.sh: architecture mismatch — this package is linux/$MANIFEST_ARCH" >&2
+        echo "  (expects uname -m = $EXPECTED_UNAME), but this host reports uname -m = '$ARCH'." >&2
+        echo "  Refusing to install an arm64/aarch64-vs-x86_64 mismatched package —" >&2
+        echo "  a mismatched supervisor/vpcs binary would just fail to exec (ENOEXEC)" >&2
+        echo "  after already being copied into place. No directory was created, no" >&2
+        echo "  file was copied, and systemctl was not invoked." >&2
+        exit 1
+    fi
+    echo "install.sh: manifest.env architecture check passed (linux/$MANIFEST_ARCH, uname -m=$ARCH)"
+elif [ "$ARCH" != "x86_64" ]; then
     echo "install.sh: WARNING - uname -m reports '$ARCH', not x86_64." >&2
     echo "  The bundled supervisor/vpcs binaries are linux/amd64 only and will" >&2
     echo "  fail to exec on any other architecture. Continuing anyway (in case" >&2
@@ -237,6 +272,14 @@ fi
 # build-rootfs.sh's `install -m 0755` on the same two files).
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/supervisor" "$PREFIX/supervisor"
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/vpcs" "$PREFIX/vpcs"
+
+# manifest.env (arm64 archives only, see the architecture check above) is
+# provenance, not runtime config: it records the package version/arch and
+# the supervisor/vpcs SHA-256 that were actually installed, for later audit
+# (status/diagnose reads it back to report translator/backend truthfully).
+if [ -f "$SCRIPT_DIR/manifest.env" ]; then
+    install -m 0644 -o root -g root "$SCRIPT_DIR/manifest.env" "$PREFIX/manifest.env"
+fi
 
 # PC/VPCS nodes' ambient-capability transition (supervisor/internal/tool/launch.go)
 # execs this helper at a hardcoded path, /opt/iolbox/iolbox-toollaunch, regardless
