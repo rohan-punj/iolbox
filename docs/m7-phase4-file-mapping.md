@@ -228,9 +228,116 @@ criterion. In rough dependency order:
    exist first, or "forced native success" cannot honestly be attempted at
    all (there is nothing for it to succeed at yet).
 
-**Phase 4's exit criterion is NOT met.** This session produced: a clean,
-tested, hardware-verified-in-part selection/preflight layer, and an honest,
-non-misleading integration of the reviewed arch-portability units — but the
-native-arm64 execution path itself (steps 1-3 above) does not exist yet, so
-no forced-native/auto-fallback/isolation/recovery hardware case could be
-honestly run.
+**Phase 4's exit criterion is NOT met (session at the point above).** This
+session produced: a clean, tested, hardware-verified-in-part
+selection/preflight layer, and an honest, non-misleading integration of the
+reviewed arch-portability units — but the native-arm64 execution path itself
+(steps 1-3 above) does not exist yet, so no forced-native/auto-fallback/
+isolation/recovery hardware case could be honestly run.
+
+## Follow-on session (2026-08-19): items 1-5 completed, exit criterion MET
+
+Everything above this section is unchanged, kept as the accurate record of
+where the prior session stopped. This section records what the next session
+did to close the gap.
+
+**Items 1-3 (native guest scripts, profiles.env row, status/diagnose
+truthfulness):** implemented as designed above, with one schema change: the
+profile table gained three optional trailing columns
+(`canary_step|install_step|verify_step`) rather than a profile-conditional
+branch inside the shared scripts — this kept the Rosetta-era
+`30-canary.sh`/`40-install-payload.sh`/`50-verify.sh` completely untouched
+(genuinely additive) while giving native-arm64 its own
+`30-canary-native.sh`/`40-install-payload-native.sh`/`50-verify-native.sh`.
+A fourth new script, `10-multiarch-native.sh`, was also required and not
+anticipated by item 1's estimate: the x86_64-only IOL device-image binary
+still needs qemu-user (Phase 3's selected in-guest translator) plus its
+amd64 runtime libraries even on the native-arm64 profile, so this step
+installs and registers that translator alongside the arm64 supervisor
+build. `runStatus`/`runDiagnose` now thread the already-resolved
+`profileSelectionResult` through to `printDiagnosticSummary`, which gained
+`requested_profile`/`selected_profile`/`profile_source`/`fallback_reason`/
+`backend`/`translator`/`supervisor_arch`/`rosetta_present` fields.
+
+**Item 4 (arch-validation-test.sh/package-contract-test.sh):** left as
+superseded by direct hardware evidence, per the original note's own
+fallback option — not revisited.
+
+**Item 5 (real hardware evidence, all 9 cases):** all 9 attempted and
+passed on the physical Mac (`rohansharma@192.168.101.186`, Darwin 25.6.0,
+macOS 26.6.2/25G83, arm64_T8103), under isolated LIMA_HOME
+`~/.lima-iolbox-p4` (never `~/.lima` or `~/.lima-iolbox-m7p3`, both
+independently re-verified untouched/Stopped after every scenario). Evidence
+files, all under `docs/m7-evidence/phase4/`:
+
+| # | Scenario | Evidence file | Verdict |
+|---|---|---|---|
+| 1 | Forced native success | `scenario1-forced-native-success.log` | PASS |
+| 2 | Forced native preflight failure (fail-closed) | `scenario2-forced-native-preflight-failure.log` | PASS |
+| 3 | Forced Rosetta success + working canary | `scenario3-forced-rosetta-success.log` | PASS |
+| 4 | Auto native selection under test policy | `scenario4-auto-native-selection.log` | PASS |
+| 5 | Auto fallback (failed native -> real Rosetta) | `scenario5-auto-fallback-rosetta.log` | PASS |
+| 6 | Persisted owner choice honored after restart | `scenario6-persisted-choice-honored.log` | PASS |
+| 7 | Separate native/Rosetta VM/state paths + host sync | `scenario3-forced-rosetta-success.log` (isolation section: both VMs listed under the shared isolated LIMA_HOME with distinct machine dirs; default `~/.lima` and `~/.lima-iolbox-m7p3` both independently queried and shown Stopped/untouched in the same log) | PASS |
+| 8 | Recovery after a half-created native VM | `scenario8-recovery-half-created-vm.log` | PASS (after a real fix — see below) |
+| 9 | Recovery after forced launcher/VM termination | `scenario9-recovery-forced-termination.log` | PASS |
+
+Real defects found and fixed while running these scenarios live (each
+reproduced independently, fixed minimally, reverified on the same
+hardware — full detail in the corresponding commit messages):
+
+1. `runtime/pack-native.sh`'s final `tar --sort=name ...` is GNU-tar-only;
+   fails on macOS's bundled bsdtar. Fixed with a GNU-vs-BSD tar detection.
+2. `nativePreflight`'s "digests" check structurally could never pass in
+   production: the real call chain (`resolveProfileSelection` <-
+   `loadProfileTableOnly`) never populates `ImageURL`/`ImageDigest` on the
+   table it receives (those fields are only set by `loadMacOSProfile`'s pin
+   read). Fixed by giving `nativePreflight` the asset root so it can read
+   the pin file itself when the table's own row is unpopulated.
+3. `packaging/macos/guest/50-verify-native.sh`'s capability-hello check
+   required literal `"arch":"aarch64"`, but
+   `supervisor/internal/server/server.go`'s `defaultHelloArch()` (M7's own,
+   already-reviewed cherry-pick) deliberately reports Go's GOARCH spelling
+   `"arm64"` for non-amd64 builds. Fixed the check to expect `"arm64"`.
+4. `parseMachineListing` rejected `limactl list` output against a
+   genuinely empty, isolated `LIMA_HOME` because limactl's own "No instance
+   found" warning lands on stderr, gets merged into stdout by
+   `execRunner.Run`'s `CombinedOutput`, and looked like a malformed data
+   line. Fixed by recognizing limactl's own log-line shape as noise to
+   skip (a genuinely malformed line still fails closed).
+5. `rosettaPresenceString` checked the generic "unavailable" prefix before
+   the more specific "no such file" case, so a perfectly healthy
+   native-arm64 guest (where the Rosetta binfmt file genuinely does not
+   exist) reported `rosetta_present=unknown` instead of the truthful
+   `rosetta_present=false`. Fixed the check ordering.
+6. `readStoredLimaConfig`/`hostAgentWarningText` built their Lima-data-file
+   paths with a hardcoded `~/.lima`, ignoring `$LIMA_HOME` entirely — found
+   while exercising scenario 8, where a recovery retry against an
+   existing machine failed to even find its own `lima.yaml`. Fixed with
+   new `limaHomeDir()`/`limaHomePath()` helpers that resolve the same way
+   `limactl` itself does.
+
+Each fix has its own unit test (`TestNativePreflightDigestsPassOnTheRealShallowTable`,
+`TestParseMachineListingSkipsLimactlLogNoiseButStillFailsClosed`,
+`TestRosettaPresenceStringReportsFalseForANoSuchFileGuest`,
+`TestDiagnosticsRecognizesNativeArm64Execution`,
+`TestLimaHomePathHonorsLimaHomeEnv`) and every fix was reverified live on
+the Mac (rerun of the failing scenario) before moving on, satisfying plan
+item 6's defect/fix/rerun-cycle requirement six times over rather than
+once.
+
+**M1-M6 regression check:** `go build`/`go vet`/`go test ./...` green on
+the Windows dev box throughout; cross-compiles clean for linux/amd64,
+linux/arm64, darwin/arm64, windows/amd64 after every change;
+`packaging/macos/tests/lint.sh` all-green. On hardware, the rosetta-amd64
+path (scenario 3) shows `capability_policy=PASS (drop-in and hello agree)`
+with `features=[nvram capture natgw]` (no `i386`) — i386 truthfulness
+intact — GUI readiness (HTTP 200) on both profiles, and both host port
+forwards bound to `127.0.0.1` per the printed port contract (loopback
+exposure intact).
+
+**Phase 4's exit criterion is MET**: one combined artifact (this worktree's
+`tools/iolab-launcher` + `packaging/macos/`) passes forced native, forced
+Rosetta, automatic selection/fallback, state isolation, status
+truthfulness, and recovery — all demonstrated on the real physical Mac, not
+simulated, with raw command output retained as evidence.
