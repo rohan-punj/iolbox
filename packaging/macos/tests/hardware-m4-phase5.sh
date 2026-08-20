@@ -151,7 +151,13 @@ main() {
     record_command limactl-stop-help "$limactl_bin" stop --help || true
     grep -E -- '--force|--kill' "$evidence_dir/commands/limactl-stop-help.stdout" >/dev/null 2>&1 || die 'Lima forced-stop syntax unavailable'
     record_command forced-vm-stop "$limactl_bin" stop --force "$machine" || die 'forced VM stop failed'
-    sentinel_checkpoint after-forced-vm-stop; launcher_start after-forced-vm; run_phase item-7 || die 'item 7 recovery failed'
+    # Same ordering bug as the item-5 reclaim path above (see that comment):
+    # sentinel_checkpoint dials the guest via `limactl shell`, which needs a
+    # running VM, but forced-vm-stop just stopped it. Confirmed on real
+    # hardware ("FAIL: guest sentinel failed at after-forced-vm-stop") by
+    # manually driving this exact sequence. Fixed the same way: check the
+    # guest sentinel after launcher_start brings the VM back up, not before.
+    launcher_start after-forced-vm; sentinel_checkpoint after-forced-vm-stop; run_phase item-7 || die 'item 7 recovery failed'
     sentinel_checkpoint after-recovery; ownership_snapshot item-7-after
     build_requirements; launcher_stop final; sentinel_checkpoint final
     env IOLBOX_GUI_PORT="$gui_port" IOLBOX_M4_PHASE=final IOLBOX_M4_FIXTURES="$fixtures_dir" IOLBOX_M4_EVIDENCE="$evidence_dir" IOLBOX_M4_RUN_ID="$run_id" IOLBOX_M4_MACHINE="$machine" IOLBOX_M4_GUI_PORT="$gui_port" IOLBOX_M4_PLAN_SHA256="$(env_or IOLBOX_M4_PLAN_SHA256 unknown)" IOLBOX_M4_PLAN_UNCHANGED="$(env_or IOLBOX_M4_PLAN_UNCHANGED 0)" IOLBOX_M4_BASE_COMMIT="$(env_or IOLBOX_M4_BASE_COMMIT unknown)" IOLBOX_M4_RUN_START_UTC="$(grep '^start_utc=' "$evidence_dir/README.txt" | cut -d= -f2)" "$test_binary" -test.run '^TestMacOSM4Hardware$' -test.v >"$evidence_dir/final-summary.log" 2>&1 || true
