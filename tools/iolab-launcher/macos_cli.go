@@ -181,7 +181,7 @@ func runDarwinCLI(args []string) int {
 	}
 	preflightFacts := collectHostFacts(context.Background())
 	preflightLimactl, _ := discoverLimactl(opts.Limactl, os.Getenv("LIMACTL"), nil)
-	selection, err := resolveProfileSelection(context.Background(), opts.Profile, earlyTable, preflightFacts, preflightLimactl, assetRoot, nil, testPreferNativeFromEnv(nil))
+	selection, err := resolveProfileSelection(context.Background(), opts.Profile, earlyTable, preflightFacts, preflightLimactl, assetRoot, nil)
 	if err != nil {
 		if opts.Command == "diagnose" {
 			fmt.Println("iolbox diagnose")

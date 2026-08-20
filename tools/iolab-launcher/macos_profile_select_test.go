@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -29,6 +30,24 @@ func testProfileTable(t *testing.T, includeNative bool) profileTable {
 
 func passingFacts() hostFacts {
 	return hostFacts{System: "Darwin", Arch: "arm64", FreeDiskKB: 64 * 1024 * 1024}
+}
+
+// stubLimactlSupportingVZ writes a tiny executable stub that answers
+// `limactl info` with a vmTypes list containing "vz", so nativePreflight's
+// lima_vz check can PASS on a dev box that has no real Lima installed. This
+// is the only preflight check that shells out; every other check is
+// satisfied by passingFacts()/testProfileTable() directly.
+func stubLimactlSupportingVZ(t *testing.T) string {
+	t.Helper()
+	name, body := "limactl", "#!/bin/sh\necho '{\"vmTypes\":[\"qemu\",\"vz\"]}'\n"
+	if runtime.GOOS == "windows" {
+		name, body = "limactl.bat", "@echo off\r\necho {\"vmTypes\":[\"qemu\",\"vz\"]}\r\n"
+	}
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func tempConfigDir(t *testing.T) func() (string, error) {
@@ -70,7 +89,7 @@ func TestResolveProfileSelectionExplicitFlagWins(t *testing.T) {
 	if err := persistProfileChoice(selectionNativeARM64, configDir); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveProfileSelection(context.Background(), selectionRosettaAMD64, table, passingFacts(), "", "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), selectionRosettaAMD64, table, passingFacts(), "", "", configDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,34 +103,75 @@ func TestResolveProfileSelectionForcedNativeFailsClosed(t *testing.T) {
 	configDir := tempConfigDir(t)
 	badFacts := hostFacts{System: "Darwin", Arch: "amd64"} // not Apple Silicon -> preflight must fail
 
-	_, err := resolveProfileSelection(context.Background(), selectionNativeARM64, table, badFacts, "", "", configDir, false)
+	_, err := resolveProfileSelection(context.Background(), selectionNativeARM64, table, badFacts, "", "", configDir)
 	if err == nil {
 		t.Fatal("expected forced native-arm64 to fail closed on a non-Apple-Silicon host, got nil error")
 	}
 }
 
-func TestResolveProfileSelectionAutoDefaultsToRosetta(t *testing.T) {
+// TestResolveProfileSelectionAutoPrefersNativeWhenPreflightPasses covers the
+// owner's promotion ruling (docs/macos-m7-phase6-handoff.md): a bare "auto"
+// with no persisted choice now runs native preflight unconditionally and
+// picks native-arm64 whenever it passes. There is no test-only opt-in hook
+// any more -- this is production behavior.
+func TestResolveProfileSelectionAutoPrefersNativeWhenPreflightPasses(t *testing.T) {
 	table := testProfileTable(t, true)
 	configDir := tempConfigDir(t)
-	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir, false)
+	limactl := stubLimactlSupportingVZ(t)
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), limactl, "", configDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Selected != selectionRosettaAMD64 || res.Source != "auto-default-rosetta" {
-		t.Fatalf("got %+v, want auto-default-rosetta", res)
+	if res.Requested != selectionAuto || res.Selected != selectionNativeARM64 || res.ProfileName != nativeProfileTableName || res.Source != "auto-native" {
+		t.Fatalf("got %+v, want auto to select native-arm64 via auto-native", res)
+	}
+	if res.FallbackReason != "" {
+		t.Fatalf("got FallbackReason %q, want empty on a clean native selection", res.FallbackReason)
 	}
 }
 
-func TestResolveProfileSelectionAutoWithTestPolicyStillFallsBackWithoutLimactl(t *testing.T) {
+// TestResolveProfileSelectionAutoFallsBackToRosettaOnFailedPreflight is the
+// retained explicit Rosetta fallback the PROMOTE clause requires: auto must
+// degrade to rosetta-amd64 with a reason, never error out.
+func TestResolveProfileSelectionAutoFallsBackToRosettaOnFailedPreflight(t *testing.T) {
 	table := testProfileTable(t, true)
 	configDir := tempConfigDir(t)
-	// No real limactl on this dev box -> lima_vz preflight check fails closed
-	// -> auto-with-test-policy must fall back to rosetta-amd64, never error.
-	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir, true)
+	limactl := stubLimactlSupportingVZ(t)
+	badFacts := hostFacts{System: "Darwin", Arch: "amd64", FreeDiskKB: 64 * 1024 * 1024} // not Apple Silicon
+	res, err := resolveProfileSelection(context.Background(), "", table, badFacts, limactl, "", configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Requested != selectionAuto || res.Selected != selectionRosettaAMD64 || res.ProfileName != "debian13" || res.Source != "auto-fallback-rosetta" || res.FallbackReason == "" {
+		t.Fatalf("got %+v, want an auto-fallback-rosetta result with a FallbackReason", res)
+	}
+}
+
+func TestResolveProfileSelectionAutoFallsBackWithoutLimactl(t *testing.T) {
+	table := testProfileTable(t, true)
+	configDir := tempConfigDir(t)
+	// No limactl path at all -> lima_vz preflight check fails closed -> auto
+	// must fall back to rosetta-amd64, never error.
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Requested != selectionAuto || res.Selected != selectionRosettaAMD64 || res.Source != "auto-fallback-rosetta" || res.FallbackReason == "" {
+		t.Fatalf("got %+v, want an auto-fallback-rosetta result with a FallbackReason", res)
+	}
+}
+
+// TestResolveProfileSelectionAutoFallsBackWhenNativeRowAbsent covers an asset
+// root whose profiles.env has no native-arm64 row at all: auto must still
+// resolve, to rosetta-amd64, with the missing-row reason recorded.
+func TestResolveProfileSelectionAutoFallsBackWhenNativeRowAbsent(t *testing.T) {
+	table := testProfileTable(t, false)
+	configDir := tempConfigDir(t)
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), stubLimactlSupportingVZ(t), "", configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Selected != selectionRosettaAMD64 || res.Source != "auto-fallback-rosetta" || res.FallbackReason == "" {
 		t.Fatalf("got %+v, want an auto-fallback-rosetta result with a FallbackReason", res)
 	}
 }
@@ -122,7 +182,7 @@ func TestResolveProfileSelectionPersistedChoiceHonored(t *testing.T) {
 	if err := persistProfileChoice(selectionRosettaAMD64, configDir); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), "", table, passingFacts(), "", "", configDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +198,7 @@ func TestResolveProfileSelectionPersistedNativeFallsBackOnFailedPreflight(t *tes
 		t.Fatal(err)
 	}
 	badFacts := hostFacts{System: "Darwin", Arch: "amd64"}
-	res, err := resolveProfileSelection(context.Background(), "", table, badFacts, "", "", configDir, false)
+	res, err := resolveProfileSelection(context.Background(), "", table, badFacts, "", "", configDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,18 +300,6 @@ func TestParseLimaVZSupport(t *testing.T) {
 	ok3, _ := parseLimaVZSupport([]byte(`not json`))
 	if ok3 {
 		t.Fatal("expected unparseable info to fail closed")
-	}
-}
-
-func TestTestPreferNativeFromEnv(t *testing.T) {
-	if testPreferNativeFromEnv(func(string) string { return "1" }) != true {
-		t.Fatal("want true for '1'")
-	}
-	if testPreferNativeFromEnv(func(string) string { return "" }) != false {
-		t.Fatal("want false for unset")
-	}
-	if testPreferNativeFromEnv(func(string) string { return "true" }) != false {
-		t.Fatal("want false for any value other than exactly '1' -- no loose truthy parsing")
 	}
 }
 

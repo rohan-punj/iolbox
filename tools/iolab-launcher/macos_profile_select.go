@@ -18,10 +18,15 @@ import (
 //
 //  1. an explicit --profile flag (or IOLBOX_PROFILE env var) value wins;
 //  2. otherwise, a previously persisted owner choice wins;
-//  3. otherwise, "auto" applies -- which, until promotion, still defaults to
-//     rosetta-amd64. A bare "auto" selecting native-arm64 requires an
-//     explicit, test-only policy (IOLBOX_TEST_PREFER_NATIVE=1); production
-//     "auto" must never silently start preferring native.
+//  3. otherwise, "auto" applies -- which, since the owner's promotion ruling
+//     (docs/macos-m7-phase6-handoff.md, "Owner promotion ruling"; plan
+//     section 13 PROMOTE), now runs the same non-mutating nativePreflight
+//     used for forced/persisted native selections and PREFERS native-arm64
+//     whenever that preflight passes. When it does not pass, auto falls back
+//     to rosetta-amd64 with a FallbackReason -- the explicit Rosetta
+//     fallback the PROMOTE clause requires be retained. There is no
+//     test-only preference hook any more; auto's behavior is the same in
+//     tests and in production.
 //
 // nativeProfileName/rosettaAliasName are logical selections, distinct from
 // profileTable row names (macos_profiles.go's "debian13"/"jammy"/"debian12"
@@ -51,13 +56,6 @@ const (
 	// translator itself runs inside the guest, installed by guest
 	// provisioning, not by the macOS host.
 	nativeTranslatorName = "qemu-user"
-
-	// testPreferNativeEnv is the explicit, test-only policy hook plan section
-	// 10 item 3 requires: until promotion, a bare "auto" selection must never
-	// silently prefer native-arm64 on its own. Setting this to "1" is the
-	// only way "auto" can resolve to native-arm64 without an explicit
-	// --profile/persisted choice.
-	testPreferNativeEnv = "IOLBOX_TEST_PREFER_NATIVE"
 )
 
 // profileChoiceFileName is where a successful explicit selection is
@@ -78,7 +76,7 @@ type profileSelectionResult struct {
 	// ProfileName is the profileTable row name to pass to loadMacOSProfile.
 	ProfileName string
 	// Source explains where Selected came from: explicit-flag / persisted /
-	// auto-default-rosetta / auto-native-test-policy / auto-fallback-rosetta.
+	// persisted-fallback-rosetta / auto-native / auto-fallback-rosetta.
 	Source string
 	// FallbackReason is non-empty only when Requested != Selected.
 	FallbackReason string
@@ -302,12 +300,12 @@ func nativePreflight(ctx context.Context, facts hostFacts, table profileTable, l
 
 // resolveProfileSelection is the single entry point macos_cli.go calls. It
 // applies the explicit-flag > persisted > auto precedence, runs native
-// preflight whenever native-arm64 is in play (forced or auto-under-test-
-// policy), and fails closed: a FORCED native-arm64 selection that fails
-// preflight is returned as an error (never silently downgraded), while an
+// preflight whenever native-arm64 is in play (forced, persisted, or auto),
+// and fails closed: a FORCED native-arm64 selection that fails preflight is
+// returned as an error (never silently downgraded), while a PERSISTED or
 // AUTO selection that fails native preflight falls back to rosetta-amd64
 // with FallbackReason set.
-func resolveProfileSelection(ctx context.Context, explicitFlag string, table profileTable, facts hostFacts, limactlPath, assetRoot string, configDir func() (string, error), testPreferNative bool) (profileSelectionResult, error) {
+func resolveProfileSelection(ctx context.Context, explicitFlag string, table profileTable, facts hostFacts, limactlPath, assetRoot string, configDir func() (string, error)) (profileSelectionResult, error) {
 	if explicitFlag != "" && explicitFlag != selectionAuto {
 		// Direct legacy profile-table name or one of the two logical modes.
 		name, err := resolveProfileSelectionName(explicitFlag, table)
@@ -352,16 +350,15 @@ func resolveProfileSelection(ctx context.Context, explicitFlag string, table pro
 		logf("iolbox-launcher: persisted profile choice %q is no longer valid (%v); falling back to auto", persisted, err)
 	}
 
-	// Bare auto, no valid persisted choice. Until promotion, auto defaults
-	// to rosetta-amd64 UNLESS the explicit test-only policy hook says to
-	// prefer native — and even then, only when native preflight actually
-	// passes; otherwise auto falls back to rosetta-amd64 with a reason.
+	// Bare auto, no valid persisted choice. Post-promotion, auto PREFERS
+	// native-arm64: run the same non-mutating preflight the forced and
+	// persisted native paths run, and use native whenever it passes.
+	// Anything short of a clean pass (native row absent, or any failing
+	// check) falls back to rosetta-amd64 with a FallbackReason -- auto never
+	// errors out, it degrades to the retained Rosetta path.
 	rosettaName, err := resolveProfileSelectionName(selectionRosettaAMD64, table)
 	if err != nil {
 		return profileSelectionResult{}, err
-	}
-	if !testPreferNative {
-		return profileSelectionResult{Requested: selectionAuto, Selected: selectionRosettaAMD64, ProfileName: rosettaName, Source: "auto-default-rosetta"}, nil
 	}
 	nativeName, nerr := resolveProfileSelectionName(selectionNativeARM64, table)
 	if nerr != nil {
@@ -371,15 +368,5 @@ func resolveProfileSelection(ctx context.Context, explicitFlag string, table pro
 	if !pf.OK {
 		return profileSelectionResult{Requested: selectionAuto, Selected: selectionRosettaAMD64, ProfileName: rosettaName, Source: "auto-fallback-rosetta", FallbackReason: pf.Reason}, nil
 	}
-	return profileSelectionResult{Requested: selectionAuto, Selected: selectionNativeARM64, ProfileName: nativeName, Source: "auto-native-test-policy"}, nil
-}
-
-// testPreferNativeFromEnv reads the explicit, test-only auto-native-
-// preference hook. Split out for unit testing without mutating the real
-// process environment from every test case.
-func testPreferNativeFromEnv(getenv func(string) string) bool {
-	if getenv == nil {
-		getenv = os.Getenv
-	}
-	return getenv(testPreferNativeEnv) == "1"
+	return profileSelectionResult{Requested: selectionAuto, Selected: selectionNativeARM64, ProfileName: nativeName, Source: "auto-native"}, nil
 }
