@@ -335,6 +335,10 @@ retrying past the allowed cycle.
 3. **Four-node capacity** — single confirming attempt per arm only, per
    explicit instruction; see the caveat above. Not re-verified against the
    mature M4 Go harness this session.
+   **[SUPERSEDED — re-verified in Phase 7; see the Phase 7 follow-up section
+   at the end of this document. native-arm64 PASS 4/4 (this session's native
+   observation does not stand); rosetta-amd64 standalone hard wall 0/2 (this
+   session's fresh-boot claim is corroborated).]**
 4. **The rosetta-amd64 router stall's ultimate root cause is still open.**
    Three independent socket-layer theories were tested and ruled out by
    direct verification; the live diagnostic session ruled out "genuinely
@@ -535,13 +539,30 @@ Two things in this handoff are directly affected:
   reader, not a product or environment issue — which also weakens (does not
   confirm) the arm-specific inference drawn from the native-arm64 control
   comparison.
-- **The four-node capacity gap (Remaining gaps item 3) is still open, and is
-  now explicitly UNEVALUATED rather than single-attempt-observed.** The
-  Phase 7 run could not be started: the Mac was at 3.0 GiB free disk (below
-  the launcher's own 5 GiB minimum) and ~99 MB free RAM with the owner's
-  validation instance still resident. Deliberately not worked around, since
-  item-5 *is* a resource-headroom measurement. See that doc's "What unblocks
-  it".
+- **The four-node capacity gap (Remaining gaps item 3) is now CLOSED for
+  native-arm64 and re-scored for rosetta-amd64.** After the owner released
+  5.2 GiB of superseded Lima base images and stopped the validation instance,
+  item-5 was measured on both arms with the mature harness:
+  - **native-arm64: PASS 4/4** (two independent fresh-VM runs × 2 attempts),
+    all four nodes running, full 100-packet ring pings, ~1.0–1.15 GiB
+    consumed of the 4 GiB guest leaving ~2.15 GiB available. **This
+    contradicts this handoff's own native four-node observation**
+    ("WebSocket closed mid-frame" on 3 of 4 nodes), which was a single
+    lightweight-harness attempt and should not stand.
+  - **rosetta-amd64, standalone/fresh position: hard wall, 0/2**, both runs
+    `UNVERIFIED` with all four IOL processes still alive and two of four
+    consoles never advancing past their first line. **This corroborates this
+    handoff's fresh-boot four-node failure claim** and contradicts Phase 5's
+    3/3 standalone passes.
+  - Crucially, the native control run was launched under *worse* host memory
+    pressure than either rosetta run and still passed, so headroom does not
+    explain the divergence. One confound remains open and is named in that
+    doc: the rosetta arm ran M6-vintage launcher+payload while native ran
+    current HEAD, so execution mode and build vintage are not yet separated.
+  - Consequence: the owner's Phase 5 capacity waiver should be **narrowed**
+    from "a Mac-capacity limit" to "a rosetta-arm limit on this Mac" — the
+    promoted default (`auto` → native-arm64, per `e2ffe34`) passes four-node
+    cleanly.
 
 ## Working pattern used this session (recommended to continue)
 
