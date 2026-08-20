@@ -125,7 +125,22 @@ main() {
     if [ "$phase" -ne 0 ]; then
         grep -F '"hard_wall": true' "$evidence_dir/item-5/attempt-1/phase.json" >/dev/null 2>&1 || die 'item 5 failed without recorded hard wall'
         record_command reclaim-physmem top -l 1 -s 0 || true; record_command reclaim-pressure memory_pressure -Q || true; record_command reclaim-swap sysctl vm.swapusage || true
-        launcher_stop ram-reclaim; sentinel_checkpoint after-ram-reclaim; launcher_start cold-retry
+        # hardware-m4.sh's own original ordering here is
+        # "launcher_stop; sentinel_checkpoint; launcher_start" -- calling
+        # sentinel_checkpoint (which dials the GUEST via `limactl shell`,
+        # requiring a running VM) between a stop and the next start.  Found
+        # on real hardware: this guarantees failure the moment the retry
+        # path is actually exercised, since the VM the guest sentinel check
+        # dials is stopped at that exact point ("FAIL: guest sentinel
+        # failed at after-ram-reclaim"), which explains why every real
+        # item-5 hard-wall retry died right here with no further evidence.
+        # No M4 run in this project's history appears to have exercised
+        # this branch on real hardware before Phase 5. Fixed here (not in
+        # the frozen hardware-m4.sh) by checking the guest sentinel AFTER
+        # the VM is back up post-restart, which is also the only point
+        # where "did state survive the reclaim cycle" is actually
+        # answerable.
+        launcher_stop ram-reclaim; launcher_start cold-retry; sentinel_checkpoint after-ram-reclaim
         run_phase item-5 attempt-2 || die 'item 5 retry hard wall: M4 BLOCKED/UNVERIFIED (no m1jammy/m1trixie/iolbox-m1..m3-e2e witnesses exist on this Mac to reclaim RAM from -- see this script header)'
     fi
     sentinel_checkpoint after-item-5; ownership_snapshot item-5-after; snapshot_other_vms after-item-5
