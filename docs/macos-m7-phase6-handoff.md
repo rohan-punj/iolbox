@@ -377,6 +377,56 @@ retrying past the allowed cycle.
   `docs/m7-evidence/phase6/phase6_run.py` and
   `docs/m7-evidence/phase6/raw-metrics/*.json`.
 
+## Owner promotion ruling (received after this handoff was written, 2026-08-20)
+
+**Ruling**: promote native-arm64. The owner reviewed this handoff's full
+verdict table and explicit gap list and directed that native-arm64 proceed
+toward promotion notwithstanding the two open items above.
+
+**This is an explicit owner override, not a mechanical PROMOTE per plan
+section 13's own algorithm.** The gate ledger as it stands still contains
+a real FAIL (rosetta-amd64 router console, 0/5) and real UNEVALUATED rows
+(both arms' four-node capacity, single-attempt-only) — section 13 is
+explicit that "No FAIL, UNEVALUATED, or BLOCKED gate may coexist with
+PROMOTE." Recording this honestly rather than silently reclassifying those
+rows: this ruling is the owner exercising the authority the plan itself
+reserves for exactly this situation — "a separate, explicit owner sign-off
+after the owner has personally reviewed the actual measured results" —
+applied here to override the strict all-gates-PASS bar, not a claim that
+the ledger mechanically computed PROMOTE.
+
+**Rationale as understood**: the FAIL is confined to the rosetta-amd64
+baseline arm specifically, which is not being removed — it remains the
+explicit fallback path (Phase 4's `resolveProfileSelection` already falls
+back to rosetta-amd64 whenever native preflight fails). Every gate
+native-arm64 itself was able to reach in this session is a clean PASS
+(VM boot parity, lab boot, bidirectional ping traffic, teardown, no
+crashes, no Rosetta dependency). The four-node gap is symmetric across
+both arms (single confirming attempt each, not native-specific), so it is
+not a reason to withhold native-arm64 specifically.
+
+**What this ruling does NOT resolve** (still open, unchanged by the
+ruling itself): the rosetta-amd64 router-console root cause, and
+four-node capacity on either arm. Re-verifying both with the mature
+Go-based M4 harness remains real, unfinished work — see "Next session's
+actual job" below, now reordered to reflect this ruling.
+
+**Scope note on what "promote" means in code**: `tools/iolab-launcher/macos_profile_select.go`'s
+`resolveProfileSelection` currently gates a bare `auto` selection's
+native-arm64 preference behind a test-only env var
+(`IOLBOX_TEST_PREFER_NATIVE=1`) — comment at the top of that file states
+this explicitly: "until promotion, [auto] still defaults to rosetta-amd64
+... production auto must never silently start preferring native." Flipping
+that gate (auto prefers native-arm64 whenever preflight passes, explicit
+Rosetta fallback retained, exactly as plan section 13's PROMOTE clause
+describes) is the literal code consequence of this ruling, but has **not**
+been made yet as of this doc update — the immediate next step is building
+a real native-arm64 package and getting it running for the owner to
+personally validate first (see the follow-up build/run session), matching
+plan section 13's own sequencing: a PROMOTE verdict is not self-executing,
+and personal owner review of the actual measured/running result precedes
+any merge, tag, or default-behavior change.
+
 ## Next session's actual job
 
 1. **Get the rosetta-amd64 router stall in front of fresh eyes with the
