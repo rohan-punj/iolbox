@@ -159,7 +159,15 @@ main() {
     # guest sentinel after launcher_start brings the VM back up, not before.
     launcher_start after-forced-vm; sentinel_checkpoint after-forced-vm-stop; run_phase item-7 || die 'item 7 recovery failed'
     sentinel_checkpoint after-recovery; ownership_snapshot item-7-after
-    build_requirements; launcher_stop final; sentinel_checkpoint final
+    # Third instance of the same ordering bug: unlike the other two (which
+    # have a subsequent launcher_start to move the checkpoint after), this
+    # is the terminal stop with nothing after it to bring the guest back --
+    # confirmed on real hardware ("FAIL: guest sentinel failed at final")
+    # driving this exact sequence. Fixed by checking the guest sentinel
+    # while it is still reachable, before this final stop, matching every
+    # other mid-run checkpoint's implicit assumption that the VM it is
+    # sentinel-checking is currently running.
+    build_requirements; sentinel_checkpoint final; launcher_stop final
     env IOLBOX_GUI_PORT="$gui_port" IOLBOX_M4_PHASE=final IOLBOX_M4_FIXTURES="$fixtures_dir" IOLBOX_M4_EVIDENCE="$evidence_dir" IOLBOX_M4_RUN_ID="$run_id" IOLBOX_M4_MACHINE="$machine" IOLBOX_M4_GUI_PORT="$gui_port" IOLBOX_M4_PLAN_SHA256="$(env_or IOLBOX_M4_PLAN_SHA256 unknown)" IOLBOX_M4_PLAN_UNCHANGED="$(env_or IOLBOX_M4_PLAN_UNCHANGED 0)" IOLBOX_M4_BASE_COMMIT="$(env_or IOLBOX_M4_BASE_COMMIT unknown)" IOLBOX_M4_RUN_START_UTC="$(grep '^start_utc=' "$evidence_dir/README.txt" | cut -d= -f2)" "$test_binary" -test.run '^TestMacOSM4Hardware$' -test.v >"$evidence_dir/final-summary.log" 2>&1 || true
     set +e; "$test_binary" -test.run '^TestM4VerifyRecord$' -test.v -m4-record "$evidence_dir/summary.json" >"$evidence_dir/verifier.log" 2>&1; phase="$?"; set -e
     printf '%s\n' "$phase" >"$evidence_dir/verifier.status"; printf 'M4 evidence retained at %s (verifier status %s)\n' "$evidence_dir" "$phase"
