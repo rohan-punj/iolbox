@@ -29,6 +29,13 @@ type darwinOptions struct {
 	GUIPort          int
 	ConsoleHostStart int
 	CaptureHostStart int
+	CPUs             int
+	MemoryGiB        int
+	// ExplicitFlags records which flag names were actually passed (flag.Visit
+	// only walks SET flags) — an explicit --cpus/--memory-gib is a deliberate
+	// choice and must never be second-guessed by the interactive prompt, same
+	// contract as prompt.go's Windows --smp/--mem handling.
+	ExplicitFlags map[string]bool
 }
 
 func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
@@ -91,9 +98,12 @@ func parseDarwinArgs(args []string, stderr io.Writer) (darwinOptions, error) {
 	fs.StringVar(&opts.LabsDir, "labs-dir", "", "override the macOS labs folder")
 	fs.IntVar(&opts.ConsoleHostStart, "console-host-start", opts.ConsoleHostStart, "host port for guest console range 9000-9049")
 	fs.IntVar(&opts.CaptureHostStart, "capture-host-start", opts.CaptureHostStart, "host port for guest capture range 5500-5529")
+	fs.IntVar(&opts.CPUs, "cpus", 0, "vCPUs for the guest (0 = use the profile's own default; prompts interactively if unset and stdin is a terminal)")
+	fs.IntVar(&opts.MemoryGiB, "memory-gib", 0, "RAM in GiB for the guest (0 = use the profile's own default; prompts interactively if unset and stdin is a terminal)")
 	if err := fs.Parse(args); err != nil {
 		return darwinOptions{}, err
 	}
+	opts.ExplicitFlags = explicitFlags(func(f func(string)) { fs.Visit(func(fl *flag.Flag) { f(fl.Name) }) })
 	if fs.NArg() != 0 {
 		return darwinOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
@@ -210,6 +220,13 @@ func runDarwinCLI(args []string) int {
 			fmt.Fprintln(os.Stderr, "could not read macOS product/build with sw_vers")
 			return exitPreflight
 		}
+		// Editable vCPU/RAM sizing, applied before any VM gets created: an
+		// explicit --cpus/--memory-gib always wins; otherwise, on a real
+		// interactive terminal, ask (defaulting to the profile's own
+		// declared sizing) exactly like the Windows launcher's --smp/--mem
+		// prompt. Never fires for status/diagnose/stop, which don't create
+		// or resize a VM.
+		profile.CPUs, profile.Memory = resolveDarwinResources(stdinIsInteractive(), opts.ExplicitFlags, opts.CPUs, opts.MemoryGiB, profile.CPUs, profile.Memory)
 	}
 	qualification := qualificationFor(table, profile.Name, facts.Product, facts.Build)
 	fmt.Printf("profile=%s role=%s guest=%s qualification=%s\n", profile.Name, profile.Role, profile.GuestLabel, qualification.String())
