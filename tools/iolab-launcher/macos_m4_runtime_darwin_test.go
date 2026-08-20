@@ -1158,13 +1158,25 @@ func m4FourNodeTraffic(dir string, consoles map[int]*m4Console, pings *[]m4PingS
 			return err
 		}
 	}
+	// The last two checks are the plan's required non-adjacent "R1<->R3"
+	// diagonal (docs/macos-m4-plan.md item 5: "adjacent links and R1<->R3
+	// each meet 99/100"). Found on real hardware via the independent
+	// TestM4VerifyRecord verifier (basicPhase's own item-5 pass/fail check
+	// did not catch this): the first diagonal entry targeted 10.0.34.2,
+	// which is R4's own address on the R3-R4 link, not R3's -- so this was
+	// silently testing R1->R4-via-R3's-link, not R1->R3, and even that
+	// failed 100% because neither direction of an R1<->R3 diagonal is
+	// actually routable with the fixture's static routes (see the matching
+	// four-iol-ring.lab.json fix: R2 needs a transit route to 10.0.34.0/30
+	// and R1 needs one to 10.0.23.0/30 for the reply path). Both real
+	// pings.ndjson rows showed sent=100 received=0 before this fix.
 	checks := []struct {
 		node   int
 		target string
 	}{
 		{0, "10.0.12.2"}, {1, "10.0.12.1"}, {1, "10.0.23.2"}, {2, "10.0.23.1"},
 		{2, "10.0.34.2"}, {3, "10.0.34.1"}, {3, "10.0.41.2"}, {0, "10.0.41.1"},
-		{0, "10.0.34.2"}, {2, "10.0.12.1"},
+		{0, "10.0.34.1"}, {2, "10.0.12.1"},
 	}
 	for _, check := range checks {
 		ping, _, err := consoles[check.node].ping(fmt.Sprintf("ping %s repeat 100", check.target), m4PingTimeout(100))
