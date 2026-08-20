@@ -125,10 +125,10 @@ fail-closed contract. Summary:
 
 - Explicit `--profile`/`IOLBOX_PROFILE` wins > persisted owner choice
   (`~/Library/Application Support/iolbox/profile-choice.env`) > `auto`.
-- `auto` still defaults to `rosetta-amd64` until promotion; selecting
-  `native-arm64` from `auto` requires the explicit test-only
-  `IOLBOX_TEST_PREFER_NATIVE=1` env hook, and only when native preflight
-  passes.
+- `auto` now prefers `native-arm64` whenever native preflight passes
+  (promoted per the owner's Phase 7 ruling, `docs/macos-m7-phase6-handoff.md`),
+  falling back to `rosetta-amd64` with a recorded `FallbackReason` otherwise.
+  The test-only `IOLBOX_TEST_PREFER_NATIVE` env hook has been removed.
 - `nativePreflight()` is non-mutating: Apple Silicon (hostFacts),
   Lima/VZ (`limactl info` vmTypes, read-only), digests (profile table pin),
   translator (identity constant), resources (hostFacts free disk).
