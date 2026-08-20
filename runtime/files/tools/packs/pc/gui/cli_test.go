@@ -76,6 +76,46 @@ func TestCLIConnectionEchoesKeystrokes(t *testing.T) {
 	}
 }
 
+// TestCLIConnectionEmptyEnterNoSpuriousBlankLine reproduces "netprobe still
+// has space between two rows of prompt": dispatchLine("") returns "", but
+// the write path used to be an unconditional "\r\n"+result+"\r\n"+prompt —
+// for an empty result that's two consecutive newlines, rendering as a
+// blank line between every prompt whenever Enter is pressed on an empty
+// line. A bare Enter should behave like an ordinary shell: one newline
+// straight to the next prompt, no gap.
+func TestCLIConnectionEmptyEnterNoSpuriousBlankLine(t *testing.T) {
+	app := testApp(t)
+	client, server := net.Pipe()
+	defer client.Close()
+	go handleCLIConnection(server, app)
+
+	readN := func(n int) string {
+		t.Helper()
+		buf := make([]byte, n)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := readFull(client, buf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return string(buf)
+	}
+
+	if got := readN(len(cliPrompt)); got != cliPrompt {
+		t.Fatalf("initial prompt = %q, want %q", got, cliPrompt)
+	}
+
+	// Press Enter three times in a row on an empty line, exactly as in the
+	// reported repro (idle console, operator hits Enter a few times).
+	want := "\r\n" + cliPrompt
+	for i := 0; i < 3; i++ {
+		if _, err := client.Write([]byte("\r")); err != nil {
+			t.Fatalf("write CR %d: %v", i, err)
+		}
+		if got := readN(len(want)); got != want {
+			t.Fatalf("empty-Enter response %d = %q, want %q (no blank line)", i, got, want)
+		}
+	}
+}
+
 // TestCLIConnectionArrowKeyHistory covers the CLI history recall feature: up
 // arrow (ESC [ A) should redraw the line with a previously entered command,
 // most-recent first, and down arrow (ESC [ B) should step back toward

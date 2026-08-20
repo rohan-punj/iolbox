@@ -158,7 +158,19 @@ func handleCLIConnection(conn net.Conn, app *App) {
 			esc = 1
 		case b == '\r' || b == '\n':
 			justDispatchedCR = b == '\r'
-			_, _ = io.WriteString(conn, "\r\n"+dispatchLine(app, string(line))+"\r\n"+cliPrompt)
+			// An empty line (bare Enter) dispatches to "" — writing the
+			// unconditional "\r\n"+result+"\r\n"+prompt in that case sends
+			// two consecutive newlines (one for the Enter itself, one from
+			// the empty-result separator), which renders as a spurious
+			// blank line between every prompt. Only add the result/its
+			// trailing newline when there's actually a result to show,
+			// matching ordinary shell behavior for an empty command.
+			result := dispatchLine(app, string(line))
+			if result != "" {
+				_, _ = io.WriteString(conn, "\r\n"+result+"\r\n"+cliPrompt)
+			} else {
+				_, _ = io.WriteString(conn, "\r\n"+cliPrompt)
+			}
 			line = line[:0]
 			cursor = 0
 			hist, pos, pending = nil, -1, nil
