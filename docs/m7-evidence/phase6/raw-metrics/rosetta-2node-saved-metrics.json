@@ -1,0 +1,149 @@
+{
+  "arm": "rosetta-amd64",
+  "topology": "2node",
+  "run": 5,
+  "vmname": "iolbox-debian13",
+  "lima_home": "/Users/rohansharma/.lima-iolbox-p6-rosetta",
+  "started_at": "2026-08-20T19:10:12Z",
+  "mac_pre_run": {
+    "vm_stat": {
+      "free": 146279,
+      "active": 95517,
+      "inactive": 83218,
+      "speculative": 11911,
+      "throttled": 0,
+      "wired down": 83480,
+      "purgeable": 4023,
+      "zero filled": 304392893,
+      "reactivated": 76717713,
+      "purged": 8831374,
+      "stored in compressor": 689700,
+      "occupied by compressor": 67986
+    },
+    "top": {
+      "user": 6.78,
+      "sys": 12.97,
+      "idle": 80.23
+    }
+  },
+  "vm_boot_seconds": 96.26583409309387,
+  "vm_boot_ok": true,
+  "image_register_ok": true,
+  "image_id": "b858503827356c55",
+  "lab_load_result_ok": true,
+  "lab_start_response_ok": true,
+  "lab_boot_node_errors": [
+    "node 0: no prompt within 600s, tail=b'I_INFO: PKI: no sudi certificate is installed\\r\\n*Aug 20 19:12:31.932: %PKI-2-NON_AUTHORITATIVE_CLOCK: PKI functions can not be initialized until an authoritative time source, like NTP, can be obtained.'"
+  ],
+  "lab_boot_seconds": null,
+  "lab_boot_ok": false,
+  "idle_host_cpu": {
+    "user": 16.99,
+    "sys": 11.89,
+    "idle": 71.1
+  },
+  "idle_mac_vmstat": {
+    "free": 4453,
+    "active": 85187,
+    "inactive": 83399,
+    "speculative": 860,
+    "throttled": 0,
+    "wired down": 78338,
+    "purgeable": 2,
+    "zero filled": 305494238,
+    "reactivated": 77600950,
+    "purged": 8965990,
+    "stored in compressor": 968181,
+    "occupied by compressor": 236125
+  },
+  "idle_guest_loadavg": "1.58 1.23 0.68 2/180 5419",
+  "idle_translator_ps": [
+    {
+      "cmd": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python /Users/rohansharma/phase6/phase6_run.py --arm rosetta-amd64 --profile-flag debian13 --topology 2node --run 5 --launcher /Users/rohansharma/iolbox-p6-rosetta/iolbox-macos-arm64/iolbox --lima-home /Users/rohansharma/.lima-iolbox-p6-rosetta --vmname iolbox-debian13 --outdir /Users/rohansharma/phase6/out/rosetta-2node-saved --ping-count 50",
+      "cpu": "0.9",
+      "mem": "0.1",
+      "rss_kb": "9088"
+    },
+    {
+      "cmd": "zsh -c \\012for i in $(seq 1 160); do\\012  if [ -f ~/phase6/out/rosetta-2node-saved/metrics.json ]; then echo FOUND_METRICS; break; fi\\012  if ! ps -p 70673 >/dev/null 2>&1; then echo \"PROCESS 70673 EXITED\"; break; fi\\012  sleep 5\\012done\\012python3 -c \"\\012import json\\012d=json.load(open(\\\"/Users/rohansharma/phase6/out/rosetta-2node-saved/metrics.json\\\"))\\012print(\\\"vm_boot\\\", d.get(\\\"vm_boot_seconds\\\"))\\012print(\\\"lab_boot\\\", d.get(\\\"lab_boot_seconds\\\"), d.get(\\\"lab_boot_ok\\\"))\\012print(\\\"teardown\\\", d.get(\\\"teardown_seconds\\\"))\\012print(\\\"node_errors uniq:\\\", sorted(set(d.get(\\\"lab_boot_node_errors\\\",[])))[:2])\\012\"\\012",
+      "cpu": "0.0",
+      "mem": "0.0",
+      "rss_kb": "1856"
+    },
+    {
+      "cmd": "ssh: /Users/rohansharma/.lima-iolbox-p6-rosetta/iolbox-debian13/ssh.sock [mux]                                   ",
+      "cpu": "0.0",
+      "mem": "0.0",
+      "rss_kb": "1360"
+    },
+    {
+      "cmd": "/opt/homebrew/bin/limactl hostagent --pidfile /Users/rohansharma/.lima-iolbox-p6-rosetta/iolbox-debian13/ha.pid --socket /Users/rohansharma/.lima-iolbox-p6-rosetta/iolbox-debian13/ha.sock --guestagent /opt/homebrew/share/lima/lima-guestagent.Linux-aarch64.gz --nerdctl-archive /Users/rohansharma/Library/Caches/lima/download/by-url-sha256/a1e0768610d2f2bbe4e3745d6b5866edbda1d66c3236b7b64c924f98c0ccdcb8/data iolbox-debian13",
+      "cpu": "0.0",
+      "mem": "0.6",
+      "rss_kb": "53872"
+    },
+    {
+      "cmd": "/usr/libexec/rosetta/oahd",
+      "cpu": "0.0",
+      "mem": "0.0",
+      "rss_kb": "992"
+    },
+    {
+      "cmd": "zsh -c \\012for i in $(seq 1 160); do\\012  if [ -f ~/phase6/out/rosetta-2node-saved/metrics.json ]; then echo FOUND_METRICS; break; fi\\012  if ! ps -p 70673 >/dev/null 2>&1; then echo \"PROCESS 70673 EXITED\"; break; fi\\012  sleep 5\\012done\\012python3 -c \"\\012import json\\012d=json.load(open(\\\"/Users/rohansharma/phase6/out/rosetta-2node-saved/metrics.json\\\"))\\012print(\\\"vm_boot\\\", d.get(\\\"vm_boot_seconds\\\"))\\012print(\\\"lab_boot\\\", d.get(\\\"lab_boot_seconds\\\"), d.get(\\\"lab_boot_ok\\\"))\\012print(\\\"teardown\\\", d.get(\\\"teardown_seconds\\\"))\\012print(\\\"node_errors uniq:\\\", sorted(set(d.get(\\\"lab_boot_node_errors\\\",[])))[:2])\\012\"\\012",
+      "cpu": "0.0",
+      "mem": "0.0",
+      "rss_kb": "2064"
+    }
+  ],
+  "pings": [],
+  "during_host_cpu": {
+    "user": 17.74,
+    "sys": 12.67,
+    "idle": 69.57
+  },
+  "during_mac_vmstat": {
+    "free": 5557,
+    "active": 83960,
+    "inactive": 82123,
+    "speculative": 1115,
+    "throttled": 0,
+    "wired down": 78374,
+    "purgeable": 18,
+    "zero filled": 305498172,
+    "reactivated": 77605846,
+    "purged": 8965996,
+    "stored in compressor": 970844,
+    "occupied by compressor": 237351
+  },
+  "during_guest_loadavg": "1.58 1.23 0.68 3/180 5424",
+  "guest_process_rss_kb": "supervisor      62740\nvpcs             6948\nvpcs             8084",
+  "guest_free_m": "total        used        free      shared  buff/cache   available\nMem:            3921         793        1367           0        1919        3128\nSwap:              0           0           0",
+  "guest_dmesg_crash_grep": "",
+  "guest_journal_crash_grep": "",
+  "teardown_seconds": 5.429103136062622,
+  "teardown_ok": true,
+  "post_teardown_lima_list": "NAME               STATUS     SSH                VMTYPE    ARCH       CPUS    MEMORY    DISK      DIR\niolbox-debian13    Stopped    127.0.0.1:60525    vz        aarch64    4       4GiB      15GiB     ~/.lima-iolbox-p6-rosetta/iolbox-debian13\nseed               Stopped    127.0.0.1:0        vz        aarch64    4       4GiB      100GiB    ~/.lima-iolbox-p6-rosetta/seed",
+  "post_teardown_stray_procs": "rohansharma      70673   0.4  0.1 435271296  11888   ??  SN    3:10PM   0:00.35 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python /Users/rohansharma/phase6/phase6_run.py --arm rosetta-amd64 --profile-flag debian13 --topology 2node --run 5 --launcher /Users/rohansharma/iolbox-p6-rosetta/iolbox-macos-arm64/iolbox --lima-home /Users/rohansharma/.lima-iolbox-p6-rosetta --vmname iolbox-debian13 --outdir /Users/rohansharma/phase6/out/rosetta-2node-saved --ping-count 50",
+  "mac_post_run": {
+    "vm_stat": {
+      "free": 188451,
+      "active": 66015,
+      "inactive": 76876,
+      "speculative": 1457,
+      "throttled": 0,
+      "wired down": 78296,
+      "purgeable": 28,
+      "zero filled": 305525799,
+      "reactivated": 77611917,
+      "purged": 8966151,
+      "stored in compressor": 724438,
+      "occupied by compressor": 77368
+    },
+    "top": {
+      "user": 6.12,
+      "sys": 11.95,
+      "idle": 81.92
+    }
+  },
+  "ended_at": "2026-08-20T19:22:03Z"
+}

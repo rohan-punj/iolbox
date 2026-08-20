@@ -1,0 +1,129 @@
+{
+  "arm": "native-arm64",
+  "topology": "2node",
+  "run": 3,
+  "vmname": "iolbox-native-arm64",
+  "lima_home": "/Users/rohansharma/.lima-iolbox-p6-native",
+  "started_at": "2026-08-20T19:04:19Z",
+  "mac_pre_run": {
+    "vm_stat": {
+      "free": 149229,
+      "active": 89294,
+      "inactive": 79582,
+      "speculative": 12737,
+      "throttled": 0,
+      "wired down": 83351,
+      "purgeable": 2625,
+      "zero filled": 303616281,
+      "reactivated": 76081873,
+      "purged": 8784365,
+      "stored in compressor": 700323,
+      "occupied by compressor": 74244
+    },
+    "top": {
+      "user": 7.22,
+      "sys": 13.55,
+      "idle": 79.21
+    }
+  },
+  "vm_boot_seconds": 104.29590010643005,
+  "vm_boot_ok": true,
+  "image_register_ok": true,
+  "image_id": "b858503827356c55",
+  "lab_load_result_ok": true,
+  "lab_start_response_ok": true,
+  "lab_boot_node_errors": [],
+  "lab_boot_seconds": 10.075186252593994,
+  "lab_boot_ok": true,
+  "idle_host_cpu": {
+    "user": 11.94,
+    "sys": 20.27,
+    "idle": 67.77
+  },
+  "idle_mac_vmstat": {
+    "free": 3628,
+    "active": 78778,
+    "inactive": 71080,
+    "speculative": 6762,
+    "throttled": 0,
+    "wired down": 91429,
+    "purgeable": 2,
+    "zero filled": 304087870,
+    "reactivated": 76520415,
+    "purged": 8798051,
+    "stored in compressor": 965631,
+    "occupied by compressor": 236632
+  },
+  "idle_guest_loadavg": "0.68 0.22 0.07 1/194 5440",
+  "idle_translator_ps_guest": "root        5408 48.2 14.2 1459268 572040 pts/0  Ssl+ 15:06   0:06 /usr/libexec/qemu-binfmt/x86_64-binfmt-P /opt/iolbox/images/x86_64_crb_linux-adventerprisek9-ms.iol17.18.02.bin /opt/iolbox/images/x86_64_crb_linux-adventerprisek9-ms.iol17.18.02.bin -e 1 -s 1 -m 1024 -n 65 1",
+  "pings": [
+    {
+      "pair": "PC1->R1",
+      "sent": 50,
+      "received": 49,
+      "loss_pct": 2.0,
+      "rtt_min": 1.628,
+      "rtt_avg": 3.799,
+      "rtt_max": 8.858
+    },
+    {
+      "pair": "R1->PC1",
+      "sent": 50,
+      "received": 50,
+      "loss_pct": 0.0,
+      "rtt_min": 1.0,
+      "rtt_avg": 1.0,
+      "rtt_max": 5.0
+    }
+  ],
+  "during_host_cpu": {
+    "user": 9.1,
+    "sys": 13.52,
+    "idle": 77.46
+  },
+  "during_mac_vmstat": {
+    "free": 5492,
+    "active": 91330,
+    "inactive": 91434,
+    "speculative": 383,
+    "throttled": 0,
+    "wired down": 83820,
+    "purgeable": 367,
+    "zero filled": 304283279,
+    "reactivated": 76677611,
+    "purged": 8828982,
+    "stored in compressor": 903919,
+    "occupied by compressor": 215970
+  },
+  "during_guest_loadavg": "0.68 0.45 0.19 1/195 5451",
+  "guest_process_rss_kb": "supervisor      21012\nvpcs              648\nvpcs             2968",
+  "guest_free_m": "total        used        free      shared  buff/cache   available\nMem:            3921         790         725           0        2573        3131\nSwap:              0           0           0",
+  "guest_dmesg_crash_grep": "",
+  "guest_journal_crash_grep": "",
+  "teardown_seconds": 5.761988162994385,
+  "teardown_ok": true,
+  "post_teardown_lima_list": "NAME                   STATUS     SSH                VMTYPE    ARCH       CPUS    MEMORY    DISK     DIR\niolbox-native-arm64    Stopped    127.0.0.1:60445    vz        aarch64    4       4GiB      15GiB    ~/.lima-iolbox-p6-native/iolbox-native-arm64",
+  "post_teardown_stray_procs": "rohansharma      70220   0.1  0.1 435271168  11504   ??  SN    3:04PM   0:00.32 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python /Users/rohansharma/phase6/phase6_run.py --arm native-arm64 --profile-flag native-arm64 --topology 2node --run 3 --launcher /Users/rohansharma/iolbox-p6-build/src/tools/iolab-launcher/iolbox-launcher --tarball /Users/rohansharma/iolbox-p6-build/src/runtime/build/iolbox-server-p6-2b6939f-linux-arm64.tar.gz --lima-home /Users/rohansharma/.lima-iolbox-p6-native --vmname iolbox-native-arm64 --outdir /Users/rohansharma/phase6/out/native-2node-run-c --ping-count 50",
+  "mac_post_run": {
+    "vm_stat": {
+      "free": 176257,
+      "active": 72104,
+      "inactive": 83113,
+      "speculative": 2639,
+      "throttled": 0,
+      "wired down": 79438,
+      "purgeable": 48,
+      "zero filled": 304317730,
+      "reactivated": 76717618,
+      "purged": 8830926,
+      "stored in compressor": 709968,
+      "occupied by compressor": 74819
+    },
+    "top": {
+      "user": 7.96,
+      "sys": 13.27,
+      "idle": 78.76
+    }
+  },
+  "ended_at": "2026-08-20T19:09:16Z"
+}
