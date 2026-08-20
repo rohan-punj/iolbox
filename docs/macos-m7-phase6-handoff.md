@@ -519,6 +519,30 @@ In order — each step is a real decision point, not a rubber stamp:
    burden) for the owner to make, not something to add quietly as part of
    closing out this track.
 
+## Phase 7 follow-up: item 2 above has been run — see the separate re-verification doc
+
+`docs/macos-m7-phase7-mature-reverify.md` records the Phase 7 session that
+executed "Next session's actual job" item 2 with the mature Go M4 tooling.
+Two things in this handoff are directly affected:
+
+- **The "Router console usable | rosetta-amd64: FAIL — 0/5" row in the
+  verdict table above is superseded.** Under the mature harness, on the
+  identical M6 CI artifact (sha256 `3023ec68…`, re-verified), identical lab
+  fixture, identical IOL image, same Mac, item-1 **PASSED 3/3** with the
+  router reaching `R1>` in ~33-38 s each run and 100/100 packets received in
+  both directions. The stall does not reproduce. The most probable
+  explanation is a defect in this session's own `phase6_run.py` console
+  reader, not a product or environment issue — which also weakens (does not
+  confirm) the arm-specific inference drawn from the native-arm64 control
+  comparison.
+- **The four-node capacity gap (Remaining gaps item 3) is still open, and is
+  now explicitly UNEVALUATED rather than single-attempt-observed.** The
+  Phase 7 run could not be started: the Mac was at 3.0 GiB free disk (below
+  the launcher's own 5 GiB minimum) and ~99 MB free RAM with the owner's
+  validation instance still resident. Deliberately not worked around, since
+  item-5 *is* a resource-headroom measurement. See that doc's "What unblocks
+  it".
+
 ## Working pattern used this session (recommended to continue)
 
 Direct Sonnet Agent execution for hardware work; sol-medium engaged
