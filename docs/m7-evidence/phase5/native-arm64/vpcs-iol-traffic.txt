@@ -1,0 +1,23 @@
+=== router ping vpcs ===
+ping 192.168.1.10 repeat 10
+Type escape sequence to abort.
+Sending 10, 100-byte ICMP Echos to 192.168.1.10, timeout is 2 seconds:
+.!!!!!!!!!
+Success rate is 90 percent (9/10), round-trip min/avg/max = 1/2/16 ms
+R1#
+
+=== vpcs ping router ===
+ping 192.168.1.1 -c 10
+
+84 bytes from 192.168.1.1 icmp_seq=1 ttl=255 time=5.166 ms
+84 bytes from 192.168.1.1 icmp_seq=2 ttl=255 time=2.418 ms
+84 bytes from 192.168.1.1 icmp_seq=3 ttl=255 time=4.122 ms
+84 bytes from 192.168.1.1 icmp_seq=4 ttl=255 time=2.636 ms
+84 bytes from 192.168.1.1 icmp_seq=5 ttl=255 time=2.899 ms
+84 bytes from 192.168.1.1 icmp_seq=6 ttl=255 time=2.532 ms
+84 bytes from 192.168.1.1 icmp_seq=7 ttl=255 time=2.831 ms
+84 bytes from 192.168.1.1 icmp_seq=8 ttl=255 time=3.179 ms
+84 bytes from 192.168.1.1 icmp_seq=9 ttl=255 time=2.864 ms
+84 bytes from 192.168.1.1 icmp_seq=10 ttl=255 time=3.525 ms
+
+VPCS> 

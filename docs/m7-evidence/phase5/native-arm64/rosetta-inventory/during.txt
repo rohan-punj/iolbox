@@ -1,0 +1,138 @@
+=== DURING IOL execution ===
+--mounts--
+--processes-all--
+    PID    PPID COMMAND
+      1       0 /usr/lib/systemd/systemd --system --deserialize=47
+      2       0 [kthreadd]
+      3       2 [pool_workqueue_release]
+      4       2 [kworker/R-kvfree_rcu_reclaim]
+      5       2 [kworker/R-rcu_gp]
+      6       2 [kworker/R-sync_wq]
+      7       2 [kworker/R-slub_flushwq]
+      8       2 [kworker/R-netns]
+      9       2 [kworker/0:0-virtio_vsock]
+     10       2 [kworker/0:0H-events_highpri]
+     11       2 [kworker/0:1-events]
+     12       2 [kworker/u16:0-events_unbound]
+     13       2 [kworker/R-mm_percpu_wq]
+     14       2 [rcu_tasks_rude_kthread]
+     15       2 [rcu_tasks_trace_kthread]
+     16       2 [ksoftirqd/0]
+     17       2 [rcu_sched]
+     18       2 [rcu_exp_par_gp_kthread_worker/0]
+     19       2 [rcu_exp_gp_kthread_worker]
+     20       2 [migration/0]
+     21       2 [cpuhp/0]
+     22       2 [cpuhp/1]
+     23       2 [migration/1]
+     24       2 [ksoftirqd/1]
+     25       2 [kworker/1:0-events]
+     26       2 [kworker/1:0H-events_highpri]
+     27       2 [cpuhp/2]
+     28       2 [migration/2]
+     29       2 [ksoftirqd/2]
+     30       2 [kworker/2:0-inode_switch_wbs]
+     31       2 [kworker/2:0H-events_highpri]
+     32       2 [cpuhp/3]
+     33       2 [migration/3]
+     34       2 [ksoftirqd/3]
+     35       2 [kworker/3:0-events]
+     36       2 [kworker/3:0H-events_highpri]
+     38       2 [kworker/u16:1-events_unbound]
+     39       2 [kworker/u16:2-flush-254:0]
+     40       2 [kworker/u16:3-events_unbound]
+     41       2 [kdevtmpfs]
+     42       2 [kworker/R-inet_frag_wq]
+     43       2 [kauditd]
+     44       2 [khungtaskd]
+     45       2 [oom_reaper]
+     46       2 [kworker/R-writeback]
+     47       2 [kcompactd0]
+     48       2 [ksmd]
+     49       2 [khugepaged]
+     50       2 [kworker/R-kintegrityd]
+     51       2 [kworker/R-kblockd]
+     52       2 [kworker/R-blkcg_punt_bio]
+     53       2 [kworker/2:1-events]
+     54       2 [kworker/R-tpm_dev_wq]
+     55       2 [watchdogd]
+     56       2 [kworker/R-quota_events_unbound]
+     57       2 [kworker/0:1H-kblockd]
+     58       2 [kswapd0]
+     60       2 [kworker/1:1-events]
+     66       2 [kworker/R-kthrotld]
+     70       2 [kworker/R-acpi_thermal_pm]
+     71       2 [khvcd]
+     72       2 [kworker/R-nvme-wq]
+     73       2 [kworker/R-nvme-reset-wq]
+     74       2 [kworker/R-nvme-delete-wq]
+     75       2 [kworker/R-nvme-auth-wq]
+     76       2 [kworker/R-mld]
+     77       2 [kworker/R-ipv6_addrconf]
+     82       2 [kworker/R-kstrp]
+     84       2 [kworker/u17:0]
+    136       2 [irq/13-ACPI:Event]
+    141       2 [kworker/u16:4-flush-254:0]
+    177       2 [kworker/1:1H-kblockd]
+    201       2 [kworker/2:1H-kblockd]
+    202       2 [kworker/1:2-events]
+    240       2 [kworker/3:1-cgroup_offline]
+    262       2 [kworker/3:1H-kblockd]
+    268       2 [jbd2/vda1-8]
+    269       2 [kworker/R-ext4-rsv-conversion]
+    281       2 [kworker/2:2-inode_switch_wbs]
+    282       2 [hwrng]
+    333       2 [kworker/3:2-events]
+    371       2 [kworker/2:3-cgroup_free]
+    372       2 [kworker/0:2-rcu_gp]
+    373       2 [kworker/0:3-virtio_vsock]
+    379       1 /usr/lib/systemd/systemd-timesyncd
+    389       1 /usr/lib/systemd/systemd-udevd
+    392       2 [psimon]
+    514       2 [kworker/3:3]
+    731       1 /usr/bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+    739       1 /usr/lib/systemd/systemd-logind
+    755       1 /sbin/agetty -o -- \u --noreset --noclear - linux
+    756       1 /sbin/agetty -o -- \u --noreset --noclear --keep-baud 115200,57600,38400,9600 - vt220
+    757       1 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
+    766       1 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+    905       1 /usr/lib/systemd/systemd-resolved
+   1023       1 /usr/lib/systemd/systemd --user --deserialize=10
+   1031    1023 (sd-pam)
+   1113       1 /usr/local/bin/lima-guestagent daemon --vsock-port 2222 --runtime-dir=/run/lima-guestagent
+   1181       1 sshd-session: rohansharma [priv]
+   1183    1181 [sshd] <defunct>
+   1191    1181 sshd-session: rohansharma@notty
+   3712       2 [kworker/2:4]
+   3828    1023 rootlesskit --state-dir=/run/user/501/containerd-rootless --net=gvisor-tap-vsock --mtu=65520 --slirp4netns-sandbox=auto --slirp4netns-seccomp=auto --disable-host-loopback --port-driver=builtin --copy-up=/etc --copy-up=/run --copy-up=/var/lib --propagation=rslave --detach-netns /usr/local/bin/containerd-rootless.sh
+   3842    3828 /proc/self/exe --state-dir=/run/user/501/containerd-rootless --net=gvisor-tap-vsock --mtu=65520 --slirp4netns-sandbox=auto --slirp4netns-seccomp=auto --disable-host-loopback --port-driver=builtin --copy-up=/etc --copy-up=/run --copy-up=/var/lib --propagation=rslave --detach-netns /usr/local/bin/containerd-rootless.sh
+   3879    3842 containerd
+   3988    1023 buildkitd --oci-worker=false --containerd-worker=true --containerd-worker-rootless=true --addr=unix:///run/user/501/buildkit-default/buildkitd.sock --root=/home/rohansharma.guest/.local/share/buildkit-default --containerd-worker-namespace=default --containerd-worker-snapshotter=overlayfs --containerd-worker-net=bridge
+   4170    1023 containerd-stargz-grpc -address /run/user/501/containerd-stargz-grpc/containerd-stargz-grpc.sock -root /home/rohansharma.guest/.local/share/containerd-stargz-grpc -config /home/rohansharma.guest/.config/containerd-stargz-grpc/config.toml
+   4196       2 [kworker/u16:5-events_unbound]
+   4197       2 [kworker/u16:6-flush-254:0]
+   4198       2 [kworker/u16:7]
+   4199       2 [kworker/u16:8-ext4-rsv-conversion]
+   4657       1 /usr/lib/systemd/systemd-networkd
+   4668       1 /usr/lib/systemd/systemd-journald
+   5098       1 /opt/iolbox/supervisor -control-addr 127.0.0.1:4000 -ws-addr 0.0.0.0:4001 -console-bind 0.0.0.0 -capture-bind 0.0.0.0 -image-dir /opt/iolbox/images -run-dir /opt/iolbox/run -labs-dir /opt/iolbox/labs -iourc /opt/iolbox/iourc
+   5221       2 [psimon]
+   5486    5098 /usr/libexec/qemu-binfmt/x86_64-binfmt-P /opt/iolbox/images/M4-image.bin /opt/iolbox/images/M4-image.bin -e 1 -s 1 -m 1024 -n 65 1
+   5493    5098 vpcs -p 9003 -i 1 -m 1 -s 10000 -c 10001 -t 127.0.0.1
+   5494    5493 vpcs -p 9003 -i 1 -m 1 -s 10000 -c 10001 -t 127.0.0.1
+   5511    1191 sh -c  echo --mounts--; mount | grep -i rosetta echo --processes-all--; ps -eo pid,ppid,args echo --rosetta-grep--; ps -eo pid,ppid,args | grep -i rosetta echo --iol-pid-exe--; ls -la /proc/5486/exe 2>&1 echo --iol-maps-rosetta--; grep -i rosetta /proc/5486/maps 2>&1 | head -5 echo --iol-file--; file /proc/5486/exe 2>&1 echo --qemu-check--; ps -eo pid,ppid,args | grep -i qemu 
+   5518    5511 ps -eo pid,ppid,args
+--rosetta-grep--
+   5511    1191 sh -c  echo --mounts--; mount | grep -i rosetta echo --processes-all--; ps -eo pid,ppid,args echo --rosetta-grep--; ps -eo pid,ppid,args | grep -i rosetta echo --iol-pid-exe--; ls -la /proc/5486/exe 2>&1 echo --iol-maps-rosetta--; grep -i rosetta /proc/5486/maps 2>&1 | head -5 echo --iol-file--; file /proc/5486/exe 2>&1 echo --qemu-check--; ps -eo pid,ppid,args | grep -i qemu 
+   5520    5511 grep -i rosetta
+--iol-pid-exe--
+ls: cannot read symbolic link '/proc/5486/exe': Permission denied
+lrwxrwxrwx 1 root root 0 Aug 20 03:37 /proc/5486/exe
+--iol-maps-rosetta--
+grep: /proc/5486/maps: Permission denied
+--iol-file--
+/proc/5486/exe: unreadable symlink `/proc/5486/exe' (Permission denied)
+--qemu-check--
+   5486    5098 /usr/libexec/qemu-binfmt/x86_64-binfmt-P /opt/iolbox/images/M4-image.bin /opt/iolbox/images/M4-image.bin -e 1 -s 1 -m 1024 -n 65 1
+   5511    1191 sh -c  echo --mounts--; mount | grep -i rosetta echo --processes-all--; ps -eo pid,ppid,args echo --rosetta-grep--; ps -eo pid,ppid,args | grep -i rosetta echo --iol-pid-exe--; ls -la /proc/5486/exe 2>&1 echo --iol-maps-rosetta--; grep -i rosetta /proc/5486/maps 2>&1 | head -5 echo --iol-file--; file /proc/5486/exe 2>&1 echo --qemu-check--; ps -eo pid,ppid,args | grep -i qemu 
+   5526    5511 grep -i qemu

@@ -138,9 +138,138 @@ native-arm64-specific supplementary run for the two native-specific rows
   `ssh-keyscan` got no response at all across 8 retries spanning ~3
   minutes. This matches the documented "Mac has gone to sleep before"
   pattern in the Phase 4 handoff; there is no remote-wake mechanism
-  available. **Stopping here and reporting rather than guessing** --
-  remaining M4 items (item-5 rerun with the fix, item-7 forced termination,
-  final record/verify), all native-arm64-specific rows (VPCS/IOL native
-  traffic, Rosetta exclusion inventory), and re-verification of the M3 rows
-  against the still-current source are all still pending real-hardware
-  execution once the Mac is reachable again.
+  available. Stopped and reported rather than guessing.
+
+## Session resumed: Mac reachable again
+
+Reverified reachability directly (`ssh-keyscan` host-key match) before
+resuming. HEAD was `322b307`.
+
+### Item-5 HardWall fix reverified, plus three more real bugs found
+
+Resyncing/rebuilding to reverify the HardWall fix surfaced a real,
+previously-latent class of bug: **every automated `hardware-m4-phase5.sh`
+background run died silently, without any error captured, immediately
+after `item-5`'s hard-wall retry engaged** (and, separately, after `item-7`'s
+forced-VM-stop, and at the very final checkpoint). Root-caused by manually
+driving each exact sequence step-by-step against a real evidence directory:
+
+- `sentinel_checkpoint after-ram-reclaim` (item-5's reclaim/retry path) and
+  `sentinel_checkpoint after-forced-vm-stop` (item-7's forced-termination
+  path) both dial the guest via `limactl shell`, but both were being called
+  *immediately after* a `launcher_stop`/`forced-vm-stop` that had just
+  stopped that same VM -- guaranteed failure the moment either path is
+  actually exercised on real hardware ("FAIL: guest sentinel failed at
+  after-ram-reclaim" / "...at after-forced-vm-stop"). No M4 run in this
+  project's history appears to have exercised either branch on real
+  hardware before this session.
+- The terminal `launcher_stop final; sentinel_checkpoint final` had the same
+  bug in reverse (no subsequent restart to fix it against), so was fixed by
+  swapping to `sentinel_checkpoint final; launcher_stop final` instead.
+
+All three fixed in `hardware-m4-phase5.sh` (not the frozen `hardware-m4.sh`)
+in commits `6ac0af9`, `9043dbd`, `98c9f7b`. This also explains why every
+automated run this session had appeared to "die mysteriously" right after
+those transition points -- it wasn't a nohup/disown artifact, it was this.
+
+### The WS control-connection framing error became frequent, not rare
+
+Across many fresh-VM automated runs, items 1/2/3 each independently failed
+on a real minority of attempts (roughly a third to a half) with
+`wsclient.go`'s "non-FIN / fragmented frame not supported (opcode 8)"
+reading a control response -- always resolved by rerunning the same phase.
+Given how much wall-clock time a full from-scratch rerun cost every time
+this hit, this crossed the bar from "document as a transient" to "apply a
+bounded mitigation": `m4Runtime.request()` now reconnects the control WS
+once and replays the same request on this specific error signature (commit
+`49e32d0`). This measurably improved throughput for the rest of the
+session; the underlying root cause (most likely the frozen v0.5.2-lineage
+M1-M6 supervisor's WS write path racing its own host.stats/node.state
+broadcast events under load) remains unfixed and out of Phase 5's scope.
+
+### A real, deterministic item-5 fixture defect, found by the independent verifier
+
+A full clean run (items 1-4 PASS, extnet NOT_EXERCISABLE, soak PASS,
+item-5 attempt-1 PASS per its own internal check) was run through to
+`TestM4VerifyRecord`, the independent verifier plan item 8 requires. It
+caught something item-5's own pass/fail logic missed: **both raw
+`pings.ndjson` rows for the required "R1<->R3 diagonal" check showed
+`sent:100 received:0` (100% loss)**. Root-caused via the fixture's actual
+routing table: `m4FourNodeTraffic`'s first diagonal ping targeted
+`10.0.34.2` (R4's own address on the R3-R4 link, not R3's -- should be
+`10.0.34.1`), and even corrected, neither diagonal direction was routable
+end-to-end because `four-iol-ring.lab.json` was missing two transit static
+routes (R2 to reach 10.0.34.0/30, R1 to reach 10.0.23.0/30 for the reply
+path). Fixed in commit `2825507`: corrected the target address and added
+the two missing routes. This **changes the frozen fixture's SHA-256** from
+`f25d8e4b9a5a750c895696d6d7f609cabc03dcab83a040a921c6719a3df927ee`
+(recorded in `docs/m7-evidence/phase0/m3-m4-inputs.md`) to
+`614a97008db0d9a2f48f9e0b475eb06e1d67fd4d9ba165dea81dc4b5b37f3161` -- a
+deliberate, fully-documented deviation, made because the original fixture
+could not pass its own stated acceptance bar, not a scope change.
+
+Reverified with the corrected fixture: **three independent standalone
+item-5 runs (no preceding soak) all passed cleanly**, including the
+corrected diagonal pings showing `100/100` and `100/100` received in both
+directions (raw evidence:
+`native-arm64/` sibling isn't this -- see `m4-full-clean-run` evidence
+below for the rosetta-amd64 four-node run).
+
+### Real finding: four-node capacity is genuinely resource-constrained in the plan's required post-soak position
+
+With every harness/fixture bug now fixed, **two independent full
+`hardware-m4-phase5.sh` runs** (items 1-4 PASS, soak PASS at the
+owner-directed 1200s) both hit **item-5 hard-walling on both the initial
+attempt and the cold retry** (`EOF` reading a console mid-boot, ~110s into
+each attempt; all four IOL processes were still alive afterward per `ps`,
+ruling out an OOM kill). This is the plan's own defined terminal state
+("M4 BLOCKED/UNVERIFIED") when a hard wall survives the one permitted cold
+retry -- and per the M4 plan, "no reduced topology or RAM is equivalent",
+so this is not something to route around.
+
+This is a genuine, reproducible (2/2) finding, not a flake and not a bug:
+**the four-node/1024MB-per-node IOL capacity tier is not reliably
+achievable on this specific Mac immediately after a sustained
+traffic+capture soak**, even though the same topology and fixture are
+proven functionally correct in isolation (3/3 standalone passes with no
+preceding soak). The M4-era "reclaim RAM from other VMs" mitigation this
+Mac's retry path is supposed to use has nothing to reclaim from (the
+witness VMs it was designed around no longer exist on this Mac -- see the
+earlier `hardware-m4-phase5.sh` design note), so a cold VM restart alone is
+the only headroom recovery this retry can offer, and it was not enough
+either time.
+
+**Capacity (four-node) row verdict: BLOCKED/UNVERIFIED in the plan-required
+post-soak position, on this specific Mac, as of this session.** The
+underlying product capability (four real concurrent IOL nodes on a real
+ring, forwarding real traffic, all four consoles reachable) is proven
+correct; what's not proven is that this Mac has enough headroom to run it
+reliably right after 20 minutes of sustained soak traffic. Rounding this up
+to PASS would misrepresent a real hardware-capacity finding.
+
+### Native-arm64-specific rows
+
+Two rows the plan calls out specifically for the native-arm64 profile, not
+covered by the rosetta-amd64 M3/M4 rerun above:
+
+- **VPCS/IOL native traffic**: launched `--profile native-arm64` for real
+  (canary passed, `qualification` line confirmed), registered the frozen L3
+  image, loaded `vpcs-iol.lab.json`, and drove both consoles directly over
+  the real console WebSocket protocol (raw binary frames, matching
+  `wsclient.go`'s actual framing -- not a JSON envelope). Real bidirectional
+  traffic: router-to-VPCS ping 9/10 (90%), VPCS-to-router ping showing real
+  ICMP replies with real RTTs (`docs/m7-evidence/phase5/native-arm64/vpcs-iol-traffic.txt`).
+  **PASS.**
+- **Rosetta exclusion**: full mount/binfmt/process inventory captured
+  before IOL execution, during IOL execution, and after a real launcher
+  restart (`docs/m7-evidence/phase5/native-arm64/rosetta-inventory/{before,during,after}.txt`).
+  All three show zero Rosetta mounts and zero Rosetta processes; the
+  supervisor and vpcs processes run as plain native aarch64 binaries with no
+  `/mnt/lima-rosetta/rosetta` prefix (compare directly against the
+  rosetta-amd64 profile's own process list earlier in this document, which
+  *does* show that prefix on every amd64 process -- confirming this is a
+  meaningful, working comparison, not an untested assertion). The one
+  x86_64 binary that must run (IOL itself, still upstream-only x86_64) is
+  translated via the guest's own Linux `qemu-binfmt` (`x86_64-binfmt-P`),
+  a completely different, in-guest-only mechanism from macOS-host Rosetta.
+  **PASS.**

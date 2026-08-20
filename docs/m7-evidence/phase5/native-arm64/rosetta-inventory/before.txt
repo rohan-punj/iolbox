@@ -1,0 +1,273 @@
+=== BEFORE IOL execution ===
+--mounts--
+--binfmt--
+python3.13
+qemu-aarch64_be
+qemu-alpha
+qemu-armeb
+qemu-hexagon
+qemu-hppa
+qemu-i386
+qemu-loongarch64
+qemu-m68k
+qemu-microblaze
+qemu-microblazeel
+qemu-mips
+qemu-mips64
+qemu-mips64el
+qemu-mipsel
+qemu-mipsn32
+qemu-mipsn32el
+qemu-or1k
+qemu-ppc
+qemu-ppc64
+qemu-ppc64le
+qemu-riscv32
+qemu-riscv64
+qemu-s390x
+qemu-sh4
+qemu-sh4eb
+qemu-sparc
+qemu-sparc32plus
+qemu-sparc64
+qemu-x86_64
+qemu-xtensa
+qemu-xtensaeb
+register
+status
+cat: /proc/sys/fs/binfmt_misc/register: Permission denied
+/proc/sys/fs/binfmt_misc/python3.13
+enabled
+interpreter /usr/bin/python3.13
+flags: 
+offset 0
+magic f30d0d0a
+/proc/sys/fs/binfmt_misc/qemu-aarch64_be
+enabled
+interpreter /usr/libexec/qemu-binfmt/aarch64_be-binfmt-P
+flags: POF
+offset 0
+magic 7f454c46020201000000000000000000000200b7
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-alpha
+enabled
+interpreter /usr/libexec/qemu-binfmt/alpha-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602010100000000000000000002002690
+mask ffffffffffffff00fffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-armeb
+enabled
+interpreter /usr/libexec/qemu-binfmt/armeb-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601020100000000000000000000020028
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-hexagon
+enabled
+interpreter /usr/libexec/qemu-binfmt/hexagon-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460101010000000000000000000200a400
+mask ffffffffffffff00fffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-hppa
+enabled
+interpreter /usr/libexec/qemu-binfmt/hppa-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460102010000000000000000000002000f
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-i386
+enabled
+interpreter /usr/libexec/qemu-binfmt/i386-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601010100000000000000000002000300
+mask fffffffffffefefcfffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-loongarch64
+enabled
+interpreter /usr/libexec/qemu-binfmt/loongarch64-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602010100000000000000000002000201
+mask fffffffffffffffc00fffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-m68k
+enabled
+interpreter /usr/libexec/qemu-binfmt/m68k-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601020100000000000000000000020004
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-microblaze
+enabled
+interpreter /usr/libexec/qemu-binfmt/microblaze-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460102010000000000000000000002baab
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-microblazeel
+enabled
+interpreter /usr/libexec/qemu-binfmt/microblazeel-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460101010000000000000000000200abba
+mask ffffffffffffff00fffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-mips
+enabled
+interpreter /usr/libexec/qemu-binfmt/mips-binfmt-P
+flags: POF
+offset 0
+magic 7f454c46010201000000000000000000000200080000000100000000000000000000000000000000
+mask ffffffffffffff0000fffffffffffffffffeffffffffffff00000000000000000000000000000020
+/proc/sys/fs/binfmt_misc/qemu-mips64
+enabled
+interpreter /usr/libexec/qemu-binfmt/mips64-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602020100000000000000000000020008
+mask ffffffffffffff0000fffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-mips64el
+enabled
+interpreter /usr/libexec/qemu-binfmt/mips64el-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602010100000000000000000002000800
+mask ffffffffffffff0000fffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-mipsel
+enabled
+interpreter /usr/libexec/qemu-binfmt/mipsel-binfmt-P
+flags: POF
+offset 0
+magic 7f454c46010101000000000000000000020008000100000000000000000000000000000000000000
+mask ffffffffffffff0000fffffffffffffffeffffffffffffff00000000000000000000000020000000
+/proc/sys/fs/binfmt_misc/qemu-mipsn32
+enabled
+interpreter /usr/libexec/qemu-binfmt/mipsn32-binfmt-P
+flags: POF
+offset 0
+magic 7f454c46010201000000000000000000000200080000000100000000000000000000000000000020
+mask ffffffffffffff0000fffffffffffffffffeffffffffffff00000000000000000000000000000020
+/proc/sys/fs/binfmt_misc/qemu-mipsn32el
+enabled
+interpreter /usr/libexec/qemu-binfmt/mipsn32el-binfmt-P
+flags: POF
+offset 0
+magic 7f454c46010101000000000000000000020008000100000000000000000000000000000020000000
+mask ffffffffffffff0000fffffffffffffffeffffffffffffff00000000000000000000000020000000
+/proc/sys/fs/binfmt_misc/qemu-or1k
+enabled
+interpreter /usr/libexec/qemu-binfmt/or1k-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460102010000000000000000000002005c
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-ppc
+enabled
+interpreter /usr/libexec/qemu-binfmt/ppc-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601020100000000000000000000020014
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-ppc64
+enabled
+interpreter /usr/libexec/qemu-binfmt/ppc64-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602020100000000000000000000020015
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-ppc64le
+enabled
+interpreter /usr/libexec/qemu-binfmt/ppc64le-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602010100000000000000000002001500
+mask fffffffffffffffcfffffffffffffffffeffff00
+/proc/sys/fs/binfmt_misc/qemu-riscv32
+enabled
+interpreter /usr/libexec/qemu-binfmt/riscv32-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460101010000000000000000000200f300
+mask ffffffffffffff00fffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-riscv64
+enabled
+interpreter /usr/libexec/qemu-binfmt/riscv64-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460201010000000000000000000200f300
+mask ffffffffffffff00fffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-s390x
+enabled
+interpreter /usr/libexec/qemu-binfmt/s390x-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602020100000000000000000000020016
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-sh4
+enabled
+interpreter /usr/libexec/qemu-binfmt/sh4-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601010100000000000000000002002a00
+mask fffffffffffffffcfffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-sh4eb
+enabled
+interpreter /usr/libexec/qemu-binfmt/sh4eb-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460102010000000000000000000002002a
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-sparc
+enabled
+interpreter /usr/libexec/qemu-binfmt/sparc-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601020100000000000000000000020002
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-sparc32plus
+enabled
+interpreter /usr/libexec/qemu-binfmt/sparc32plus-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601020100000000000000000000020012
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-sparc64
+enabled
+interpreter /usr/libexec/qemu-binfmt/sparc64-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460202010000000000000000000002002b
+mask fffffffffffffffcfffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/qemu-x86_64
+enabled
+interpreter /usr/libexec/qemu-binfmt/x86_64-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4602010100000000000000000002003e00
+mask fffffffffffefefcfffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-xtensa
+enabled
+interpreter /usr/libexec/qemu-binfmt/xtensa-binfmt-P
+flags: POF
+offset 0
+magic 7f454c4601010100000000000000000002005e00
+mask ffffffffffffff00fffffffffffffffffeffffff
+/proc/sys/fs/binfmt_misc/qemu-xtensaeb
+enabled
+interpreter /usr/libexec/qemu-binfmt/xtensaeb-binfmt-P
+flags: POF
+offset 0
+magic 7f454c460102010000000000000000000002005e
+mask ffffffffffffff00fffffffffffffffffffeffff
+/proc/sys/fs/binfmt_misc/register
+/proc/sys/fs/binfmt_misc/status
+enabled
+--processes--
+   5306    1191 sh -c echo --mounts--; mount | grep -i rosetta; echo --binfmt--; ls /proc/sys/fs/binfmt_misc/ 2>&1; cat /proc/sys/fs/binfmt_misc/register 2>&1 | head -1; for f in /proc/sys/fs/binfmt_misc/*; do echo $f; cat $f 2>/dev/null; done; echo --processes--; ps -eo pid,ppid,args | grep -i rosetta; echo --uname--; uname -a; echo --supervisor-file--; file /opt/iolbox/supervisor; echo --iol-file--; file /opt/iolbox/images/*.bin 2>&1 | head -1
+   5351    5306 grep -i rosetta
+--uname--
+Linux lima-iolbox-p5-native-e2e 6.12.101+deb13-cloud-arm64 #1 SMP Debian 6.12.101-1 (2026-08-05) aarch64 GNU/Linux
+--supervisor-file--
+/opt/iolbox/supervisor: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, Go BuildID=B6Huceigv8rF1b1CGoKe/BzyXPPCoJ9TTI2VktLDj/Q4W_3SEOnT9S_Zfdbkfi/DOzwnWqhATE5t305NhXy, BuildID[sha1]=a724147dabfdd92215b1eeffbd4a7c575d20b629, with debug_info, not stripped
+--iol-file--
+/opt/iolbox/images/*.bin: cannot open `/opt/iolbox/images/*.bin' (No such file or directory)
