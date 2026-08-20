@@ -251,11 +251,46 @@ func (r *m4Runtime) close() {
 	}
 }
 
+// m4WSFramingErrorRetried counts, per test process, how many times request()
+// recovered from the corrupt-frame class of error below by reconnecting.
+// Surfaced in ownership-map.json-adjacent evidence so a real run's retry
+// count is visible, not silently absorbed.
+var m4WSFramingErrorRetried int
+
+// isM4WSFramingError matches wsclient.go's readFrame() "non-FIN / fragmented
+// frame not supported" error. Found repeatedly on real hardware in Phase 5:
+// items 1/2/3 each failed this way on a real minority of fresh-VM runs
+// (roughly a third to a half across many runs), always against a freshly
+// re-run phase that then passed cleanly -- i.e., real, if intermittent,
+// control-connection frame corruption under real load (the M1-M6 supervisor
+// broadcasts host.stats/node.state events on the same connection concurrently
+// with request/response traffic; wsclient.go's v1 client cannot resynchronize
+// once a frame boundary is lost). Root-causing the server write path is out
+// of Phase 5's scope (frozen v0.5.2-lineage supervisor binary, not a Phase 4
+// change) and a raw-byte manual reproduction found clean framing under
+// controlled load, so this is a bounded, safe mitigation instead of a
+// speculative server fix: reconnect once and replay the same request.
+func isM4WSFramingError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "non-FIN / fragmented frame not supported")
+}
+
 func (r *m4Runtime) request(dir, op string, args any) (json.RawMessage, error) {
 	if r.control == nil {
 		return nil, errors.New("M4 control connection is not open")
 	}
 	result, err := r.control.requestTimeout(op, args, 2*time.Minute)
+	if isM4WSFramingError(err) {
+		_ = r.control.Close()
+		if control, dialErr := dialControlWS(r.guiAddr); dialErr == nil {
+			r.control = control
+			m4WSFramingErrorRetried++
+			_ = m4AppendJSONLine(filepath.Join(dir, "control-ws-framing-retry.ndjson"), map[string]any{
+				"run_id": r.runID, "op": op, "reconnect_attempt": m4WSFramingErrorRetried,
+				"original_error": errorText(err), "at_utc": m4UTC(time.Now()),
+			})
+			result, err = r.control.requestTimeout(op, args, 2*time.Minute)
+		}
+	}
 	entry := map[string]any{"run_id": r.runID, "op": op, "ok": err == nil, "result": json.RawMessage(result), "error": errorText(err), "at_utc": m4UTC(time.Now())}
 	if logErr := m4AppendJSONLine(filepath.Join(dir, "control.ndjson"), entry); logErr != nil && err == nil {
 		err = logErr
