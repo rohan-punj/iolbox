@@ -1,22 +1,30 @@
-# M7 Phase 5 handoff — authoritative M3/M4 matrix rerun, BLOCKED on a real capacity finding
+# M7 Phase 5 handoff — authoritative M3/M4 matrix rerun, CLOSED (capacity row owner-waived)
 
 Written 2026-08-20, end of the Phase 5 session. Branch
 `luna/macos-m7-phase4-integration`, worktree `J:\Claude code\iolab-m7-phase4-wt`,
 HEAD `fb49ce8`. Working tree is clean.
 
-**Companion doc**: none yet for Phase 6 — Phase 5's exit criterion is not
-met, so the next session's job is either (a) resolve the capacity finding
-below and finish Phase 5, or (b) get an explicit owner ruling on it, not
-start Phase 6. See "Next session's actual job" below.
+**Owner ruling received 2026-08-20**: the four-node capacity gap
+(post-soak position, item 5) is **waived**. The owner accepted this as a
+known hardware-capacity limit specific to this Mac, not a product defect,
+and directed that Phase 5 close on that basis rather than block on a
+retry or hardware change. See "The one real gap" below for the finding
+this waives, and "Owner waiver" for the ruling itself.
+
+**Companion doc**: none yet for Phase 6 — start there next. Phase 5's exit
+criterion is now met (every row PASS, legitimate `NOT_EXERCISABLE`, or
+owner-waived), so Phase 6 (plan section 12, same-machine Rosetta vs.
+native A/B metrics) can begin, still on `luna/macos-m7-phase4-integration`.
 
 ## Status at a glance
 
-- **Phase 5: NOT closed.** Every matrix-group row from plan section 11 is
+- **Phase 5: CLOSED.** Every matrix-group row from plan section 11 is
   genuinely PASS or a legitimate `NOT_EXERCISABLE`, except **four-node
-  capacity (item 5)**, which is honestly `BLOCKED/UNVERIFIED` in the
-  plan-required post-soak position. This is a real, reproducible (2/2)
-  hardware-capacity limit on this specific Mac, not a verification gap —
-  see "The one real gap" below for full detail.
+  capacity (item 5)**, which was honestly `BLOCKED/UNVERIFIED` in the
+  plan-required post-soak position and has now been **owner-waived** (see
+  below). This was a real, reproducible (2/2) hardware-capacity limit on
+  this specific Mac, not a verification gap — see "The one real gap"
+  below for full detail.
 - **10 real defects found and fixed this session**, all independently
   reproduced before fixing (full list below). Several were long-standing
   latent bugs in the frozen `hardware-m4.sh` orchestrator that had
@@ -68,7 +76,27 @@ worked around. Closing this requires one of:
    longer has the witness VMs `hardware-m4.sh` was written to reclaim RAM
    from — see defect 10 below).
 
-None of these are a decision this session is authorized to make on its own.
+None of these were a decision this session was authorized to make on its
+own.
+
+## Owner waiver
+
+Ruling received 2026-08-20 (start of the following session, in response to
+this handoff): **waive the finding**. The owner accepted the post-soak
+four-node capacity limit as a known constraint of this specific Mac, not a
+product defect — the underlying capability (four real concurrent IOL
+nodes, real traffic, all consoles reachable) is proven correct in
+isolation, and the failure is a resource-margin timing issue specific to
+running immediately after a sustained soak on this hardware. No retry, no
+hardware change, and no further Phase 5 work is required for this row.
+Phase 5's exit criterion is met on that basis.
+
+This does not retroactively fix defect 10 (missing witness VMs for
+`hardware-m4.sh`'s RAM-reclaim path) or make the capacity tier reliable in
+the post-soak position on this Mac — if a future phase or a real user
+workflow needs four-node capacity immediately after sustained traffic on
+this same hardware, that constraint still applies and should be
+re-surfaced, not assumed fixed.
 
 ## 10 real defects found and fixed this session (all independently reproduced first)
 
@@ -139,24 +167,14 @@ Unchanged from the Phase 4 handoff:
 
 ## Next session's actual job
 
-**Do not start Phase 6.** Phase 5's exit criterion (every row PASS) is not
-met, and per the plan Phase 6/7 build on a Phase 5 result that must be a
-real, complete PASS or an honestly-BLOCKED-with-owner-ruling state, not
-rounded up.
-
-1. Surface the capacity finding above to the owner and get an explicit
-   ruling: is a capacity waiver acceptable for this specific row, should
-   the item-5-post-soak case be retried when the Mac has more free memory,
-   or does this block M7 entirely pending different hardware? This is not
-   this session's call.
-2. If a retry is chosen: this Mac's free-memory state at retry time matters
-   a lot — check `vm_stat`/`top` before attempting, and consider whether
-   real substitute witness VMs (per defect 10) can be used to reclaim RAM
-   first, mirroring what the original `hardware-m4.sh` design intended.
-3. Once item-5's post-soak case gets a real PASS or an owner-accepted
-   waiver, Phase 5's exit criterion is met and Phase 6 (plan section 12,
-   same-machine Rosetta vs. native A/B metrics) can start — still no fresh
-   worktree needed, continue on `luna/macos-m7-phase4-integration`.
+**Start Phase 6.** Phase 5's exit criterion is met (owner-waived capacity
+row, everything else PASS or legitimate `NOT_EXERCISABLE`). Begin plan
+section 12 (same-machine Rosetta vs. native A/B metrics), still on
+`luna/macos-m7-phase4-integration`, no fresh worktree needed. Carry
+forward the waiver's caveat above: post-soak four-node capacity on this
+Mac remains a known constraint, not a fixed one — don't assume it away if
+Phase 6/7 work happens to combine soak-like load with four-node topologies
+again.
 
 ## Working pattern used this arc (recommended to continue)
 

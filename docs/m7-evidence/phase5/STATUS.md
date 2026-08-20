@@ -247,6 +247,13 @@ correct; what's not proven is that this Mac has enough headroom to run it
 reliably right after 20 minutes of sustained soak traffic. Rounding this up
 to PASS would misrepresent a real hardware-capacity finding.
 
+**Update, owner ruling 2026-08-20**: waived. The owner accepted this as a
+known Mac-specific hardware-capacity limit, not a product defect, and
+directed Phase 5 to close on that basis. See
+`docs/macos-m7-phase5-handoff.md` "Owner waiver" for the full ruling and
+its caveat (the constraint itself is not fixed, only waived for Phase 5's
+exit criterion).
+
 ### Native-arm64-specific rows
 
 Two rows the plan calls out specifically for the native-arm64 profile, not
