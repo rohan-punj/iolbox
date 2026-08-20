@@ -427,32 +427,97 @@ plan section 13's own sequencing: a PROMOTE verdict is not self-executing,
 and personal owner review of the actual measured/running result precedes
 any merge, tag, or default-behavior change.
 
+## Owner personally validated the running native-arm64 build (2026-08-20)
+
+Following the promotion ruling above, a real native-arm64 package was built
+(see `docs/macos-m7-native-arm64-build-run-prompt.md`) and left
+running/reachable via SSH port-forward. Two real defects the owner spotted
+while validating by hand were found, fixed, and verified on hardware in the
+same session — neither was caught by this session's own automated Phase 6
+runs, because both are netprobe console UX bugs (cursor editing within a
+recalled history line; a spurious blank line on a bare Enter), not
+IOL/router/traffic issues:
+
+- `fix(pc): allow cursor movement within a recalled console command` — was
+  already sitting unmerged on `fix/netprobe-console-history-cursor` since
+  2026-08-15; merged into this line at `0a43e96`. Independently, `main`
+  already had this fix too (landed there separately). Cross-checked every
+  other netprobe/console file across all branches by content diff (not
+  just commit ancestry — `main`'s history was rewritten/squashed at some
+  point, which makes ancestry-only checks unreliable) before concluding
+  nothing else was missing.
+- `fix(pc): don't send a spurious blank line on an empty Enter` — a new
+  bug, found live on the rebuilt validation instance, root-caused
+  (`dispatchLine("")` returns `""`, but the write path unconditionally
+  added a second `\r\n` regardless), fixed and covered by a new test at
+  `339f6b1`, then cherry-picked onto `main` directly at `f03a32e` and
+  pushed — this fix is generic Go source with no arm64/macOS-specific code,
+  so it reaches every packaging target (Windows, WSL, VMware, OVA, native
+  amd64/arm64, LXC) on their next build from `main`, not just this line.
+
+Also added, on owner request: `--cpus`/`--memory-gib` guest-sizing flags
+on the macOS launcher (`585aa1c`), mirroring the existing Windows
+`--smp`/`--mem` prompt.go pattern — explicit flag wins, otherwise prompts
+interactively (default shown = the profile's own current value) when
+stdin is a real terminal. Previously the 4 vCPU/4GiB allocation was
+hardcoded per-profile with no user-facing control, which is directly why
+four-node topologies have so little headroom on constrained Macs (see the
+4-node caveat above). macOS-only for now; not ported to the Windows/other
+launchers.
+
+**Owner then personally exercised the running build's GUI directly and
+confirmed it passes their own validation** — this is the "separate,
+explicit owner sign-off after the owner has personally reviewed the actual
+measured/running result" plan section 13 requires before anything
+downstream of a promotion ruling proceeds. That gate is now satisfied.
+
 ## Next session's actual job
 
-1. **Get the rosetta-amd64 router stall in front of fresh eyes with the
-   Go-based M4 test tooling**, not this session's lightweight Python
-   harness — run `hardware-m4-phase5.sh`'s item-1 (VPCS/IOL) phase directly
-   against the M6 CI candidate archive identified in this handoff, to
-   determine whether the mature, already-hardened console driver reproduces
-   the same stall (strengthening the "real product/environment issue"
-   read) or succeeds (which would point back at something specific to this
-   session's harness after all, despite the native-arm64 control
-   comparison).
-2. **Re-verify four-node capacity with the mature M4 harness** before
-   treating this session's single-attempt, both-arms-fail 4-node result as
-   confirmed — see the honest caveat above.
-3. Once the router-stall root cause (or at least a confirmed
-   harness-vs-product attribution) is settled, complete the remaining
-   >=3-run 2-node rosetta-amd64 console-dependent metrics if the stall
-   turns out to be fixable, or formally close this as a permanent
-   rosetta-amd64 functional gap if it does not reproduce as fixable.
-4. Phase 7 (plan section 13, mechanical promotion decision) should treat
-   this handoff's verdict table as authoritative for what it does cover
-   (VM boot parity: PASS; native-arm64 2-node functional/traffic: PASS;
-   rosetta-amd64 2-node router console: FAIL/NO-PROMOTE-forcing) and treat
-   everything marked UNEVALUATED or single-attempt-only as requiring the
-   next session's follow-up before a full promotion decision can be made
-   with confidence.
+In order — each step is a real decision point, not a rubber stamp:
+
+1. **Flip the `auto`-selection code gate now that validation is done.**
+   `tools/iolab-launcher/macos_profile_select.go`'s `resolveProfileSelection`
+   still gates a bare `auto` selection behind the test-only
+   `IOLBOX_TEST_PREFER_NATIVE` env var — this was deliberately left
+   unflipped through this whole session pending exactly the validation that
+   just happened. Flip it so `auto` prefers native-arm64 whenever preflight
+   passes, explicit Rosetta fallback retained (matching plan section 13's
+   PROMOTE clause literally). Small, scoped, well-understood change — do
+   this first.
+2. **Re-verify the rosetta-amd64 router stall and four-node capacity with
+   the mature Go-based M4 test tooling** (`hardware-m4-phase5.sh`), not
+   this session's lightweight Python harness — run item-1 (VPCS/IOL)
+   directly against the M6 CI candidate archive identified in this
+   handoff, to settle whether the mature, already-hardened console driver
+   reproduces the same stall (strengthens "real product/environment
+   issue") or succeeds (points back at something specific to the
+   lightweight harness after all, despite the native-arm64 control
+   comparison already run). Same for four-node — don't treat this
+   session's single-attempt, both-arms-fail result as confirmed until
+   re-checked.
+3. Once (2) settles the router-stall root cause (or at least a confirmed
+   harness-vs-product attribution), either complete the remaining >=3-run
+   2-node rosetta-amd64 console-dependent metrics (if the stall turns out
+   fixable) or formally close it as a permanent rosetta-amd64 functional
+   gap (if it doesn't reproduce as fixable).
+4. **Run Phase 7 (plan section 13, mechanical promotion decision)** —
+   build the actual gate ledger, reproduce it in `docs/macos-m7-result.md`
+   per the plan's own requirement. Treat this handoff's verdict table as
+   authoritative for what it covers (VM boot parity: PASS; native-arm64
+   2-node functional/traffic: PASS; rosetta-amd64 2-node router console:
+   FAIL/NO-PROMOTE-forcing) and everything UNEVALUATED/single-attempt as
+   needing step 2's follow-up first.
+5. **Prepare (don't unilaterally execute) merging `luna/macos-m7-phase4-integration`
+   into `main`.** Nothing validated this session is reachable by anyone
+   building from `main` until this merges — it's a real review, not a
+   formality, given how much has accumulated on this line. Surface the
+   diff/scope to the owner rather than merging on your own judgment.
+6. **Surface, don't decide, whether macOS joins the official release
+   pipeline.** `.github/workflows/release.yml` doesn't build macOS at all
+   today — it's never been one of the 8 release targets. Adding it is a
+   real scope decision (CI changes, a version tag, ongoing maintenance
+   burden) for the owner to make, not something to add quietly as part of
+   closing out this track.
 
 ## Working pattern used this session (recommended to continue)
 
