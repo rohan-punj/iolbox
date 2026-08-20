@@ -1,0 +1,1 @@
+Success rate is 90 percent (9/10), round-trip min/avg/max = 1/22/193 ms

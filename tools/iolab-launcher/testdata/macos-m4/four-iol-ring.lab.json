@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "m4-four-iol-ring",
+  "name": "M4 four IOL ring",
+  "description": "Fixed four-node 1024 MB ring for the deterministic M4 RAM state machine.",
+  "canvas": {"zoom": 1, "pan": {"x": 1, "y": 0}, "background": "dots"},
+  "nodes": [
+    {
+      "id": 0, "kind": "iol", "name": "R1", "x": 240, "y": 120,
+      "image": {"id": "REPLACE_WITH_IMAGE_ID", "filename": "M4-image.bin", "class": "l3"},
+      "ram": 1024, "ethernet": 1, "serial": 1,
+      "startupConfig": "hostname R1\n!\ninterface Ethernet0/0\n ip address 10.0.12.1 255.255.255.252\n no shutdown\n!\ninterface Ethernet0/1\n ip address 10.0.41.2 255.255.255.252\n no shutdown\n!\nip route 10.0.34.0 255.255.255.252 10.0.12.2\nip route 10.0.23.0 255.255.255.252 10.0.12.2\nend\n"
+    },
+    {
+      "id": 1, "kind": "iol", "name": "R2", "x": 560, "y": 120,
+      "image": {"id": "REPLACE_WITH_IMAGE_ID", "filename": "M4-image.bin", "class": "l3"},
+      "ram": 1024, "ethernet": 1, "serial": 1,
+      "startupConfig": "hostname R2\n!\ninterface Ethernet0/0\n ip address 10.0.12.2 255.255.255.252\n no shutdown\n!\ninterface Ethernet0/1\n ip address 10.0.23.1 255.255.255.252\n no shutdown\n!\nip route 10.0.34.0 255.255.255.252 10.0.23.2\nend\n"
+    },
+    {
+      "id": 2, "kind": "iol", "name": "R3", "x": 560, "y": 400,
+      "image": {"id": "REPLACE_WITH_IMAGE_ID", "filename": "M4-image.bin", "class": "l3"},
+      "ram": 1024, "ethernet": 1, "serial": 1,
+      "startupConfig": "hostname R3\n!\ninterface Ethernet0/0\n ip address 10.0.23.2 255.255.255.252\n no shutdown\n!\ninterface Ethernet0/1\n ip address 10.0.34.1 255.255.255.252\n no shutdown\n!\nip route 10.0.12.0 255.255.255.252 10.0.23.1\nend\n"
+    },
+    {
+      "id": 3, "kind": "iol", "name": "R4", "x": 240, "y": 400,
+      "image": {"id": "REPLACE_WITH_IMAGE_ID", "filename": "M4-image.bin", "class": "l3"},
+      "ram": 1024, "ethernet": 1, "serial": 1,
+      "startupConfig": "hostname R4\n!\ninterface Ethernet0/0\n ip address 10.0.34.2 255.255.255.252\n no shutdown\n!\ninterface Ethernet0/1\n ip address 10.0.41.1 255.255.255.252\n no shutdown\n!\nend\n"
+    }
+  ],
+  "links": [
+    {"id": 0, "type": "p2p", "endpoints": [{"node": 0, "interface": "e0/0"}, {"node": 1, "interface": "e0/0"}]},
+    {"id": 1, "type": "p2p", "endpoints": [{"node": 1, "interface": "e0/1"}, {"node": 2, "interface": "e0/0"}]},
+    {"id": 2, "type": "p2p", "endpoints": [{"node": 2, "interface": "e0/1"}, {"node": 3, "interface": "e0/0"}]},
+    {"id": 3, "type": "p2p", "endpoints": [{"node": 3, "interface": "e0/1"}, {"node": 0, "interface": "e0/1"}]}
+  ]
+}

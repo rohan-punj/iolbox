@@ -28,6 +28,10 @@ import (
 // (see build-release.sh); "0.1.0" only shows up in an unstamped dev build.
 var version = "0.1.0"
 
+func disableI386FromEnv(value string) bool {
+	return value == "1"
+}
+
 func main() {
 	controlAddr := flag.String("control-addr", "127.0.0.1:4000", "control API bind address (loopback only)")
 	wsAddr := flag.String("ws-addr", "127.0.0.1:4001", "WebSocket bridge + GUI bind address (control + console over WS and the embedded browser GUI; use 0.0.0.0:4001 for browser access from the host; empty disables it)")
@@ -68,6 +72,7 @@ func main() {
 		ConsoleBind: *consoleBind,
 		CaptureBind: *captureBind,
 		Version:     version,
+		DisableI386: disableI386FromEnv(os.Getenv("IOLBOX_DISABLE_I386")),
 		Egress:      *egressMode,
 	})
 	if err := srv.InitRuntime(); err != nil {

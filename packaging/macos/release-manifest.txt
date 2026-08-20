@@ -1,0 +1,20 @@
+# M6 archive allow-list: source path relative to the repository root | path
+# relative to the iolbox-macos-arm64/ archive root.
+packaging/macos/README.release.md|README.md
+LICENSE|LICENSE
+THIRD_PARTY.md|notices/THIRD_PARTY.md
+packaging/macos/lima/profiles.env|lima/profiles.env
+packaging/macos/lima/iolbox-trixie.yaml|lima/iolbox-trixie.yaml
+packaging/macos/lima/iolbox-jammy.yaml|lima/iolbox-jammy.yaml
+packaging/macos/lima/iolbox-bookworm.yaml|lima/iolbox-bookworm.yaml
+packaging/macos/lima/pinned-image-debian13.env|lima/pinned-image-debian13.env
+packaging/macos/lima/pinned-image.env|lima/pinned-image.env
+packaging/macos/lima/pinned-image-debian12.env|lima/pinned-image-debian12.env
+packaging/macos/guest/lib.sh|guest/lib.sh
+packaging/macos/guest/10-multiarch-debian.sh|guest/10-multiarch-debian.sh
+packaging/macos/guest/10-multiarch.sh|guest/10-multiarch.sh
+packaging/macos/guest/20-kernel-hold-debian.sh|guest/20-kernel-hold-debian.sh
+packaging/macos/guest/20-kernel-hold.sh|guest/20-kernel-hold.sh
+packaging/macos/guest/30-canary.sh|guest/30-canary.sh
+packaging/macos/guest/40-install-payload.sh|guest/40-install-payload.sh
+packaging/macos/guest/50-verify.sh|guest/50-verify.sh

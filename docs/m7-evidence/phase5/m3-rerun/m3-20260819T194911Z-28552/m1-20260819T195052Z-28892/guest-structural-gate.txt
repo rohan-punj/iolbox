@@ -1,0 +1,111 @@
+# /etc/systemd/system/iolbox-supervisor.service
+# iolbox supervisor — the Go control-plane + embedded browser GUI the Windows
+# side talks to. Installed to /etc/systemd/system/iolbox-supervisor.service and
+# enabled at build time (build-rootfs.sh symlinks it into
+# multi-user.target.wants).
+#
+# The flag set below mirrors the PROVEN reference runtime's start-sup.sh
+# (J:\iolbox-runtime-vm, see iolbox-p0-runtime-vm memory topic) exactly:
+#   -control-addr 127.0.0.1:4000   raw NDJSON control API, guest-loopback only
+#   -ws-addr 0.0.0.0:4001          WS bridge + embedded GUI, reachable from the
+#                                  Windows host (browser-first product, P1)
+#   -console-bind 0.0.0.0          native `telnet <vm-ip>:<port>` consoles
+#   -capture-bind 0.0.0.0          native `wireshark -k -i TCP@<vm-ip>:<port>`
+#   -labs-dir                      durable lab store (seed labs materialize
+#                                  here on first connect when empty)
+#   -iourc                         generated at first boot by
+#                                  iolbox-firstboot-iourc.service
+[Unit]
+Description=iolbox supervisor (IOL/VPCS control plane + GUI)
+After=network.target iolbox-firstboot-iourc.service
+Wants=network.target
+Requires=iolbox-firstboot-iourc.service
+
+[Service]
+Type=simple
+# /opt/iolbox on PATH: the supervisor spawns `vpcs` by bare name (see
+# supervisor/internal/node/argv.go) and expects it resolvable via PATH.
+# sbin dirs for `ip`/`sysctl`/`iptables` (extnet's `sudo -n` path uses
+# sudo's own secure_path, but keep them here too for direct spawns).
+Environment=PATH=/opt/iolbox:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Clean up what a crashed/SIGKILLed previous run can leave behind: stale
+# iolnatN tap devices (extnet.Close never ran) and the per-lab run dirs.
+# Mirrors the reference runtime's start-sup.sh cleanup loop.
+ExecStartPre=/opt/iolbox/prestart-clean.sh
+ExecStart=/opt/iolbox/supervisor \
+    -control-addr 127.0.0.1:4000 \
+    -ws-addr 0.0.0.0:4001 \
+    -console-bind 0.0.0.0 \
+    -capture-bind 0.0.0.0 \
+    -image-dir /opt/iolbox/images \
+    -run-dir /opt/iolbox/run \
+    -labs-dir /opt/iolbox/labs \
+    -iourc /opt/iolbox/iourc
+Restart=always
+RestartSec=1
+
+# Runs as root: IOL spawn, tap creation, NVRAM files. Single-tenant
+# disposable runtime — there's nobody else on the box to protect.
+# KillMode=control-group (the default, stated explicitly) is load-bearing:
+# stopping/restarting the unit also kills the IOL/VPCS/iouyap children, so
+# no orphaned vpcs busy-spinners survive a supervisor bounce (the orphan
+# problem the dev VM needed pkill loops for).
+User=root
+WorkingDirectory=/opt/iolbox
+KillMode=control-group
+
+# systemd delegates a writable subtree to the supervisor. The supervisor
+# creates <D>/supervisor/ and migrates itself there before enabling controllers
+# on <D>; this is required by cgroup v2's no-internal-processes rule, so <D>
+# remains available for the sibling tool cages.
+Delegate=yes
+Delegate=memory pids cpu
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+
+# Supervisor + child IOL/VPCS output lands in the journal; invaluable when
+# debugging a runtime interactively (journalctl -u iolbox-supervisor).
+StandardOutput=journal
+StandardError=journal
+
+# No sandboxing directives on purpose: the supervisor creates UDP sockets,
+# taps, telnet/capture listeners on high ports, runs `sudo -n ip/iptables`.
+# This is not a hardened multi-tenant service.
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/iolbox-supervisor.service.d/10-bind.conf
+# Drop-in for /etc/systemd/system/iolbox-supervisor.service.d/10-bind.conf
+#
+# Installed by install.sh (never hand-edit the stock unit file shipped in
+# this tarball — see runtime/README.md's WSL/VMware equivalent for why the
+# base unit stays identical across every packaging target: one flag set,
+# audited once). This drop-in re-specifies ExecStart, substituting the
+# console/capture/ws bind addresses from an EnvironmentFile so `install.sh
+# --bind local|all` (and a later manual re-run with a different flag) is a
+# one-file edit instead of a sed against the unit itself.
+#
+# systemd requires clearing ExecStart= (empty RHS) before restating it —
+# the base unit's ExecStart= is NOT replaced automatically by a drop-in,
+# it would otherwise just append.
+[Service]
+EnvironmentFile=/etc/iolbox/bind.env
+ExecStart=
+ExecStart=/opt/iolbox/supervisor \
+    -control-addr 127.0.0.1:4000 \
+    -ws-addr ${IOLBOX_WS_ADDR} \
+    -console-bind ${IOLBOX_CONSOLE_BIND} \
+    -capture-bind ${IOLBOX_CAPTURE_BIND} \
+    -image-dir /opt/iolbox/images \
+    -run-dir /opt/iolbox/run \
+    -labs-dir /opt/iolbox/labs \
+    -iourc /opt/iolbox/iourc
+
+# /etc/systemd/system/iolbox-supervisor.service.d/10-iolbox-macos-canary.conf
+[Service]
+# Structural macOS/Lima gate: every boot, restart, crash-restart, and manual start runs the executable canary first.
+Environment=IOLBOX_DISABLE_I386=1
+ExecStartPre=/opt/iolbox-provision/30-canary.sh --quiet

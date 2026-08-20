@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -565,6 +567,32 @@ func TestIsPlainLabID(t *testing.T) {
 		if got := isPlainLabID(id); got != want {
 			t.Errorf("isPlainLabID(%q) = %v, want %v", id, got, want)
 		}
+	}
+}
+
+func TestHTTPImageUploaderEncodesFilenameAndMTimeQuery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("filename"); got != "router one.bin" {
+			t.Errorf("decoded filename = %q", got)
+		}
+		if got := r.URL.Query().Get("mtime"); got != "12345" {
+			t.Errorf("mtime = %q", got)
+		}
+		if r.Header.Get("Content-Type") != "application/octet-stream" {
+			t.Errorf("content type = %q", r.Header.Get("Content-Type"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"path":"/opt/iolbox/images/router one.bin"}`)
+	}))
+	defer server.Close()
+
+	uploader := newHTTPImageUploader(server.URL)
+	path, err := uploader.upload("router one.bin", strings.NewReader("image"), 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/opt/iolbox/images/router one.bin" {
+		t.Fatalf("uploaded path = %q", path)
 	}
 }
 

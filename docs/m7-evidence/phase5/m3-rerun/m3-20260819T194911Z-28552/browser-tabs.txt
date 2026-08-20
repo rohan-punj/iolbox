@@ -1,0 +1,1 @@
+browser tab probe unavailable; deterministic evidence remains browser-equivalent HTTP/WS

@@ -1,0 +1,3 @@
+machine=iolbox-p5-m3-e2e
+phase=install-image-and-lab
+image=/Users/rohansharma/iolbox-m0/x86_64_crb_linux-adventerprisek9-ms.iol17.18.02.bin

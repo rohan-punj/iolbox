@@ -73,6 +73,7 @@ func TestLaunchArgvNamespaceTransitionTargetOrder(t *testing.T) {
 
 func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 	spec := LaunchSpec{
+		Netns:       "iolt7",
 		CgroupPath:  "/sys/fs/cgroup/tool-7",
 		Binary:      "/opt/pack/tool",
 		Args:        []string{"--serve"},
@@ -81,6 +82,7 @@ func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 	want := []string{
 		"/opt/iolbox/iolbox-toollaunch",
 		"--cgroup", "/sys/fs/cgroup/tool-7",
+		"--netns", "iolt7",
 		"--user", "ioltool", "--caps", "cap_net_raw", "--",
 		"/opt/pack/tool", "--serve",
 	}

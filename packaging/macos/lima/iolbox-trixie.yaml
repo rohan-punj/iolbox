@@ -1,0 +1,46 @@
+# iolbox Debian 13/trixie Lima template; render before passing to Lima.
+#
+# Debian 13 trixie is the DEFAULT profile. The live guest canary remains the
+# authority for the selected host; this table never rejects a macOS product or
+# build.
+
+images:
+  - location: "@IOLBOX_IMAGE_URL@"
+    arch: aarch64
+    digest: "@IOLBOX_IMAGE_DIGEST@"
+
+vmType: "vz"
+rosetta:
+  enabled: true
+  binfmt: true
+
+# Keep the explicit M0 geometry for a clean profile comparison.
+cpus: @CPUS@
+memory: "@MEMORY@"
+disk: "@DISK@"
+
+mountType: "virtiofs"
+mounts:
+  - location: "~"
+    writable: false
+
+portForwards:
+  - guestPort: @IOLBOX_GUI_PORT@
+    hostPort: @IOLBOX_GUI_PORT@
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [9000, 9049]
+    hostPortRange: [9000, 9049]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [5500, 5529]
+    hostPortRange: [5500, 5529]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    proto: "any"
+    ignore: true
+
+# No provision scripts or readiness probes; the host selects the shared
+# lifecycle and the generic Debian guest steps.

@@ -1,0 +1,51 @@
+2026-08-19T18:42:02Z
+== persisted choice cleared; command: LIMA_HOME=~/.lima-iolbox-p4 IOLBOX_TEST_PREFER_NATIVE=1 ./iolbox-launcher status  (bare auto, no explicit flag, no persisted choice, but test policy prefers native and native-arm64 VM already running+healthy so preflight passes) ==
+profile=native-arm64 role=NATIVE guest=Debian 13 trixie (native arm64) qualification=UNMEASURED — CANARY REQUIRED
+iolbox status
+  GUI port: 127.0.0.1:4001
+  console ports: 127.0.0.1:9000-9049
+  capture ports: 127.0.0.1:5500-5529
+  guest control port: not forwarded (127.0.0.1:4000 host check)
+sync images: /Users/rohansharma/Library/Application Support/iolbox/images
+sync labs: /Users/rohansharma/Library/Application Support/iolbox/labs
+  profile: native-arm64
+  role: NATIVE
+  guest: Debian 13 trixie (native arm64)
+  kernel pin: 6.12.101+deb13-cloud-arm64
+  macOS: 26.6.2 (25G83)
+  host_arch: arm64
+  qualification: UNMEASURED — CANARY REQUIRED
+  lima: 2.2.0 (/opt/homebrew/bin/limactl)
+  machine: iolbox-native-arm64
+  state: Running
+  last canary:
+    result=pass
+    exit=0
+    host_macos=26.6.2 (25G83)
+    host_lima=2.2.0
+    recorded_utc=2026-08-19T18:36:39Z
+requested_profile=auto
+selected_profile=native-arm64
+profile_source=auto-native-test-policy
+fallback_reason=
+backend=lima-vz
+translator=qemu-user
+guest_arch=aarch64
+supervisor_arch=arm64
+execution=native-arm64
+guest_kernel=6.12.101+deb13-cloud-arm64
+canary_verdict=PASS (live record 2026-08-19T18:37:07Z)
+service=PASS (active)
+http=PASS (HTTP 200)
+hello=supervisor=0.1.0 runtime=debian-slim-12 arch=arm64 features=[nvram capture natgw tools] egress=routed
+capability_policy=PASS (drop-in and hello agree)
+rosetta_binfmt=unavailable (cat: /proc/sys/fs/binfmt_misc/rosetta: No such file or directory)
+rosetta_present=false
+structural_attestation=last attested canary_verdict=PASS
+effective_drop_in=[Service]\n# Structural macOS/Lima native-arm64 gate: every boot, restart, crash-restart, and manual start runs the executable canary first.\nEnvironment=IOLBOX_DISABLE_I386=1\nExecStartPre=/opt/iolbox-provision/30-canary-native.sh --quiet
+  guest kernel: 6.12.101+deb13-cloud-arm64
+  guest arch: aarch64
+  Rosetta binfmt: unavailable (cat: /proc/sys/fs/binfmt_misc/rosetta: No such file or directory)
+  supervisor service: active
+  GET /: 200
+EXIT=0

@@ -72,7 +72,42 @@ if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
 fi
 
 ARCH="$(uname -m)"
-if [ "$ARCH" != "x86_64" ]; then
+
+# The explicit arm64 archive carries a manifest.env (see pack-native.sh's
+# TARGET_ARCH=arm64 branch: version/os/arch/supervisor_sha256/vpcs_sha256).
+# The no-argument and explicit-amd64 archives never carry one -- that is the
+# fixed no-arg-amd64-compatibility contract, so its absence here means this
+# is the historical amd64 payload and the old warning-only check below still
+# applies unchanged. When manifest.env IS present, its declared arch is
+# authoritative and a mismatch is a hard, fail-closed refusal -- no
+# directory is created, no file is copied, and systemctl is never invoked.
+if [ -f "$SCRIPT_DIR/manifest.env" ]; then
+    # A plain KEY=value file written by this project's own pack-native.sh;
+    # sourcing it is safe (not attacker-controlled input at this point --
+    # it shipped inside the same signed-by-build archive as the binaries).
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/manifest.env"
+    MANIFEST_ARCH="${arch:-}"
+    case "$MANIFEST_ARCH" in
+        arm64) EXPECTED_UNAME=aarch64 ;;
+        amd64) EXPECTED_UNAME=x86_64 ;;
+        *)
+            echo "install.sh: manifest.env has an unrecognized or missing arch= field ('$MANIFEST_ARCH')." >&2
+            echo "  Refusing to install: cannot verify an architecture-mismatch-safe package." >&2
+            exit 1
+            ;;
+    esac
+    if [ "$ARCH" != "$EXPECTED_UNAME" ]; then
+        echo "install.sh: architecture mismatch — this package is linux/$MANIFEST_ARCH" >&2
+        echo "  (expects uname -m = $EXPECTED_UNAME), but this host reports uname -m = '$ARCH'." >&2
+        echo "  Refusing to install an arm64/aarch64-vs-x86_64 mismatched package —" >&2
+        echo "  a mismatched supervisor/vpcs binary would just fail to exec (ENOEXEC)" >&2
+        echo "  after already being copied into place. No directory was created, no" >&2
+        echo "  file was copied, and systemctl was not invoked." >&2
+        exit 1
+    fi
+    echo "install.sh: manifest.env architecture check passed (linux/$MANIFEST_ARCH, uname -m=$ARCH)"
+elif [ "$ARCH" != "x86_64" ]; then
     echo "install.sh: WARNING - uname -m reports '$ARCH', not x86_64." >&2
     echo "  The bundled supervisor/vpcs binaries are linux/amd64 only and will" >&2
     echo "  fail to exec on any other architecture. Continuing anyway (in case" >&2
@@ -121,13 +156,14 @@ else
     echo "install.sh: all required commands present ($NEEDED_BINS)"
 fi
 
-# libssl3 / equivalent: some IOL images dlopen libcrypto. Not hard-checked
+# libssl3 / equivalent: some IOL images dlopen libcrypto. Debian 13 uses
+# libssl3t64 for this runtime. Not hard-checked
 # here (package name varies too much across distros — libssl3 on
 # Debian/Ubuntu, openssl-libs on Fedora/RHEL, etc.) — if IOL nodes fail to
 # start with a dlopen error, install your distro's OpenSSL 3.x runtime lib.
 echo "install.sh: NOTE - if IOL nodes fail to start with a libcrypto/dlopen"
 echo "  error, install your distro's OpenSSL 3.x shared library package"
-echo "  (Debian/Ubuntu: libssl3; Fedora/RHEL: openssl-libs)."
+echo "  (Debian/Ubuntu: libssl3; Debian 13: libssl3t64; Fedora/RHEL: openssl-libs)."
 
 # ---------------------------------------------------------------------------
 # Hostname sanity check
@@ -175,6 +211,31 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# ioltool service account
+# ---------------------------------------------------------------------------
+# PC/VPCS nodes (the "tool" package) launch their pack GUI as a dedicated,
+# unprivileged account named ioltool — supervisor/internal/tool/detect_linux.go's
+# capability probe requires user.Lookup("ioltool") to succeed, and both its
+# ambientCapTransition and unixProxy checks fail without it, which surfaces as
+# "runtime does not support PC nodes" in the GUI. Every other packaging target
+# (OVA/QEMU/LXC/WSL) gets this account for free because runtime/build-rootfs.sh
+# creates it inside the shared rootfs image before those targets are packed. A
+# native install (this script) runs on the operator's own box, which was never
+# built from that rootfs, so create it here too — idempotently, since this
+# script is safe to re-run.
+if ! id ioltool >/dev/null 2>&1; then
+    echo "install.sh: creating ioltool service account (used by PC/VPCS pack GUIs)"
+    useradd -r -M -s /usr/sbin/nologin ioltool || {
+        echo "install.sh: could not create the ioltool service account" >&2
+        exit 1
+    }
+fi
+id ioltool >/dev/null 2>&1 || {
+    echo "install.sh: ioltool account still missing after useradd" >&2
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
 # Install files
 # ---------------------------------------------------------------------------
 echo "install.sh: installing to $PREFIX"
@@ -184,6 +245,27 @@ install -d -m 0755 "$PREFIX/images"
 install -d -m 0755 "$PREFIX/run"
 install -d -m 0755 "$PREFIX/labs"
 
+# Learning-tool packs (PC/VPCS, aaa, webserver, httpclient, syslog, netsvc,
+# secbench) — staged by pack-native.sh under tools/packs/. Installed at the
+# supervisor's hardcoded default (server.go's ToolPacksDir), /opt/iolbox/tools
+# /packs, same as iolbox-toollaunch above: nothing currently plumbs --prefix
+# through to it. Absent when the tarball was built with --no-packs; PC/VPCS
+# and the other tool nodes simply won't be available in that case (the
+# supervisor logs a warning and starts with an empty tool-pack registry, same
+# as any other pack-load failure).
+if [ -d "$SCRIPT_DIR/tools/packs" ]; then
+    echo "install.sh: installing tool packs"
+    install -d -m 0755 /opt/iolbox/tools
+    rm -rf /opt/iolbox/tools/packs
+    cp -R "$SCRIPT_DIR/tools/packs" /opt/iolbox/tools/packs
+    chown -R root:root /opt/iolbox/tools/packs
+    find /opt/iolbox/tools/packs -type d -exec chmod 0755 {} +
+    find /opt/iolbox/tools/packs -type f -name '*.json' -exec chmod 0644 {} +
+    find /opt/iolbox/tools/packs -type f ! -name '*.json' -exec chmod 0755 {} +
+else
+    echo "install.sh: NOTE - no tools/packs bundled in this tarball; PC/VPCS and other tool nodes will not be available."
+fi
+
 # Binaries: 0755, not 0644 — a non-executable supervisor binary fails
 # fork/exec at ExecStart with a confusing "Permission denied", a mistake
 # already made once in this project (see runtime/README.md history /
@@ -191,39 +273,22 @@ install -d -m 0755 "$PREFIX/labs"
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/supervisor" "$PREFIX/supervisor"
 install -m 0755 -o root -g root "$SCRIPT_DIR/bin/vpcs" "$PREFIX/vpcs"
 
-# iolbox-toollaunch's path is hardcoded in the supervisor (launchNativePath,
-# internal/tool/launch.go) to /opt/iolbox/iolbox-toollaunch — it only lands
-# there correctly when --prefix is left at the default.
-install -m 0755 -o root -g root "$SCRIPT_DIR/bin/iolbox-toollaunch" "$PREFIX/iolbox-toollaunch"
+# manifest.env (arm64 archives only, see the architecture check above) is
+# provenance, not runtime config: it records the package version/arch and
+# the supervisor/vpcs SHA-256 that were actually installed, for later audit
+# (status/diagnose reads it back to report translator/backend truthfully).
+if [ -f "$SCRIPT_DIR/manifest.env" ]; then
+    install -m 0644 -o root -g root "$SCRIPT_DIR/manifest.env" "$PREFIX/manifest.env"
+fi
+
+# PC/VPCS nodes' ambient-capability transition (supervisor/internal/tool/launch.go)
+# execs this helper at a hardcoded path, /opt/iolbox/iolbox-toollaunch, regardless
+# of --prefix; install it there to match rather than under $PREFIX.
+install -d -m 0755 /opt/iolbox
+install -m 0755 -o root -g root "$SCRIPT_DIR/bin/iolbox-toollaunch" /opt/iolbox/iolbox-toollaunch
 
 install -m 0755 -o root -g root "$SCRIPT_DIR/opt-iolbox/firstboot-iourc.sh" "$PREFIX/firstboot-iourc.sh"
 install -m 0755 -o root -g root "$SCRIPT_DIR/opt-iolbox/prestart-clean.sh" "$PREFIX/prestart-clean.sh"
-
-# Tool packs (kind=="pc" netprobe + kind=="tool" learning-tool nodes). The
-# supervisor discovers these under $PREFIX/tools/packs by default
-# (ToolPacksDir in internal/server/server.go); without them those node
-# kinds fail to boot even though IOL/VPCS nodes work fine.
-echo "install.sh: installing tool packs"
-install -d -m 0755 -o root -g root "$PREFIX/tools"
-install -d -m 0755 -o root -g root "$PREFIX/tools/packs"
-for pack_dir in "$SCRIPT_DIR"/tools/packs/*/; do
-    pack="$(basename "$pack_dir")"
-    install -d -m 0755 -o root -g root "$PREFIX/tools/packs/$pack"
-    cp -a "$pack_dir." "$PREFIX/tools/packs/$pack/"
-    chown -R root:root "$PREFIX/tools/packs/$pack"
-done
-
-# pack GUIs run as the unprivileged "ioltool" account (T0.5's proven tool
-# boundary); iolbox-toollaunch drops from root to this user right before
-# exec'ing the pack binary. Same useradd invocation build-rootfs.sh runs
-# inside the appliance rootfs, made idempotent for re-installs/upgrades.
-if ! id -u ioltool >/dev/null 2>&1; then
-    echo "install.sh: creating ioltool system account"
-    NOLOGIN_SHELL="/usr/sbin/nologin"
-    [ -x "$NOLOGIN_SHELL" ] || NOLOGIN_SHELL="/sbin/nologin"
-    [ -x "$NOLOGIN_SHELL" ] || NOLOGIN_SHELL="/bin/false"
-    useradd -r -M -s "$NOLOGIN_SHELL" ioltool
-fi
 
 echo "install.sh: installing systemd units"
 install -m 0644 "$SCRIPT_DIR/systemd/iolbox-supervisor.service" \

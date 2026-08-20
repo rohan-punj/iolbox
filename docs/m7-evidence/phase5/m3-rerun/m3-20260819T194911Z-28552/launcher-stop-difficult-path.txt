@@ -1,0 +1,4 @@
+profile=debian13 role=DEFAULT guest=Debian 13 trixie qualification=UNMEASURED — CANARY REQUIRED
+[iolbox]   images folder: /Users/rohansharma/iolbox-p5-build/src/evidence-p5/m3-20260819T194911Z-28552/M3 data café/images  (drop .bin/.iol IOL images here)
+[iolbox]   labs folder:   /Users/rohansharma/iolbox-p5-build/src/evidence-p5/m3-20260819T194911Z-28552/M3 data café/labs  (saved labs persist here as <id>.yml)
+[iolbox] Darwin folder sync: exported 0 lab(s) to /Users/rohansharma/iolbox-p5-build/src/evidence-p5/m3-20260819T194911Z-28552/M3 data café/labs before Lima stop

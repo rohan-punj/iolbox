@@ -46,9 +46,12 @@
 
   function wiresharkCmdFull(linkId: number): string | null {
     const addr = captureAddr(linkId);
-    return addr
-      ? `"C:\\Program Files\\Wireshark\\Wireshark.exe" -k -i TCP@${addr.host}:${addr.port}`
-      : null;
+    if (!addr) return null;
+    const platform = typeof navigator === "undefined" ? "" : `${navigator.platform} ${navigator.userAgent}`;
+    if (/Mac/i.test(platform)) {
+      return `/Applications/Wireshark.app/Contents/MacOS/Wireshark -k -i TCP@${addr.host}:${addr.port}`;
+    }
+    return `"C:\\Program Files\\Wireshark\\Wireshark.exe" -k -i TCP@${addr.host}:${addr.port}`;
   }
 
   function fmtBytes(bytes: number): string {

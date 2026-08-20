@@ -6,6 +6,48 @@ checksum, and how we comply with each license.
 
 ---
 
+## Apple Silicon macOS archive
+
+The `iolbox-macos-arm64.tar.gz` archive contains the Go `iolbox` launcher, the
+exact native Linux payload produced by `runtime/pack-native.sh`, the locked
+Lima profile/provisioner files, and this notice. It contains no guest disk,
+hypervisor, Lima installation, or Cisco software.
+
+### Separately installed and fetched components
+
+- Lima is an Apache-2.0 licensed, user-installed prerequisite. iolbox neither
+  redistributes nor installs, upgrades, or removes Lima.
+- Lima downloads the digest-locked Debian 13/trixie default or Ubuntu
+  22.04/Jammy compatibility guest image. The guest image, apt package indexes,
+  and guest packages are fetched at provisioning time and are not embedded in
+  the archive.
+- Users supply any legally held IOL/IOU image. iolbox does not distribute or
+  depend on Cisco software; x86_64 IOL is the only supported IOL architecture
+  in this Rosetta profile. i386/i86bi and arm64-native IOL are unsupported.
+
+### VPCS binary redistributed inside the native payload
+
+`runtime/fetch-vpcs.sh` checks out the GNS3 VPCS project at the immutable
+`v0.8.3` ref (release commit `3870ae8`) and builds its Linux/amd64 binary;
+`runtime/pack-native.sh` places that binary at `bin/vpcs` in the native
+payload. The upstream project is BSD-2-Clause licensed:
+
+- Source repository: <https://github.com/GNS3/vpcs>
+- Pinned source archive: <https://github.com/GNS3/vpcs/archive/refs/tags/v0.8.3.tar.gz>
+- Pinned release: <https://github.com/GNS3/vpcs/releases/tag/v0.8.3>
+- License: BSD-2-Clause, as identified by the upstream repository
+
+The archive redistributes the resulting binary, not a moving branch checkout.
+The source URL and ref above are the corresponding source offer for this
+version; the build recipe and compiler/link flags are recorded in
+`runtime/fetch-vpcs.sh`.
+
+QEMU is **not** in the Apple Silicon archive. The QEMU notice below applies
+only to the separate Windows launcher bundle and must not be read as a claim
+that the Mac artifact contains QEMU.
+
+---
+
 ## QEMU (Windows build) — the `qemu` compatibility backend
 
 The Windows launcher (`tools/iolab-launcher`) ships a trimmed copy of QEMU so the

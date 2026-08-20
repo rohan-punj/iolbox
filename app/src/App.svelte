@@ -200,11 +200,14 @@
                           <button
                             class="catalog-item"
                             class:l2={entry.sub.startsWith("L2")}
-                            draggable="true"
-                            title={entry.sub}
-                            aria-label={`${entry.name}, ${entry.sub}`}
-                            onclick={() => placeNode(entry)}
-                            ondragstart={(event) => onDragStart(event, entry)}
+                            disabled={!!entry.disabled}
+                            draggable={!entry.disabled}
+                            title={entry.disabled ?? entry.sub}
+                            aria-label={`${entry.name}, ${entry.disabled ?? entry.sub}`}
+                            data-image-id={entry.drag.imageId}
+                            data-supported={!entry.disabled}
+                            onclick={() => { if (!entry.disabled) placeNode(entry); }}
+                            ondragstart={(event) => { if (entry.disabled) { event.preventDefault(); return; } onDragStart(event, entry); }}
                             ondragend={onDragEnd}
                           >
                             <span class="catalog-icon" aria-hidden="true">{@html iconSvg(entry.icon, 26)}</span>
@@ -241,7 +244,7 @@
           <RailFlyout title="Node Actions" onClose={() => railUiStore.close()}>
             {#snippet children()}
               <div class="session-actions">
-                <button class="flyout-primary" onclick={() => labStore.startLab()} disabled={running}>
+                <button class="flyout-primary" onclick={() => labStore.startLab()} disabled={running || !!labStore.labUnsupportedReason} title={labStore.labUnsupportedReason ?? "Start every node in this lab"}>
                   {@html uiSvg("play", 14)} Start all
                 </button>
                 <button class="flyout-secondary" onclick={() => labStore.stopLab()} disabled={!running}>

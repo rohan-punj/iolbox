@@ -1,0 +1,52 @@
+# iolbox Debian 12/bookworm Lima template; render before passing to Lima.
+#
+# This profile is a CANDIDATE, canary-gated and UNVERIFIED on Apple Silicon
+# Rosetta. Debian 12 is an unpinned CANDIDATE and has no qualification row yet;
+# the live canary is authoritative. Image URL/digest and geometry are rendered
+# from pinned-image-debian12.env with the same @TOKEN@ scheme as the Jammy template.
+
+images:
+  - location: "@IOLBOX_IMAGE_URL@"
+    arch: aarch64
+    digest: "@IOLBOX_IMAGE_DIGEST@"
+
+# This is the VZ + Rosetta shape used by M0.  The arm64 guest runs the
+# existing unmodified linux/amd64 payload through Rosetta.
+vmType: "vz"
+rosetta:
+  enabled: true
+  binfmt: true
+
+# Keep geometry identical to Jammy; the smaller Debian image is already the
+# disk-saving difference and changing VM geometry would confound a canary.
+cpus: @CPUS@
+memory: "@MEMORY@"
+disk: "@DISK@"
+
+# VZ's host filesystem mount is virtiofs.  A read-only home keeps provisioning
+# dependent on limactl copy and prevents accidental host writes.
+mountType: "virtiofs"
+mounts:
+  - location: "~"
+    writable: false
+
+portForwards:
+  - guestPort: @IOLBOX_GUI_PORT@
+    hostPort: @IOLBOX_GUI_PORT@
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [9000, 9049]
+    hostPortRange: [9000, 9049]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [5500, 5529]
+    hostPortRange: [5500, 5529]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    proto: "any"
+    ignore: true
+
+# No provision scripts or readiness probes live in the Lima template.  The
+# selected, ordered guest steps are staged and run by iolbox-mac.sh.

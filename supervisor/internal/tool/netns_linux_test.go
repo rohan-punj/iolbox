@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	netnsFailureHelperModeEnv  = "IOLBOX_NETNS_FAILURE_HELPER"
-	netnsFailureHelperLogEnv   = "IOLBOX_NETNS_FAILURE_LOG"
-	netnsFailureHelperStateEnv = "IOLBOX_NETNS_FAILURE_STATE"
+	netnsFailureHelperModeEnv     = "IOLBOX_NETNS_FAILURE_HELPER"
+	netnsFailureHelperLogEnv      = "IOLBOX_NETNS_FAILURE_LOG"
+	netnsFailureHelperStateEnv    = "IOLBOX_NETNS_FAILURE_STATE"
+	netnsFailureHelperSelfExecArg = "-test.run=^TestNetnsCreateSysctlFailureTearsDownNetns$"
 )
 
 // TestNetnsCreateSysctlFailureTearsDownNetns exercises the existing
@@ -34,7 +35,7 @@ func TestNetnsCreateSysctlFailureTearsDownNetns(t *testing.T) {
 	logPath := filepath.Join(helpDir, "calls.log")
 	statePath := filepath.Join(helpDir, "netns-created")
 	helpPath := filepath.Join(helpDir, "ip")
-	script := fmt.Sprintf("#!/bin/sh\nexec %s %s \"$@\"\n", shellQuote(testBinary), shellQuote("-test.run=^TestNetnsCreateSysctlFailureTearsDownNetns$"))
+	script := fmt.Sprintf("#!/bin/sh\nexec %s %s \"$@\"\n", shellQuote(testBinary), shellQuote(netnsFailureHelperSelfExecArg))
 	if err := os.WriteFile(helpPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -92,12 +93,19 @@ func TestNetnsCreateSysctlFailureTearsDownNetns(t *testing.T) {
 
 func netnsFailureHelper(t *testing.T) {
 	args := os.Args[1:]
-	for index, arg := range args {
-		if arg == "netns" {
-			args = args[index:]
-			break
+	filtered := make([]string, 0, len(args))
+	removedSelfExecArg := false
+	for _, arg := range args {
+		if arg == netnsFailureHelperSelfExecArg && !removedSelfExecArg {
+			removedSelfExecArg = true
+			continue
 		}
+		filtered = append(filtered, arg)
 	}
+	if !removedSelfExecArg {
+		t.Fatal("fake ip helper did not receive its known self-exec test argument")
+	}
+	args = filtered
 	if len(args) == 0 {
 		t.Fatal("fake ip helper received no ip arguments")
 	}

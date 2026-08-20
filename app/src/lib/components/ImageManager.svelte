@@ -175,6 +175,7 @@
             <th>Filename</th>
             <th>Class</th>
             <th>Arch</th>
+            <th>Support</th>
             <th>Size</th>
             <th>SHA-256</th>
             <th>In use</th>
@@ -183,10 +184,12 @@
         </thead>
         <tbody>
           {#each labStore.images as img (img.id)}
+            {@const support = labStore.imageSupport(img)}
             <tr>
               <td class="fname" title={img.filename}>{img.filename}</td>
               <td><span class="badge" class:l2={img.class === "l2"}>{img.class.toUpperCase()}</span></td>
               <td class="mono">{img.arch}</td>
+              <td class={support.supported ? "supported" : "unsupported"} title={support.reason}>{support.supported ? "Available" : "Unsupported"}</td>
               <td>{fmtSize(img.size)}</td>
               <td class="mono sha" title={img.sha256}>{img.sha256.slice(0, 12)}…</td>
               <td>{usageCount(img.id)}</td>
@@ -205,7 +208,7 @@
           {/each}
           {#if labStore.images.length === 0}
             <tr>
-              <td colspan="7" class="empty">
+              <td colspan="8" class="empty">
                 {labStore.imagesLoading ? "Loading images…" : "No images registered yet."}
               </td>
             </tr>
@@ -220,14 +223,14 @@
         <select bind:value={replaceFrom}>
           <option value="">From…</option>
           {#each labStore.images as img (img.id)}
-            <option value={img.id}>{img.filename} ({usageCount(img.id)} nodes)</option>
+            <option value={img.id}>{img.filename} ({usageCount(img.id)} nodes){labStore.imageSupport(img).supported ? "" : " (unsupported)"}</option>
           {/each}
         </select>
         <span class="arrow">→</span>
         <select bind:value={replaceTo}>
           <option value="">To…</option>
           {#each labStore.images as img (img.id)}
-            <option value={img.id}>{img.filename}</option>
+            <option value={img.id} disabled={!labStore.imageSupport(img).supported}>{img.filename}{labStore.imageSupport(img).supported ? "" : " (unsupported)"}</option>
           {/each}
         </select>
         <button class="btn" disabled={!replaceFrom || !replaceTo} onclick={doReplace}>Apply</button>

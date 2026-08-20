@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,8 +21,11 @@ func TestDetectProbeSocketHandshakeSucceedsRepeatedly(t *testing.T) {
 		if err := detectProbeSocketHandshake(socketPath); err != nil {
 			t.Fatalf("attempt %d: detectProbeSocketHandshake() error = %v", attempt, err)
 		}
-		if err := os.Remove(socketPath); err != nil {
-			t.Fatalf("attempt %d: remove probe socket: %v", attempt, err)
+		if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			if err == nil {
+				t.Fatalf("attempt %d: probe socket still exists after listener close", attempt)
+			}
+			t.Fatalf("attempt %d: inspect probe socket after listener close: %v", attempt, err)
 		}
 	}
 }

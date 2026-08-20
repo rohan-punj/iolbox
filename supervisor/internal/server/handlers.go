@@ -43,7 +43,10 @@ func (s *Server) handleHello(raw json.RawMessage) (any, error) {
 	}
 	// Base features are always present; nat and tools are advertised only when
 	// their runtime probes detected support at startup.
-	features := []string{"nvram", "capture", "i386"}
+	features := []string{"nvram", "capture"}
+	if !s.cfg.DisableI386 {
+		features = append(features, "i386")
+	}
 	features = append(features, s.caps.GateFeatures()...)
 	features = append(features, s.toolCaps.GateFeatures()...)
 	return protocol.HelloResult{
@@ -577,6 +580,42 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 	return s.startNodes(ll, []int{args.Node})
 }
 
+// preflightIOLImages applies deployment capability policy before any start
+// side effects. In particular, a disabled i386 capability must not arm
+// captures, rebuild fabric, prepare NVRAM, or otherwise make a rejected start
+// look like a deeper launch failure. Unknown images remain allowed here: the
+// normal image-not-found path owns that error, and only a positively identified
+// i386 image is restricted.
+func (s *Server) preflightIOLImages(ll *loadedLab, ids []int) ([]int, protocol.StartResult) {
+	eligible := make([]int, 0, len(ids))
+	out := protocol.StartResult{Started: []protocol.StartedNode{}}
+	for _, id := range ids {
+		nr := ll.get(id)
+		n := ll.findNode(id)
+		if nr == nil || n == nil || n.Kind != lab.KindIOL || !s.cfg.DisableI386 {
+			eligible = append(eligible, id)
+			continue
+		}
+		// Start is idempotent for a live process. Preserve that contract before
+		// consulting the image registry; an already-running node never reaches
+		// the spec path and must still be reported as running.
+		state := nr.machine.State()
+		if nr.proc != nil && (state == node.StateStarting || state == node.StateRunning) {
+			eligible = append(eligible, id)
+			continue
+		}
+		info, ok := s.lookupImage(nr.imageID)
+		if !ok || info.Arch != image.ArchI386 {
+			eligible = append(eligible, id)
+			continue
+		}
+		err := protocol.Errorf(protocol.CodeImageArchMismatch,
+			"node %d: i386 IOL images are disabled by this runtime", id)
+		out.Failed = append(out.Failed, startFailure(id, nr, err))
+	}
+	return eligible, out
+}
+
 // startNodes spawns the given nodes (Linux) or records the attempt (other OS).
 //
 // Before spawning, it (re)prepares the shared lab dir: the whole-lab NETMAP
@@ -584,6 +623,11 @@ func (s *Server) handleNodeRestart(raw json.RawMessage) (any, error) {
 // startupConfig injected. IOL reads all of these from its cwd at boot, so they
 // must exist first. prepareLabDir is a no-op off Linux.
 func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
+	singleRequest := len(ids) == 1
+	ids, preflight := s.preflightIOLImages(ll, ids)
+	if len(ids) == 0 {
+		return preflight, nil
+	}
 	// Auto-arm capture for every doc link with capture.enabled BEFORE the fabric
 	// is realised, so startFabric can start a bridge capture on its port the
 	// moment the link's bridge is up. Without this, a lab (re)started with capture
@@ -615,12 +659,15 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 	for link, port := range armed {
 		s.emit(protocol.EventCaptureStarted, protocol.CaptureData{Link: link, CapturePort: port})
 	}
-	out := protocol.StartResult{Started: []protocol.StartedNode{}}
+	out := preflight
+	if out.Started == nil {
+		out.Started = []protocol.StartedNode{}
+	}
 	for _, id := range ids {
 		nr := ll.get(id)
 		if nr == nil {
 			err := protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
-			if len(ids) == 1 {
+			if singleRequest {
 				return nil, err
 			}
 			out.Failed = append(out.Failed, startFailure(id, nil, err))
@@ -629,7 +676,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		docNode := ll.findNode(id)
 		if docNode == nil {
 			err := protocol.Errorf(protocol.CodeBadRequest, "unknown node %d", id)
-			if len(ids) == 1 {
+			if singleRequest {
 				return nil, err
 			}
 			out.Failed = append(out.Failed, startFailure(id, nil, err))
@@ -659,7 +706,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		if docNode.Kind == lab.KindNAT {
 			started, err := s.startExtnetNode(ll, docNode, nr)
 			if err != nil {
-				if len(ids) == 1 {
+				if singleRequest {
 					return nil, err
 				}
 				out.Failed = append(out.Failed, startFailure(id, nr, err))
@@ -672,7 +719,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		if docNode.Kind == lab.KindTool {
 			started, err := s.startToolNode(ll, docNode, nr)
 			if err != nil {
-				if len(ids) == 1 {
+				if singleRequest {
 					return nil, err
 				}
 				out.Failed = append(out.Failed, startFailure(id, nr, err))
@@ -685,7 +732,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		if docNode.Kind == lab.KindPC {
 			started, err := s.startPCNode(ll, docNode, nr)
 			if err != nil {
-				if len(ids) == 1 {
+				if singleRequest {
 					return nil, err
 				}
 				out.Failed = append(out.Failed, startFailure(id, nr, err))
@@ -700,7 +747,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 		// link time (hot-connect).
 		if docNode.Kind == lab.KindVPCS {
 			if err := s.setupVPCSFabric(ll, nr, docNode); err != nil {
-				if len(ids) == 1 {
+				if singleRequest {
 					return nil, err
 				}
 				out.Failed = append(out.Failed, startFailure(id, nr, err))
@@ -713,7 +760,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 			if nr.vtap != nil || nr.vtapName != "" {
 				s.teardownVPCS(nr)
 			}
-			if len(ids) == 1 {
+			if singleRequest {
 				return nil, err
 			}
 			out.Failed = append(out.Failed, startFailure(id, nr, err))
@@ -725,7 +772,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 				s.teardownVPCS(nr)
 			}
 			spawnErr := protocol.Errorf(protocol.CodeNodeSpawnFailed, "%v", err)
-			if len(ids) == 1 {
+			if singleRequest {
 				return nil, spawnErr
 			}
 			out.Failed = append(out.Failed, startFailure(id, nr, spawnErr))
@@ -755,7 +802,7 @@ func (s *Server) startNodes(ll *loadedLab, ids []int) (any, error) {
 				nr.proc = nil
 				s.teardownVPCS(nr)
 				nr.machine.To(node.StateCrashed)
-				if len(ids) == 1 {
+				if singleRequest {
 					return nil, err
 				}
 				out.Failed = append(out.Failed, startFailure(id, nr, err))

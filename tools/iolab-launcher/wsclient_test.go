@@ -403,10 +403,44 @@ func TestDialControlWS_HandshakeAndRequestEndToEnd(t *testing.T) {
 	}
 }
 
-// serveOneControlHandshake accepts one connection, performs the server side
-// of the WS upgrade handshake by hand, reads one client request frame, and
-// writes back one text-frame response.
+func TestDialControlWS_TypedHello(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan error, 1)
+	go func() { done <- serveOneControlHandshake(ln) }()
+
+	client, err := dialControlWS(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	hello, err := client.hello()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hello.Supervisor != "iolbox-supervisor" || hello.Runtime != "qemu" || hello.Arch != "aarch64" {
+		t.Fatalf("hello = %+v", hello)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// serveOneControlHandshake first serves a plain GET / carrying a
+// Set-Cookie: iolbox_session=..., matching wsbridge's real SPA handler, then
+// accepts a second connection and performs the server side of the WS
+// upgrade handshake by hand (asserting the Cookie/Origin headers dialControlWS
+// is now required to send), reads one client request frame, and writes back
+// one text-frame response.
 func serveOneControlHandshake(ln net.Listener) error {
+	const sessionToken = "test-session-token"
+	if err := serveSessionCookieGET(ln, sessionToken); err != nil {
+		return fmt.Errorf("session GET: %w", err)
+	}
+
 	conn, err := ln.Accept()
 	if err != nil {
 		return fmt.Errorf("accept: %w", err)
@@ -422,7 +456,7 @@ func serveOneControlHandshake(ln net.Listener) error {
 		return fmt.Errorf("unexpected request line: %q", reqLine)
 	}
 
-	var key string
+	var key, cookie, origin string
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -432,12 +466,25 @@ func serveOneControlHandshake(ln net.Listener) error {
 		if line == "" {
 			break // end of headers
 		}
-		if k, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(k), "Sec-WebSocket-Key") {
-			key = strings.TrimSpace(v)
+		if k, v, ok := strings.Cut(line, ":"); ok {
+			switch name, value := strings.TrimSpace(k), strings.TrimSpace(v); {
+			case strings.EqualFold(name, "Sec-WebSocket-Key"):
+				key = value
+			case strings.EqualFold(name, "Cookie"):
+				cookie = value
+			case strings.EqualFold(name, "Origin"):
+				origin = value
+			}
 		}
 	}
 	if key == "" {
 		return fmt.Errorf("no Sec-WebSocket-Key header seen")
+	}
+	if cookie != "iolbox_session="+sessionToken {
+		return fmt.Errorf("dialControlWS did not send the session cookie: got %q", cookie)
+	}
+	if origin == "" {
+		return fmt.Errorf("dialControlWS did not send an Origin header")
 	}
 
 	accept := wsAcceptKey(key)
@@ -459,11 +506,15 @@ func serveOneControlHandshake(ln net.Listener) error {
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return fmt.Errorf("unmarshal request: %w", err)
 	}
-	if env.Op != "lab.listDocs" {
+	if env.Op != "lab.listDocs" && env.Op != "hello" {
 		return fmt.Errorf("unexpected op %q", env.Op)
 	}
 
-	respEnv := envelope{ID: env.ID, OK: boolPtr(true), Result: json.RawMessage(`{"labs":["seed1"]}`)}
+	result := json.RawMessage(`{"labs":["seed1"]}`)
+	if env.Op == "hello" {
+		result = json.RawMessage(`{"supervisor":"iolbox-supervisor","runtime":"qemu","arch":"aarch64","features":["l3"],"egress":"nat"}`)
+	}
+	respEnv := envelope{ID: env.ID, OK: boolPtr(true), Result: result}
 	buf, err := json.Marshal(respEnv)
 	if err != nil {
 		return fmt.Errorf("marshal response: %w", err)
@@ -473,4 +524,41 @@ func serveOneControlHandshake(ln net.Listener) error {
 		return fmt.Errorf("write response frame: %w", err)
 	}
 	return nil
+}
+
+// serveSessionCookieGET accepts one connection, reads a plain GET / request,
+// and responds with a Set-Cookie: iolbox_session=<token>, mirroring
+// wsbridge's real SPA handler (wsbridge.go). dialControlWS issues this
+// request first to obtain the cookie it must then carry into /control.
+func serveSessionCookieGET(ln net.Listener, token string) error {
+	conn, err := ln.Accept()
+	if err != nil {
+		return fmt.Errorf("accept: %w", err)
+	}
+	defer conn.Close()
+
+	br := bufio.NewReader(conn)
+	reqLine, err := br.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read request line: %w", err)
+	}
+	if !strings.HasPrefix(reqLine, "GET / ") {
+		return fmt.Errorf("unexpected request line: %q", reqLine)
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read header: %w", err)
+		}
+		if strings.TrimRight(line, "\r\n") == "" {
+			break
+		}
+	}
+	resp := "HTTP/1.1 200 OK\r\n" +
+		"Set-Cookie: iolbox_session=" + token + "; Path=/; HttpOnly\r\n" +
+		"Content-Length: 0\r\n" +
+		"Connection: close\r\n" +
+		"\r\n"
+	_, err = conn.Write([]byte(resp))
+	return err
 }

@@ -9,7 +9,7 @@
 # access is required (git clone + apt build-deps); if the builder is
 # airgapped, see the "manual drop path" note below instead.
 #
-# Output: ./build/vpcs/vpcs  (a single static-ish amd64 ELF binary)
+# Output: ./build/vpcs/vpcs  (a single static-ish ELF binary for VPCS_ARCH)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,12 +24,94 @@ VPCS_OUT_DIR="$BUILD_DIR/vpcs"
 # deliberately, not silently on every rebuild.
 VPCS_REPO="${VPCS_REPO:-https://github.com/GNS3/vpcs.git}"
 VPCS_REF="${VPCS_REF:-v0.8.3}"   # same release the proven iolbox-rt vpcs was built from
+VPCS_ARCH="${VPCS_ARCH:-amd64}"
+VPCS_CC="${VPCS_CC:-}"
+VPCS_ARCH_EXPLICIT=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --arch) VPCS_ARCH="$2"; VPCS_ARCH_EXPLICIT=1; shift 2 ;;
+        --arch=*) VPCS_ARCH="${1#*=}"; VPCS_ARCH_EXPLICIT=1; shift ;;
+        --help|-h)
+            cat <<EOF
+Usage: $0 [--arch amd64|arm64]
+
+Build pinned GNS3 VPCS $VPCS_REF from source. The default is amd64. For an
+arm64 build, run on an arm64 Linux builder or set VPCS_CC to an arm64 C
+compiler (for example aarch64-linux-gnu-gcc) when cross-compiling.
+EOF
+            exit 0
+            ;;
+        *) echo "fetch-vpcs: unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+case "$VPCS_ARCH" in
+    amd64|arm64) ;;
+    *) echo "fetch-vpcs: --arch must be amd64 or arm64, got '$VPCS_ARCH'" >&2; exit 1 ;;
+esac
+
+# Inspect ELF headers with the first available tool. An explicitly qualified
+# build must never silently accept a host-architecture binary: if the selected
+# inspector is unavailable or fails, the qualification fails closed. The
+# historical no-argument amd64 path below intentionally keeps its warning-only
+# behavior for compatibility with existing local builds.
+require_elf_arch() {
+    local path="$1"
+    local expected="$2"
+    local label="$3"
+    local description
+
+    if command -v file >/dev/null 2>&1; then
+        if ! description="$(file -b -- "$path" 2>&1)"; then
+            echo "$label: file failed while inspecting $path: $description" >&2
+            return 1
+        fi
+        case "$expected:$description" in
+            amd64:*"ELF 64-bit"*"x86-64"*) ;;
+            arm64:*"ELF 64-bit"*"ARM aarch64"*) ;;
+            arm64:*"ELF 64-bit"*"AArch64"*) ;;
+            *)
+                echo "$label: $path is not a linux/$expected ELF: $description" >&2
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    if command -v readelf >/dev/null 2>&1; then
+        if ! description="$(readelf -h "$path" 2>&1)"; then
+            echo "$label: readelf failed while inspecting $path: $description" >&2
+            return 1
+        fi
+        case "$expected:$description" in
+            amd64:*"Class:"*"ELF64"*"Machine:"*"X86-64"*) ;;
+            arm64:*"Class:"*"ELF64"*"Machine:"*"AArch64"*) ;;
+            *)
+                echo "$label: $path is not a linux/$expected ELF (readelf header did not match)" >&2
+                return 1
+                ;;
+        esac
+        return 0
+    fi
+
+    echo "$label: either 'file' or 'readelf' is required for architecture validation" >&2
+    return 1
+}
+
+MAKE_CC_ARGS=()
+if [ -n "$VPCS_CC" ]; then
+    MAKE_CC_ARGS+=("CC=$VPCS_CC")
+fi
 
 echo "== fetch-vpcs: $VPCS_REPO @ $VPCS_REF =="
+if [ "$VPCS_ARCH" != amd64 ]; then
+    echo "fetch-vpcs: target architecture: $VPCS_ARCH"
+fi
 
 # --- Manual drop path (airgapped builder) ----------------------------------
 # If this builder has no network access, skip this script entirely and
-# instead place a prebuilt linux/amd64 vpcs binary at:
+# instead place a prebuilt linux/$VPCS_ARCH vpcs binary at:
 #
 #     runtime/build/vpcs/vpcs
 #
@@ -39,6 +121,9 @@ echo "== fetch-vpcs: $VPCS_REPO @ $VPCS_REF =="
 # -----------------------------------------------------------------------
 
 if [ -x "$VPCS_OUT_DIR/vpcs" ]; then
+    if [ "$VPCS_ARCH_EXPLICIT" -eq 1 ]; then
+        require_elf_arch "$VPCS_OUT_DIR/vpcs" "$VPCS_ARCH" "fetch-vpcs"
+    fi
     echo "fetch-vpcs: $VPCS_OUT_DIR/vpcs already built, skipping (delete it to force a rebuild)"
     exit 0
 fi
@@ -84,11 +169,11 @@ echo "fetch-vpcs: building..."
 # link vpcs statically — it's a small, old-school C program and takes a
 # static glibc link without trouble.
 if [ -f Makefile.linux ]; then
-    make -f Makefile.linux LDFLAGS="-static -lpthread -lutil"
+    make -f Makefile.linux "${MAKE_CC_ARGS[@]}" LDFLAGS="-static -lpthread -lutil"
 elif [ -f Makefile ]; then
-    make LDFLAGS="-static -lpthread -lutil"
+    make "${MAKE_CC_ARGS[@]}" LDFLAGS="-static -lpthread -lutil"
 elif [ -f unix/Makefile.linux ]; then
-    make -C unix -f Makefile.linux LDFLAGS="-static -lpthread -lutil"
+    make -C unix -f Makefile.linux "${MAKE_CC_ARGS[@]}" LDFLAGS="-static -lpthread -lutil"
 else
     echo "fetch-vpcs: no recognizable Makefile under $VPCS_SRC_DIR/src" >&2
     exit 1
@@ -106,17 +191,25 @@ mkdir -p "$VPCS_OUT_DIR"
 cp "$BUILT_BIN" "$VPCS_OUT_DIR/vpcs"
 chmod 0755 "$VPCS_OUT_DIR/vpcs"
 
-# Sanity check: must be a linux/amd64 ELF, since it's going straight into
-# an amd64 rootfs. This catches "built on an arm64 laptop" mistakes early
-# rather than shipping a broken binary that only fails at runtime inside
-# the VM.
+# Sanity check: must be a Linux ELF for the requested architecture, since it's
+# going straight into a matching rootfs. This catches a native build made for
+# the builder's architecture when a cross compiler was intended.
 if command -v file >/dev/null 2>&1; then
     FILE_OUT="$(file -b "$VPCS_OUT_DIR/vpcs")"
     echo "fetch-vpcs: built $VPCS_OUT_DIR/vpcs ($FILE_OUT)"
-    case "$FILE_OUT" in
-        *"ELF 64-bit"*"x86-64"*) : ;;
-        *) echo "fetch-vpcs: WARNING - binary does not look like linux/amd64 ELF64: $FILE_OUT" >&2 ;;
-    esac
+    if [ "$VPCS_ARCH_EXPLICIT" -eq 1 ]; then
+        require_elf_arch "$VPCS_OUT_DIR/vpcs" "$VPCS_ARCH" "fetch-vpcs"
+    elif [ "$VPCS_ARCH" = amd64 ]; then
+        case "$FILE_OUT" in
+            *"ELF 64-bit"*"x86-64"*) : ;;
+            *) echo "fetch-vpcs: WARNING - binary does not look like linux/amd64 ELF64: $FILE_OUT" >&2 ;;
+        esac
+    else
+        case "$FILE_OUT" in
+            *"ELF 64-bit"*"ARM aarch64"*) : ;;
+            *) echo "fetch-vpcs: WARNING - binary does not look like linux/arm64 ELF64: $FILE_OUT" >&2 ;;
+        esac
+    fi
     case "$FILE_OUT" in
         *"statically linked"*) : ;;
         *) echo "fetch-vpcs: WARNING - binary is NOT statically linked; it may fail inside the rootfs if the builder's glibc is newer than bookworm's" >&2 ;;

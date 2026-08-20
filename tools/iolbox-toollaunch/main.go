@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const usageText = "usage: iolbox-toollaunch [--cgroup PATH | --cgroup-fd N] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
+const usageText = "usage: iolbox-toollaunch [--cgroup PATH | --cgroup-fd N] [--netns NAME] --user USER --caps cap_net_raw[,cap_net_admin,...] -- TARGET [ARGS...]"
 
 // knownCapNumbers is the portable name->Linux-capability-number map (plain
 // integers, not syscalls, so this stays buildable on every platform even
@@ -48,6 +48,7 @@ func parseCapsList(value string) ([]string, error) {
 const (
 	launchExitUsage       = 2
 	launchExitCgroup      = 10
+	launchExitNetns       = 11
 	launchExitLinuxOnly   = 20
 	launchExitLookupUser  = 30
 	launchExitParseUID    = 31
@@ -68,6 +69,7 @@ const (
 type launchOptions struct {
 	cgroup   string
 	cgroupFD int // -1 means unset; see parseLaunchArgs
+	netns    string
 	user     string
 	caps     []string
 	target   string
@@ -101,7 +103,7 @@ func main() {
 		os.Exit(launchExitUsage)
 	}
 
-	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.cgroupFD, opts.caps); err != nil {
+	if err := launchAs(opts.user, opts.target, opts.args, opts.cgroup, opts.cgroupFD, opts.netns, opts.caps); err != nil {
 		code := launchExitExec
 		var failure *launchFailure
 		if errors.As(err, &failure) {
@@ -119,6 +121,7 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 	seenCaps := false
 	seenCgroup := false
 	seenCgroupFD := false
+	seenNetns := false
 
 	for i := 0; i < len(argv); i++ {
 		if argv[i] == "--" {
@@ -155,6 +158,22 @@ func parseLaunchArgs(argv []string) (launchOptions, error) {
 			}
 			opts.cgroupFD = fd
 			seenCgroupFD = true
+			i++
+		case "--netns":
+			// Alternative to running this process under `ip netns exec`: the
+			// helper joins the namespace itself via setns, before the uid
+			// switch (see launch_linux.go's joinNetns). The supervisor does
+			// NOT currently emit this — it keeps the `ip netns exec` wrapper
+			// and solves the cgroup-visibility problem with --cgroup-fd
+			// above, which is the mechanism validated on real Apple Silicon
+			// hardware. The flag is retained because the setns path is a
+			// working fallback, but note joinNetns' syscall number is
+			// amd64-only today.
+			if seenNetns || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
+				return launchOptions{}, errors.New("--netns requires one non-empty name before --")
+			}
+			opts.netns = argv[i+1]
+			seenNetns = true
 			i++
 		case "--user":
 			if seenUser || i+1 >= len(argv) || argv[i+1] == "--" || argv[i+1] == "" {
@@ -230,12 +249,12 @@ func writeCgroupMembership(cgroupPath string, cgroupFD int) error {
 	return nil
 }
 
-func launchAs(user, target string, args []string, cgroupPath string, cgroupFD int, caps []string) error {
+func launchAs(user, target string, args []string, cgroupPath string, cgroupFD int, netns string, caps []string) error {
 	if user == "" || target == "" {
 		return newLaunchFailure(launchExitUsage, "arguments", errors.New("user and target are required"))
 	}
 	if err := writeCgroupMembership(cgroupPath, cgroupFD); err != nil {
 		return err
 	}
-	return launchTransition(user, target, args, caps)
+	return launchTransition(user, target, args, netns, caps)
 }

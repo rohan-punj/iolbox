@@ -1,0 +1,64 @@
+# iolbox Jammy Lima template — render this file before giving it to Lima.
+#
+# This is deliberately shipped as `iolbox-jammy.yaml`, not as a ready-to-use
+# YAML document: packaging/macos/iolbox-mac.sh sources
+# `lima/pinned-image.env` and replaces the @...@ tokens in a temporary file at
+# run time.  Keeping the URL, digest, and geometry out of this template avoids
+# two sources of truth.  Do not pass this tokenized file directly to limactl.
+#
+# The image is Ubuntu 22.04 arm64. Jammy is retained as the compatibility
+# profile; the live canary remains authoritative for the current host build.
+# The image URL and digest are rendered from the pinned env file rather than
+# replaced with template://ubuntu-22.04, whose meaning can drift.
+
+# Lima verifies the downloaded bytes against this digest before booting.  The
+# image URL is the exact release directory pinned in pinned-image.env.
+images:
+  - location: "@IOLBOX_IMAGE_URL@"
+    arch: aarch64
+    digest: "@IOLBOX_IMAGE_DIGEST@"
+
+# VZ plus Rosetta is the configuration exercised by M0 on the Apple M1
+# (docs/macos-m0-result.md:23-32).  binfmt registration is required so the
+# existing, unmodified linux/amd64 payload can execute in the arm64 guest.
+vmType: "vz"
+rosetta:
+  enabled: true
+  binfmt: true
+
+# Do not inherit Lima or host-specific defaults.  These values are rendered
+# from pinned-image.env and correspond to the qualified M0 geometry.
+cpus: @CPUS@
+memory: "@MEMORY@"
+disk: "@DISK@"
+
+# VZ requires virtiofs for the host filesystem mount implementation.  The
+# home mount is read-only on purpose: provisioning enters through limactl copy
+# and the guest owns its durable lab data, so a writable Mac home is not a
+# hidden dependency or a path for accidental host writes.
+mountType: "virtiofs"
+mounts:
+  - location: "~"
+    writable: false
+
+portForwards:
+  - guestPort: @IOLBOX_GUI_PORT@
+    hostPort: @IOLBOX_GUI_PORT@
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [9000, 9049]
+    hostPortRange: [9000, 9049]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestPortRange: [5500, 5529]
+    hostPortRange: [5500, 5529]
+    hostIP: "127.0.0.1"
+    proto: "tcp"
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    proto: "any"
+    ignore: true
+
+# There are intentionally no provision scripts or readiness probes here.
+# Ordered, re-runnable provisioning belongs to packaging/macos/guest/, and
+# guest/30-canary.sh is a hard gate whose failure must fail the whole run.

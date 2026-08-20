@@ -18,7 +18,7 @@ const (
 
 	// waitid(2) idtype and option values. These are kernel ABI constants
 	// spelled out by hand because package syscall exposes no Waitid wrapper on
-	// linux/amd64 and this module intentionally has no x/sys dependency.
+	// Linux and this module intentionally has no x/sys dependency.
 	reapPAll    = 0          // idtype_t P_ALL: any child, id ignored
 	reapWNoHang = 0x00000001 // WNOHANG
 	reapWExited = 0x00000004 // WEXITED
@@ -31,13 +31,12 @@ const (
 // SIGCHLD-shaped notification. Only the leading fields are named; the trailing
 // padding exists so the struct is exactly the 128 bytes the kernel writes.
 //
-// Layout note (x86-64): siginfo_t opens with si_signo, si_errno, si_code --
-// three int32s -- and then the union of signal-specific fields. The union
-// contains 8-byte members (si_addr, and the clock_t si_utime/si_stime of the
-// SIGCHLD arm), so it is 8-byte aligned and starts at offset 16, not 12; the
-// kernel spells this out as __ARCH_SI_PREAMBLE_SIZE == 4 * sizeof(int) in
-// arch/x86/include/uapi/asm/siginfo.h. si_pid is the first member of the
-// SIGCHLD arm, so it is an int32 at offset 16.
+// Layout note (64-bit Linux): siginfo_t opens with si_signo, si_errno,
+// si_code -- three int32s -- and then the union of signal-specific fields.
+// The union contains 8-byte members (si_addr, and the clock_t si_utime/si_stime
+// of the SIGCHLD arm), so it is 8-byte aligned and starts at offset 16, not
+// 12. si_pid is the first member of the SIGCHLD arm, so it is an int32 at
+// offset 16.
 type reapSiginfo struct {
 	reapSigno     int32
 	reapErrno     int32

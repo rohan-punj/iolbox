@@ -30,6 +30,13 @@ const (
 	securebitKeepCaps   = 1 << 4
 	securebitKeepLock   = 1 << 5
 	capsetVersion3      = 0x20080522
+	cloneNewnet         = 0x40000000
+	netnsRunDir         = "/var/run/netns/"
+	// sysSetns is linux/amd64's syscall number for setns(2) (308). Not every
+	// Go release's syscall package exports SYS_SETNS (it did not at the time
+	// this was written), so this is pinned locally the same way the prctl/
+	// capset numbers above are.
+	sysSetns = 308
 )
 
 type capHeader struct {
@@ -162,6 +169,28 @@ func requireStartingPrivilege(reqCaps []int) error {
 	return nil
 }
 
+// joinNetns moves the calling thread into the network namespace `ip netns
+// add` bind-mounted at /var/run/netns/<name>. This exists so the cgroup
+// fallback launcher (invoked with --cgroup, writing cgroup.procs itself
+// while still root) does not have to run inside `ip netns exec`: that wrapper
+// unshares the mount namespace and remounts /sys to reflect the new netns'
+// interfaces, which shadows the cgroup2 mount at /sys/fs/cgroup within that
+// mount namespace and makes cgroup.procs vanish out from under this process.
+// Joining the netns directly via setns, before any mount-namespace change and
+// before the uid switch, avoids that entirely.
+func joinNetns(name string) error {
+	path := netnsRunDir + name
+	f, err := os.Open(path)
+	if err != nil {
+		return newLaunchFailure(launchExitNetns, "open netns", fmt.Errorf("open %s: %w", path, err))
+	}
+	defer f.Close()
+	if _, _, errno := syscall.Syscall(sysSetns, f.Fd(), cloneNewnet, 0); errno != 0 {
+		return newLaunchFailure(launchExitNetns, "setns", fmt.Errorf("setns %s: %w", path, errno))
+	}
+	return nil
+}
+
 // launchTransition performs the capability transition the learning-tool plan
 // pins setpriv(1) to, in the one order the kernel actually permits:
 //
@@ -184,7 +213,7 @@ func requireStartingPrivilege(reqCaps []int) error {
 // The previous ordering ran capset() before the uid switch with an empty
 // effective set, which would have made setgroups/setgid/setuid fail EPERM even
 // if the capset call itself had been well-formed.
-func launchTransition(name, target string, args []string, capNames []string) error {
+func launchTransition(name, target string, args []string, netns string, capNames []string) error {
 	reqCaps := resolveCapNumbers(capNames)
 	account, err := user.Lookup(name)
 	if err != nil {
@@ -208,6 +237,18 @@ func launchTransition(name, target string, args []string, capNames []string) err
 
 	if err := requireStartingPrivilege(reqCaps); err != nil {
 		return err
+	}
+
+	// joinNetns must run here: it needs CAP_SYS_ADMIN, which is still in the
+	// effective set at this point but is dropped from the bounding set below
+	// and permanently lost after the uid switch a few steps down. It also
+	// must run on this exact OS thread (see the LockOSThread comment above) --
+	// setns(CLONE_NEWNET) is per-thread, and only the thread that later calls
+	// execve carries its namespace into the replaced process image.
+	if netns != "" {
+		if err := joinNetns(netns); err != nil {
+			return err
+		}
 	}
 
 	if _, _, errno := syscall.Syscall6(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0, 0, 0, 0); errno != 0 {

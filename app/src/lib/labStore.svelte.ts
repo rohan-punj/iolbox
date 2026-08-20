@@ -10,6 +10,7 @@ import { CaptureTransport } from "./captureTransport";
 import { encodePcapng, PcapngParser, type CapturedPacket, type ParsedPacket } from "./pcapng";
 import { appendLensEvents, type EndpointAttribView, type LensAttribution, type LensEvent } from "./lens";
 import type { LabStartResult, StatusResult, SupervisorEvent, ToolPackInfo } from "./protocol";
+import { imageSupport, I386_UNSUPPORTED_REASON, type ImageSupport } from "./imageSupport";
 
 export type ProviderId = "vmware" | "wsl2" | "remote" | "qemu";
 export type ProviderStatus = "unknown" | "connecting" | "connected" | "error";
@@ -122,6 +123,17 @@ class LabStore {
   labRunning = $derived(
     Object.values(this.nodeStates).some((s) => s === "running" || s === "starting")
   );
+  /** One store-level reason drives every start surface and image picker. */
+  labUnsupportedReason = $derived.by(() => {
+    for (const node of this.lab.nodes) {
+      if (node.kind !== "iol" || !node.image) continue;
+      const img = this.images.find((candidate) => candidate.id === node.image?.id);
+      if (!img) continue;
+      const support = imageSupport(this.features, img);
+      if (!support.supported) return support.reason ?? I386_UNSUPPORTED_REASON;
+    }
+    return null;
+  });
   openConsoleTabs = $state<number[]>([]);
   activeConsoleTab = $state<number | null>(null);
   showPreflight = $state(true);
@@ -145,6 +157,15 @@ class LabStore {
    *  Drives the inform-only NAT-node warning badge. */
   egress = $state<"slirp" | "routed" | "">("");
   egressNote = $state<string>("");
+
+  imageSupport(image: LibraryImage): ImageSupport {
+    return imageSupport(this.features, image);
+  }
+
+  nodeImageSupport(node: LabNode): ImageSupport {
+    const image = node.image && this.images.find((candidate) => candidate.id === node.image?.id);
+    return image ? this.imageSupport(image) : { supported: true };
+  }
   /** Per-link forwarded-throughput samples, keyed by link id. FloatingEdge reads
    *  these to drive the traffic glow; entries older than ~5s are treated stale.
    *  `protos` (Network Watcher) is the optional per-protocol fps breakdown;
@@ -642,7 +663,9 @@ class LabStore {
     for (const node of this.lab.nodes) {
       if (node.kind !== "iol" || !node.image) continue;
       if (this.images.some((i) => i.id === node.image!.id)) continue;
-      const substitute = this.images.find((i) => i.class === node.image!.class);
+      const substitute = this.images.find(
+        (i) => i.class === node.image!.class && this.imageSupport(i).supported
+      );
       if (substitute) {
         this.pushLog(
           "info",
@@ -1285,6 +1308,11 @@ class LabStore {
       this.enqueueToast({ severity: "info", message: "Lab has no nodes to start" });
       return;
     }
+    if (this.labUnsupportedReason) {
+      this.lastError = this.labUnsupportedReason;
+      this.pushLog("error", this.lastError);
+      return;
+    }
     // Pre-flight what the supervisor would reject anyway, with a message that
     // names the node instead of an opaque image_not_found.
     const missing = this.lab.nodes.find(
@@ -1469,6 +1497,13 @@ class LabStore {
 
   async startNode(nodeId: number) {
     const nodeName = this.resolveNodeName(nodeId);
+    const node = this.lab.nodes.find((candidate) => candidate.id === nodeId);
+    const support = node ? this.nodeImageSupport(node) : { supported: true };
+    if (!support.supported) {
+      this.lastError = support.reason ?? I386_UNSUPPORTED_REASON;
+      this.pushLog("error", this.lastError);
+      return;
+    }
     // Lock the node until its next node.state event (released in handleEvent) —
     // that's the success path, left exactly as before. But when the RPC itself
     // is REJECTED (e.g. a fabric-prep error that never reaches this node's own
@@ -1517,6 +1552,13 @@ class LabStore {
 
   async restartNode(nodeId: number) {
     const nodeName = this.resolveNodeName(nodeId);
+    const node = this.lab.nodes.find((candidate) => candidate.id === nodeId);
+    const support = node ? this.nodeImageSupport(node) : { supported: true };
+    if (!support.supported) {
+      this.lastError = support.reason ?? I386_UNSUPPORTED_REASON;
+      this.pushLog("error", this.lastError);
+      return;
+    }
     if (!this.acquireNodeLock(nodeId, "restarting", { holdUntilSettled: true })) return;
     let result: LabStartResult | undefined;
     let ok = false;
@@ -1803,6 +1845,12 @@ class LabStore {
     const node = this.lab.nodes.find((n) => n.id === nodeId);
     const img = this.images.find((i) => i.id === imageId);
     if (!node || !img) return;
+    const support = this.imageSupport(img);
+    if (!support.supported) {
+      this.lastError = support.reason ?? I386_UNSUPPORTED_REASON;
+      this.pushLog("error", this.lastError);
+      return;
+    }
     // Local doc first, and persist it: the user's choice must stick even when
     // the supervisor sync needs the fallback below.
     node.image = { id: img.id, filename: img.filename, class: img.class };
@@ -1820,6 +1868,12 @@ class LabStore {
   replaceImageEverywhere(fromId: string, toId: string) {
     const img = this.images.find((i) => i.id === toId);
     if (!img) return;
+    const support = this.imageSupport(img);
+    if (!support.supported) {
+      this.lastError = support.reason ?? I386_UNSUPPORTED_REASON;
+      this.pushLog("error", this.lastError);
+      return;
+    }
     let failed = false;
     const applied: Promise<unknown>[] = [];
     for (const node of this.lab.nodes) {

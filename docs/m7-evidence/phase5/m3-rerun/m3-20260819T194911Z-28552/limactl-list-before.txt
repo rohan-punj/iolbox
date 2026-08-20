@@ -1,0 +1,2 @@
+NAME             STATUS     SSH                VMTYPE    ARCH       CPUS    MEMORY    DISK     DIR
+iolbox-m5-e2e    Stopped    127.0.0.1:61950    vz        aarch64    4       4GiB      15GiB    ~/.lima/iolbox-m5-e2e
