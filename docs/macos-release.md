@@ -31,11 +31,12 @@ iolbox-macos-arm64.tar.gz.sha256
 ~~~
 
 Download that workflow artifact, retain its run ID, and run the layout test or
-repeat its checks manually: exact top-level layout, modes, Mach-O arm64
-launcher, one versioned native payload, internal/outer checksums, no symlinks
-or special nodes, no xattr/ACL pax metadata, and no AppleDouble/resource-fork,
-Cisco-image, or harness files. Preserve the two independent-stage hashes and
-the final archive hash.
+repeat its checks manually: exact top-level layout (including the
+`IOLbox.app` bundle), modes (`IOLbox.app/Contents/MacOS/IOLbox` at 0755, same
+as `iolbox`), Mach-O arm64 launcher and app stub, one versioned native
+payload, internal/outer checksums, no symlinks or special nodes, no xattr/ACL
+pax metadata, and no AppleDouble/resource-fork, Cisco-image, or harness
+files. Preserve the two independent-stage hashes and the final archive hash.
 
 If `gh` or an authenticated GitHub API is unavailable, record that the dry run
 could not be triggered/downloaded; a local hand-assembled archive is not
@@ -93,7 +94,14 @@ docs, and `THIRD_PARTY.md` must agree on all of the following:
 - host data, upgrade, ordinary non-destructive launcher removal, and optional
   narrowly scoped destructive reset have their actual boundaries stated;
 - no Cisco software is distributed and QEMU is Windows-only, not in the Mac
-  archive.
+  archive;
+- `IOLbox.app` is documented as an optional, unsigned convenience wrapper
+  around the CLI (not a replacement for it) that cannot reduce first-run
+  friction; the proactive `xattr -dr <folder>` step for browser downloads is
+  stated as the primary documented step before the first double-click, not
+  only as a post-failure remedy, and the App Translocation alert wording is
+  either the actually observed text or explicitly marked unverified — see
+  `docs/macos-launcher-icon-plan.md` §11–§12.
 
 ## Publication gate
 
