@@ -509,6 +509,8 @@ jobs:
             - **x86_64 IOL only, on both profiles.** i386/i86bi remain unsupported, and arm64-native IOL remains unsupported.
             - native-arm64 has **no host qualification row**, so the launcher reports it as `UNMEASURED — CANARY REQUIRED`. It is gated at runtime by its own fail-closed canary, not by a prior qualification result.
 
+            The archive also ships `IOLbox.app`, an optional unsigned convenience launcher — double-click it instead of running `./iolbox start` from a terminal. It opens a real Terminal window running that same command (every prompt, including the first-run vCPU/RAM choice, is still there), then drops into a small `iolbox>` prompt once start finishes: type `stop` to shut the VM down, or `status`/`diagnose` to check on it. Closing the window without typing `stop` leaves the VM running. On a **browser download**, run `xattr -dr com.apple.quarantine` on the whole extracted folder **before** the first double-click — skipping that step gets the app deleted by Gatekeeper (“is damaged, move to Trash”), not just warned about.
+
             The archive is unsigned: verify its outer and internal SHA-256 files, inspect quarantine, and if the launcher is quarantined remove that attribute from the launcher only with `xattr -d com.apple.quarantine ./iolbox` before `./iolbox start`. GUI, console, and capture forwards are loopback-only and unauthenticated. No Cisco software is included.
 
             See [docs/INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md) for which artifact matches your situation, and un-draft only once the manually-built artifacts above are attached.
