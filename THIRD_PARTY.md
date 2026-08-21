@@ -8,43 +8,93 @@ checksum, and how we comply with each license.
 
 ## Apple Silicon macOS archive
 
-The `iolbox-macos-arm64.tar.gz` archive contains the Go `iolbox` launcher, the
-exact native Linux payload produced by `runtime/pack-native.sh`, the locked
-Lima profile/provisioner files, and this notice. It contains no guest disk,
-hypervisor, Lima installation, or Cisco software.
+The `iolbox-macos-arm64.tar.gz` archive contains the Go `iolbox` launcher,
+**two** Linux payloads produced by `runtime/pack-native.sh` — one linux/amd64
+and one linux/arm64 — the locked Lima profile/provisioner files, and this
+notice. It contains no guest disk, hypervisor, Lima installation, or Cisco
+software.
+
+The launcher selects one payload from the profile it resolves: the
+linux/arm64 payload for the `native-arm64` profile, the linux/amd64 payload
+(run under Rosetta) for the `debian13`/`jammy`/`debian12` profiles.
 
 ### Separately installed and fetched components
 
 - Lima is an Apache-2.0 licensed, user-installed prerequisite. iolbox neither
   redistributes nor installs, upgrades, or removes Lima.
-- Lima downloads the digest-locked Debian 13/trixie default or Ubuntu
-  22.04/Jammy compatibility guest image. The guest image, apt package indexes,
-  and guest packages are fetched at provisioning time and are not embedded in
-  the archive.
+- Lima downloads the digest-locked Debian 13/trixie default, Debian 13/trixie
+  native-arm64, or Ubuntu 22.04/Jammy compatibility guest image. The guest
+  image, apt package indexes, and guest packages are fetched at provisioning
+  time and are not embedded in the archive.
 - Users supply any legally held IOL/IOU image. iolbox does not distribute or
-  depend on Cisco software; x86_64 IOL is the only supported IOL architecture
-  in this Rosetta profile. i386/i86bi and arm64-native IOL are unsupported.
+  depend on Cisco software. **x86_64 IOL is the only supported IOL
+  architecture on every profile in this archive**; i386/i86bi and
+  arm64-native IOL are unsupported. On the Rosetta profiles x86_64 IOL is
+  translated by Apple's Rosetta; on `native-arm64` it is translated by
+  qemu-user inside the guest (see the QEMU boundary note below).
 
-### VPCS binary redistributed inside the native payload
+### VPCS binary redistributed inside the payloads
 
 `runtime/fetch-vpcs.sh` checks out the GNS3 VPCS project at the immutable
-`v0.8.3` ref (release commit `3870ae8`) and builds its Linux/amd64 binary;
-`runtime/pack-native.sh` places that binary at `bin/vpcs` in the native
-payload. The upstream project is BSD-2-Clause licensed:
+`v0.8.3` ref (release commit `3870ae8`) and builds it; `runtime/pack-native.sh`
+places the resulting binary at `bin/vpcs` in the payload. Both payloads are
+built from that same pinned ref — the linux/amd64 binary natively on the
+builder, the linux/arm64 binary with `aarch64-linux-gnu-gcc` via
+`fetch-vpcs.sh --arch arm64`. The upstream project is BSD-2-Clause licensed:
 
 - Source repository: <https://github.com/GNS3/vpcs>
 - Pinned source archive: <https://github.com/GNS3/vpcs/archive/refs/tags/v0.8.3.tar.gz>
 - Pinned release: <https://github.com/GNS3/vpcs/releases/tag/v0.8.3>
 - License: BSD-2-Clause, as identified by the upstream repository
 
-The archive redistributes the resulting binary, not a moving branch checkout.
-The source URL and ref above are the corresponding source offer for this
-version; the build recipe and compiler/link flags are recorded in
+The archive redistributes the resulting binaries, not a moving branch checkout.
+The source URL and ref above are the corresponding source offer for these
+versions; the build recipe and compiler/link flags are recorded in
 `runtime/fetch-vpcs.sh`.
 
-QEMU is **not** in the Apple Silicon archive. The QEMU notice below applies
-only to the separate Windows launcher bundle and must not be read as a claim
-that the Mac artifact contains QEMU.
+### QEMU and the Apple Silicon archive — what is and is not distributed
+
+**No QEMU binary is contained in `iolbox-macos-arm64.tar.gz`.** The QEMU
+section further below covers the separate Windows launcher bundle, where we
+do redistribute QEMU binaries, and must not be read as a claim that the Mac
+artifact contains QEMU.
+
+However, selecting the **`native-arm64`** profile *causes* QEMU to be
+installed on the user's machine, and that is worth stating plainly rather
+than leaving to the reader. `packaging/macos/guest/10-multiarch-native.sh`
+runs, inside the Lima guest:
+
+```sh
+apt-get install -y --no-install-recommends \
+    qemu-user-static binfmt-support libc6:amd64 libssl3t64:amd64
+```
+
+so that x86_64 IOL can be translated in-guest on a profile that deliberately
+has no Rosetta. `qemu-user-static` is GPL-licensed (QEMU is GPL-2.0, with
+components under LGPL-2.1 and other compatible licenses); `binfmt-support` is
+likewise GPL-licensed.
+
+Boundary, stated explicitly:
+
+- iolbox does **not** redistribute `qemu-user-static` or `binfmt-support`.
+  They are fetched at provisioning time by the guest's own `apt`, from
+  Debian's repositories, under Debian's packaging and copyright files — the
+  same boundary this notice already draws for the guest image itself and for
+  every other guest package.
+- The distributor of those binaries is Debian, and Debian's corresponding
+  source is available from <https://sources.debian.org/> and via
+  `apt-get source qemu-user-static` on the guest. The exact versions selected
+  in qualification were `qemu-user-static 1:10.0.11+ds-0+deb13u1` and
+  `binfmt-support 2.2.2-7+b1`.
+- No QEMU or binfmt-support binary, source, or copyright file is embedded in
+  any iolbox artifact for macOS.
+
+> **Open prerequisite, owner action required.** The M7 translator-selection
+> record sets `redistribution_review_required: true`, and no record shows
+> that review was performed (ledger row **P7-02**, `docs/macos-m7-result.md`).
+> The paragraphs above correct a notice that had become misleading; they are
+> **not** a substitute for that review and do not discharge it. It should be
+> closed before the first tag that ships the `native-arm64` profile.
 
 ---
 

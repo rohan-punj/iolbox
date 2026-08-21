@@ -1,16 +1,19 @@
 # iolbox on Apple Silicon macOS
 
 This unsigned archive is the Apple Silicon (darwin/arm64) iolbox launcher,
-the exact Linux payload produced by the same release workflow, and the locked
-Lima profiles/provisioner it needs. It contains no guest disk, hypervisor,
-Lima installation, or Cisco software. You supply a legally held **x86_64 IOL**
-image; i386/i86bi and arm64-native IOL are unsupported.
+the two Linux payloads produced by the same release workflow (one linux/amd64,
+one linux/arm64), and the locked Lima profiles/provisioner it needs. It
+contains no guest disk, hypervisor, Lima installation, or Cisco software. You
+supply a legally held **x86_64 IOL** image; i386/i86bi and arm64-native IOL
+are unsupported.
 
 ## Quick start
 
 Prerequisites:
 
-- Apple Silicon macOS with Rosetta available;
+- Apple Silicon macOS. Rosetta is required for the `debian13`/`jammy`
+  Rosetta profiles; the `native-arm64` profile does not use Rosetta and
+  translates x86_64 IOL with qemu-user inside the guest instead;
 - Lima installed and managed separately by you (Apache-2.0; it is not
   redistributed or installed, upgraded, or removed by iolbox).
 
@@ -49,16 +52,39 @@ Then start the product from the extracted directory with one command:
 ./iolbox start
 ~~~
 
-The launcher creates or reuses the durable named Lima guest
-iolbox-debian13, verifies the VZ/Rosetta canary and pinned Debian 13/trixie
-guest/kernel (6.12.101+deb13-cloud-arm64), and serves the GUI on
-http://127.0.0.1:4001. The GUI, console, and capture forwards are
-loopback-only and have no authentication.
+The launcher resolves a profile, then creates or reuses the durable named
+Lima guest for it, verifies that profile's canary and pinned guest/kernel, and
+serves the GUI on http://127.0.0.1:4001. The GUI, console, and capture
+forwards are loopback-only and have no authentication.
 
-For the compatibility profile, select jammy; it is pinned to Ubuntu 22.04
-with the qualified 5.15 guest/kernel line. The Debian 12/bookworm files are
-shipped as an unqualified candidate and are refused while their digest remains
-unpinned.
+Profiles:
+
+- native-arm64 (Lima guest iolbox-native-arm64) runs the supervisor, VPCS, and
+  tool packs as real arm64 binaries on Debian 13/trixie with the pinned
+  6.12.101+deb13-cloud-arm64 kernel. x86_64 IOL is translated by qemu-user
+  inside the guest, which the guest installs from Debian at provisioning time.
+  It has no host qualification row, so the launcher reports it as
+  UNMEASURED - CANARY REQUIRED and gates it on its own fail-closed canary.
+- debian13 (Lima guest iolbox-debian13) is the Rosetta default: the amd64
+  payload and x86_64 IOL under Rosetta, same pinned Debian 13/trixie kernel.
+- jammy is the Rosetta compatibility profile, pinned to Ubuntu 22.04 with the
+  qualified 5.15 guest/kernel line.
+- The Debian 12/bookworm files are shipped as an unqualified candidate and are
+  refused while their digest remains unpinned.
+
+On a qualifying host with no existing iolbox install, the default automatic
+selection is native-arm64. If you already have an install, it keeps its
+current profile and Lima machine - the launcher will not migrate it for you,
+and says so on stderr when it declines. To migrate deliberately:
+
+~~~sh
+./iolbox start --profile native-arm64
+~~~
+
+That choice is remembered. To pin the Rosetta path instead, use
+--profile rosetta-amd64 or set IOLBOX_PROFILE=rosetta-amd64. Automatic
+selection falls back to Rosetta whenever the native preflight fails; an
+explicit --profile native-arm64 fails closed rather than falling back.
 
 Host data defaults to:
 
@@ -80,10 +106,14 @@ environment. It preserves host images/labs, the host identity and license,
 the Lima machine, and the pinned guest kernel while replacing the guest
 payload.
 
-The runtime executes the existing Linux supervisor/VPCS and x86_64 IOL under
-Rosetta inside the arm64 Lima guest. This release supports **x86_64 IOL only**;
-i386/i86bi and arm64-native IOL are not supported and are not made runnable by
-the archive.
+On the Rosetta profiles the runtime executes the amd64 supervisor/VPCS and
+x86_64 IOL under Rosetta inside the arm64 Lima guest. On native-arm64 the
+supervisor, VPCS, and tool packs are real arm64 binaries and only x86_64 IOL
+is translated, by in-guest qemu-user. Either way this release supports
+**x86_64 IOL only**; i386/i86bi and arm64-native IOL are not supported and are
+not made runnable by the archive.
+
+`./iolbox upgrade` keeps your existing Lima machine and its profile.
 
 The installation guide for this exact release is:
 <https://github.com/rohan-punj/iolbox/blob/@VERSION@/docs/INSTALL.md>
@@ -92,4 +122,5 @@ The archive's SHA-256 files detect corruption or a changed download. Because
 this release is unsigned, they do not authenticate the publisher. Lima fetches
 the digest-locked Debian/Ubuntu guest image and apt packages at provisioning
 time; those guest assets are not embedded here. See notices/THIRD_PARTY.md
-for the distributed VPCS notice and the boundary around Windows-only QEMU.
+for the distributed VPCS notice, and for what the native-arm64 profile
+installs into the guest from Debian.
