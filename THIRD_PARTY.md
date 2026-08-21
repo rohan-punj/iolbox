@@ -212,17 +212,29 @@ The Windows launcher (`tools/iolab-launcher`) ships a trimmed copy of QEMU so th
 | Field | Value |
 |---|---|
 | Upstream | Stefan Weil's official QEMU-for-Windows builds — <https://qemu.weilnetz.de/w64/> |
-| File | `qemu-w64-setup-20260501.exe` |
-| Full URL | <https://qemu.weilnetz.de/w64/qemu-w64-setup-20260501.exe> |
-| QEMU version | 11.0.0 release build (reports `11.0.50 (v11.0.0-12631-g54e84cdc7a)`) |
-| Installer size | 190 MB (198,760,632 bytes) |
-| **SHA-256 (installer, verified by download)** | `a8b29572afb4c6ad024b7de129c81033e9fd191b9e054e3a52ea0bed24ac19ef` |
+| File | `qemu-w64-setup-20260811.exe` |
+| Full URL | <https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe> |
+| QEMU version | 11.1.0 release build (reports `11.1.0 (v11.1.0-12130-ge470268ff4)`) |
+| Installer size | 197 MB (206,615,928 bytes) |
+| **SHA-256 (installer, verified by download)** | `f98a8aeb5f7faea9765b6dee28316c266cd179d80354a2fed8e50176f9a2e59f` |
 
 `qemu.weilnetz.de` is the canonical upstream-linked Windows build (referenced
 from qemu.org's download page). Note: recent installers are Authenticode-signed
 with an **expired certificate** — Windows SmartScreen may warn on the installer.
 This does not affect the extracted binaries we redistribute (we extract, we do
 not run the installer on user machines).
+
+**Re-pin history:** the previous pin (`qemu-w64-setup-20260501.exe`,
+QEMU 11.0.0, sha256 `a8b29572afb4c6ad024b7de129c81033e9fd191b9e054e3a52ea0bed24ac19ef`)
+was rotated out of `qemu.weilnetz.de` before the v0.6.0 release — the mirror
+only retains a handful of recent builds. Re-pinned to the newest available
+build at release time (2026-08-21), verified the same way as the original
+pin: downloaded over HTTPS from the canonical mirror and hashed directly
+(weilnetz.de publishes no separate checksum/signature file to check
+against). Anyone re-pinning this in the future should expect the same:
+confirm the target file is still live at `qemu.weilnetz.de/w64/` before
+building a release, and update this section together with the extraction
+commands below.
 
 ### How the redistributable is produced (extraction, not install)
 
@@ -231,24 +243,29 @@ we extract it once and ship a trimmed tree:
 
 ```sh
 # 1. verify the pinned installer
-sha256sum qemu-w64-setup-20260501.exe
-#   -> a8b29572afb4c6ad024b7de129c81033e9fd191b9e054e3a52ea0bed24ac19ef
+sha256sum qemu-w64-setup-20260811.exe
+#   -> f98a8aeb5f7faea9765b6dee28316c266cd179d80354a2fed8e50176f9a2e59f
 
 # 2. extract with 7-Zip (NSIS archive)
-"C:\Program Files\7-Zip\7z.exe" x -oqemu-extract qemu-w64-setup-20260501.exe
+"C:\Program Files\7-Zip\7z.exe" x -oqemu-extract qemu-w64-setup-20260811.exe
 
 # 3. trim to the headless x86_64 target:
 #    - keep  qemu-system-x86_64.exe  + ALL *.dll (the runtime DLL set)
 #    - keep  share/keymaps/  and the x86/i386 firmware blobs
 #            (bios*.bin, vgabios*.bin, kvmvapic.bin, linuxboot*/multiboot*/pvh,
-#             *-virtio.rom + pxe-*.rom, edk2-i386/x86_64 *.fd)
-#    - drop  the other 55 qemu-system-*.exe targets, share/doc, and the
+#             *-virtio.rom + pxe-*.rom, edk2-i386/x86_64 *.fd — the 20260811
+#             build ships no separate edk2-x86_64-vars.fd, only -code.fd and
+#             -secure-code.fd; that's an upstream layout change, not an error)
+#    - drop  the other 58 qemu-system-*.exe targets, share/doc, and the
 #            non-x86 firmware (openbios-*, edk2-aarch64/arm, dtb, ...)
 ```
 
-Result: a `qemu/` directory of ~175 MB. Verified standalone on a clean box:
-`qemu-system-x86_64.exe -version` and `-accel help` (lists `tcg` + `whpx`) both
-run, so the DLL set is complete.
+Result: a `qemu/` directory of ~183 MB (179 files). Verified standalone on a
+clean box: `qemu-system-x86_64.exe -version` and `-accel help` (lists `tcg` +
+`whpx`) both run, so the DLL set is complete — and further verified with a
+real end-to-end boot of the assembled v0.6.0 Windows bundle (launcher + this
+qemu/ tree + a freshly built `iolbox-disk.qcow2`) under TCG, reaching a live
+GUI at `:4001` in ~8 minutes.
 
 ### Layout shipped next to the launcher exe
 
@@ -281,7 +298,7 @@ and other compatible licenses). We redistribute unmodified upstream binaries.
   directory (or link to them from the release notes) when assembling a release.
 - **Written offer for source:** the corresponding source for this exact build is
   published by the upstream packager at the QEMU source page,
-  <https://www.qemu.org/download/#source> (release 11.0.0), mirrored from
+  <https://www.qemu.org/download/#source> (release 11.1.0), mirrored from
   <https://qemu.weilnetz.de/>. iolbox distributes QEMU **unmodified**; the source
   offer therefore points at upstream. Include this URL in the release notes /
   About page alongside the version above so the offer travels with the binary.
