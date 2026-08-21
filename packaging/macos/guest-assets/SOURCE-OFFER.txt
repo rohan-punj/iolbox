@@ -1,0 +1,166 @@
+CORRESPONDING SOURCE FOR REDISTRIBUTED DEBIAN PACKAGES
+======================================================
+
+The iolbox macOS archive (iolbox-macos-arm64.tar.gz) redistributes a set of
+Debian binary packages, used by the `native-arm64` profile to translate
+x86_64 binaries inside the Lima guest and to provide the amd64 runtime those
+binaries link against.
+
+All of them are redistributed BIT-FOR-BIT UNMODIFIED as published by the
+Debian Project. iolbox claims no copyright in them and has not patched,
+rebuilt, trimmed or repackaged them.
+
+The authoritative list of exactly what shipped -- package, version,
+architecture, SHA-256 and filename -- is the MANIFEST file next to this one.
+
+
+HOW THE SOURCE IS PROVIDED
+--------------------------
+The complete corresponding source for every package listed in MANIFEST is
+published by the iolbox project as a release asset accompanying this archive:
+
+    iolbox-macos-arm64-corresponding-source.tar.gz
+
+It is available from the same iolbox release page you obtained this archive
+from, for as long as this release is offered. It contains, for each source
+package below, the Debian .dsc, the upstream .orig tarball, and the Debian
+packaging tarball -- everything needed to rebuild these binaries.
+
+That bundle is assembled by packaging/macos/guest-assets/fetch-corresponding-source.sh
+in the iolbox source tree, which verifies every component against the
+checksums in Debian's own signed .dsc files.
+
+If you obtained this archive without that source asset, you may also obtain
+the identical source directly from Debian at the URLs below, or by writing to
+the iolbox project.
+
+
+SOURCE PACKAGES
+---------------
+Each entry gives the Debian SOURCE package and version corresponding to the
+binaries shipped. Note that binary version and source version differ in
+several cases -- see BINARY vs SOURCE VERSIONS below.
+
+  qemu                    1:10.0.11+ds-0+deb13u1
+    binaries: qemu-user, qemu-user-binfmt, qemu-user-static
+    licence:  GPL-2.0, with components under LGPL-2.1 and other compatible
+              licences (see notices/qemu.copyright)
+    https://deb.debian.org/debian/pool/main/q/qemu/qemu_10.0.11+ds-0+deb13u1.dsc
+    https://sources.debian.org/src/qemu/1%3A10.0.11%2Bds-0%2Bdeb13u1/
+
+  binfmt-support          2.2.2-7
+    binaries: binfmt-support (binary version 2.2.2-7+b1)
+    licence:  GPL-3.0+ (see notices/binfmt-support.copyright)
+    https://deb.debian.org/debian/pool/main/b/binfmt-support/binfmt-support_2.2.2-7.dsc
+
+  glibc                   2.41-12+deb13u3
+    binaries: libc6:amd64
+    licence:  LGPL-2.1+ and GPL-2+ (see notices/glibc.copyright)
+    https://deb.debian.org/debian/pool/main/g/glibc/glibc_2.41-12+deb13u3.dsc
+
+  gcc-14                  14.2.0-19
+    binaries: libgcc-s1:amd64, gcc-14-base:amd64
+    licence:  GPL-3.0+ with the GCC Runtime Library Exception
+              (see notices/gcc-14.copyright)
+    https://deb.debian.org/debian/pool/main/g/gcc-14/gcc-14_14.2.0-19.dsc
+
+  openssl                 3.5.6-1~deb13u2
+    binaries: libssl3t64:amd64, openssl-provider-legacy:amd64
+    licence:  Apache-2.0 (see notices/openssl.copyright)
+    https://deb.debian.org/debian/pool/main/o/openssl/openssl_3.5.6-1~deb13u2.dsc
+
+  libzstd                 1.5.7+dfsg-1
+    binaries: libzstd1:amd64
+    licence:  BSD-3-Clause / GPL-2 (see notices/libzstd.copyright)
+    https://deb.debian.org/debian/pool/main/libz/libzstd/libzstd_1.5.7+dfsg-1.dsc
+
+  zlib                    1:1.3.dfsg+really1.3.1-1
+    binaries: zlib1g:amd64 (binary version 1:1.3.dfsg+really1.3.1-1+b1)
+    licence:  zlib licence (see notices/zlib.copyright)
+    https://deb.debian.org/debian/pool/main/z/zlib/zlib_1.3.dfsg+really1.3.1-1.dsc
+
+  libpipeline             1.5.8-1
+    binaries: libpipeline1
+    licence:  GPL-3.0+ (see notices/libpipeline.copyright)
+    https://deb.debian.org/debian/pool/main/libp/libpipeline/libpipeline_1.5.8-1.dsc
+
+  base-files              13.8+deb13u6
+    Not installed in the guest and not redistributed as a binary package.
+    Listed because the licence TEXTS in notices/licenses/ were taken from it.
+    licence:  GPL-2 (see notices/licenses/GPL-2)
+    https://deb.debian.org/debian/pool/main/b/base-files/base-files_13.8+deb13u6.dsc
+
+
+BINARY vs SOURCE VERSIONS
+-------------------------
+Three entries above intentionally show a source version that differs from the
+binary version. These are NOT errors and must not be "corrected":
+
+  binfmt-support   binary 2.2.2-7+b1                    <- source 2.2.2-7
+  zlib1g           binary 1:1.3.dfsg+really1.3.1-1+b1   <- source 1:1.3.dfsg+really1.3.1-1
+
+    The "+bN" suffix denotes a binNMU: a binary-only rebuild performed by
+    Debian's build daemons against updated build dependencies, with NO change
+    to the source. There is no separate "+bN" source package, and requesting
+    one returns 404. The corresponding source is the un-suffixed version.
+
+  libc6            <- source glibc
+  libgcc-s1        <- source gcc-14
+  gcc-14-base      <- source gcc-14
+  libssl3t64       <- source openssl
+  openssl-provider-legacy <- source openssl
+  libzstd1         <- source libzstd
+  zlib1g           <- source zlib
+  libpipeline1     <- source libpipeline
+
+    Debian source packages routinely build binaries under different names.
+
+
+LICENCE TEXTS
+-------------
+notices/ contains, for each source package above, Debian's machine-readable
+(DEP-5) copyright file taken verbatim from /usr/share/doc/<package>/copyright
+inside the packages themselves. Those files carry the per-file copyright
+attribution and identify each file's licence.
+
+DEP-5 copyright files REFERENCE licence texts at /usr/share/common-licenses/
+rather than embedding them, because on an installed Debian system the
+base-files package provides that directory. This archive is not an installed
+Debian system, so the referenced texts are shipped in full at:
+
+    notices/licenses/
+
+covering GPL-1, GPL-2, GPL-3, LGPL-2, LGPL-2.1, LGPL-3, Apache-2.0, Artistic,
+BSD, CC0-1.0, GFDL-1.2, GFDL-1.3, MPL-1.1 and MPL-2.0.
+
+Read notices/<source>.copyright together with notices/licenses/<NAME>: the
+first tells you which licence applies to which file, the second is the
+licence itself.
+
+
+ALTERNATIVE ACCESS
+------------------
+These exact versions remain permanently available from Debian's snapshot
+archive, regardless of what the current Debian release serves:
+
+    https://snapshot.debian.org/
+
+On a Debian 13 (trixie) system with deb-src entries enabled:
+
+    apt-get source qemu-user-static
+    apt-get source binfmt-support
+    apt-get source libc6
+    ...and so on for each source package listed above.
+
+
+COPYRIGHT
+---------
+QEMU is copyright its respective authors. binfmt-support is copyright Colin
+Watson and contributors. GNU C Library is copyright the Free Software
+Foundation and contributors. GCC is copyright the Free Software Foundation.
+OpenSSL is copyright the OpenSSL Project and contributors. zlib is copyright
+Jean-loup Gailly and Mark Adler. Zstandard is copyright Meta Platforms, Inc.
+and affiliates. libpipeline is copyright Colin Watson. Debian packaging is
+copyright the respective Debian maintainers and the Debian QEMU Team.
+
+Full per-file attribution is in notices/<source>.copyright.
