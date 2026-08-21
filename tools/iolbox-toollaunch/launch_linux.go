@@ -31,12 +31,7 @@ const (
 	securebitKeepLock   = 1 << 5
 	capsetVersion3      = 0x20080522
 	cloneNewnet         = 0x40000000
-	netnsRunDir         = "/var/run/netns/"
-	// sysSetns is linux/amd64's syscall number for setns(2) (308). Not every
-	// Go release's syscall package exports SYS_SETNS (it did not at the time
-	// this was written), so this is pinned locally the same way the prctl/
-	// capset numbers above are.
-	sysSetns = 308
+	netnsRunDir = "/var/run/netns/"
 )
 
 type capHeader struct {
