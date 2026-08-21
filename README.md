@@ -94,11 +94,27 @@ sudo ./install.sh          # localhost-only; use --bind all for LAN access
 
 **macOS Apple Silicon (Lima)** — `iolbox-macos-arm64.tar.gz` (+ `.sha256`):
 requires [Lima](https://lima-vm.io/), installed separately. Verify the
-checksums, extract, then
+checksums, extract, then either double-click `IOLbox.app` (an optional,
+unsigned convenience launcher included in the archive) or run the CLI
+directly:
 
 ```sh
 ./iolbox start             # GUI at http://127.0.0.1:4001
 ```
+
+`IOLbox.app` opens a real Terminal window running that same command, so
+every prompt (including the first-run vCPU/RAM choice) is still visible —
+it's a Finder/Dock-friendly starter, not a background app or control panel.
+It's unsigned like the CLI binary: on a **browser download**, run
+`xattr -dr com.apple.quarantine` on the extracted folder **before** the
+first double-click, or Gatekeeper deletes the app outright rather than just
+warning about it.
+
+**To stop:** run `./iolbox stop` from the CLI, or — from `IOLbox.app`'s
+Terminal window — type `stop` at the `iolbox>` prompt that appears once
+start finishes (`status`/`diagnose` also work there). Closing the window
+without typing `stop` leaves the VM running in the background; nothing
+stops it for you.
 
 On a fresh install the launcher prefers the **native-arm64** profile (arm64
 supervisor/VPCS; x86_64 IOL translated by redistributed qemu-user inside the

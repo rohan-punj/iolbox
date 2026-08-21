@@ -837,3 +837,37 @@ python3 -c "from PIL import Image; Image.open('icon-1024.png').save('iolbox.icns
 
 OQ-1 is now closed: this is committed, permanent artwork, not a placeholder
 pending a future decision.
+
+## 16. Boot-progress messaging and interactive stop loop (2026-08-21)
+
+Real hardware use surfaced two UX gaps not covered by §1–§15: silent
+multi-minute stretches during `native-arm64` provisioning (no host
+qualification row, so every run does a live canary plus package installs)
+made a genuinely-still-working run look stopped, and once `start` finished
+there was no way to stop the VM from `IOLbox.app`'s Terminal window short of
+re-navigating to the extracted folder and remembering `./iolbox stop`.
+
+Two fixes, both hardware-verified:
+
+- **`tools/iolab-launcher/macos_progress.go`** — a `withProgress` heartbeat
+  wrapper, printing `==> <label>...` before and `still <label>... (Ns
+  elapsed)` every 15s during each previously-silent phase (Lima machine
+  create/start, file staging, all five guest provisioning steps, GUI
+  readiness wait).
+- **`tools/iolbox-app-stub/main.go`**'s generated launch script no longer
+  `exec`s `./iolbox start`; after a successful start it drops into a small
+  `iolbox>` prompt (`stop`, `status`, `diagnose`) instead of ending at
+  "[Process completed]". Closing the window without typing `stop` still
+  leaves the VM running — only an explicit `stop` shuts it down.
+
+The heartbeat wrapper was exercised on the real qualification Mac: a full
+native-arm64 provisioning run showed the progress lines throughout instead
+of silence. `./iolbox stop` was run directly via the CLI (over SSH, twice)
+and confirmed the documented host-sync-before-stop behavior both times —
+that exercises the same `stop` command the interactive loop's `stop` case
+calls, but the loop itself (typing `stop` at the `iolbox>` prompt inside a
+real Finder-launched Terminal window) has only been verified functionally
+against a fake `iolbox` binary (§ implementation, `main_test.go` /
+`bash -n` + a manual run), not yet on real hardware — SSH sessions can't
+reach the GUI Terminal to type into it interactively, the same limitation
+recorded in §14.
