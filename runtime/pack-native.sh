@@ -422,7 +422,13 @@ install -m 0644 "$FILES_DIR/99-iolbox.conf" "$STAGE_DIR/etc/99-iolbox.conf"
 # tarball for this subtree at provisioning time.
 if [ "$BUNDLE_GUEST_QEMU" -eq 1 ]; then
     GUEST_ASSETS_SRC="${IOLBOX_GUEST_ASSETS_DIR:-$SCRIPT_DIR/../packaging/macos/guest-assets}"
-    if [ ! -x "$GUEST_ASSETS_SRC/fetch-qemu-user.sh" ]; then
+    # -f, NOT -x. Every packaging/macos script is committed mode 0644 and is
+    # run as `bash <script>` (the invocation below does exactly that), so the
+    # executable bit is not part of this repo's contract for them. Testing -x
+    # here made the release build fail on any checkout where the bit is absent
+    # -- which is every fresh `actions/checkout` and every clone made from a
+    # filesystem that does not carry it.
+    if [ ! -f "$GUEST_ASSETS_SRC/fetch-qemu-user.sh" ]; then
         echo "pack-native: --bundle-guest-qemu needs $GUEST_ASSETS_SRC/fetch-qemu-user.sh" >&2
         exit 1
     fi
