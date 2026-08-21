@@ -94,6 +94,7 @@ iolbox-macos-arm64/lima/pinned-image-native-arm64.env
 iolbox-macos-arm64/lima/pinned-image.env
 iolbox-macos-arm64/lima/profiles.env
 iolbox-macos-arm64/notices
+iolbox-macos-arm64/notices/REDISTRIBUTED-PACKAGES.md
 iolbox-macos-arm64/notices/THIRD_PARTY.md
 EOF
 if ! cmp -s "$TMP/actual-list.txt" "$TMP/expected-list.txt"; then
@@ -139,7 +140,7 @@ while IFS= read -r path; do
 done < "$TMP/actual-list.txt"
 
 ( cd "$ROOT" && sha256sum -c SHA256SUMS ) || die "internal checksums do not verify"
-[ "$(wc -l < "$ROOT/SHA256SUMS" | tr -d ' ')" = 27 ] || die "internal checksum file does not cover exactly 27 files"
+[ "$(wc -l < "$ROOT/SHA256SUMS" | tr -d ' ')" = 28 ] || die "internal checksum file does not cover exactly 28 files"
 
 file_launcher="$(file -b "$ROOT/iolbox")"
 case "$file_launcher" in

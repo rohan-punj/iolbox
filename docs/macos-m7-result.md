@@ -693,9 +693,31 @@ roughly half the UNEVALUATED rows without any new hardware time.
    with node-process RSS actually sampled, and threshold files that compute
    medians and deltas rather than leaving them to prose. Twelve rows depend on
    this and none can move without it.
-4. **Discharge P7-02's `redistribution_review_required: true`** and update
+4. ~~**Discharge P7-02's `redistribution_review_required: true`** and update
    `THIRD_PARTY.md` to cover the native-arm64 profile's `qemu-user-static`
-   (GPL) rather than describing the Mac archive as Rosetta-only.
+   (GPL) rather than describing the Mac archive as Rosetta-only.~~
+   **DONE — 2026-08-20.** The review was performed and the owner decided to
+   **redistribute the packages deliberately, with full GPL compliance**,
+   rather than rely on the apt-at-provisioning-time boundary. `THIRD_PARTY.md`
+   now describes what actually ships; the packages are pinned against Debian's
+   OpenPGP-signed index, their license texts ship with them, and the
+   corresponding source is published as a release asset. Design record and
+   adversarial review: `docs/macos-native-arm64-qemu-redistribution-plan.md`.
+
+   Two findings from that work bear on this ledger:
+   - The versions P7-02 records (`qemu-user-static 1:10.0.11+ds-0+deb13u1`,
+     `binfmt-support 2.2.2-7+b1`) are **not the full set that was installed**.
+     In trixie `qemu-user-static` is a transitional package carrying no
+     emulator; `apt` silently pulled in `qemu-user` (the actual 64 MB
+     emulator) and `qemu-user-binfmt`. The evidence recorded what was
+     requested, not what was installed.
+   - Both copyright-file sha256s recorded in the P7-02 evidence
+     (`7092076611fd…`, `6b3d59446db2…`) were **independently reproduced** from
+     the Debian pool during this work, confirming the bytes now shipped are
+     the ones qualified in M7.
+
+   The row's verdict is unchanged here (this document is frozen); the
+   obligation it tracked is discharged.
 5. **Resolve P7R-02's confound** by re-running the rosetta arm with a
    current-HEAD `linux-amd64` payload. This determines whether the FAIL is a
    capacity limit or an already-fixed M6 payload defect — but note that under

@@ -144,10 +144,10 @@ while IFS='|' read -r source dest extra || [ -n "${source:-}" ]; do
     MANIFEST_DESTS+=("$dest")
 done < "$MANIFEST"
 
-[ "${#MANIFEST_SOURCES[@]}" -eq 24 ] || die "manifest has ${#MANIFEST_SOURCES[@]} entries, expected 24"
+[ "${#MANIFEST_SOURCES[@]}" -eq 25 ] || die "manifest has ${#MANIFEST_SOURCES[@]} entries, expected 25"
 
 for required_dest in \
-    README.md LICENSE notices/THIRD_PARTY.md \
+    README.md LICENSE notices/THIRD_PARTY.md notices/REDISTRIBUTED-PACKAGES.md \
     lima/profiles.env lima/iolbox-trixie.yaml lima/iolbox-jammy.yaml lima/iolbox-bookworm.yaml \
     lima/pinned-image-debian13.env lima/pinned-image.env lima/pinned-image-debian12.env \
     guest/lib.sh guest/10-multiarch-debian.sh guest/10-multiarch.sh \
@@ -231,6 +231,7 @@ $ARCHIVE_ROOT_NAME/lima/pinned-image-native-arm64.env
 $ARCHIVE_ROOT_NAME/lima/pinned-image.env
 $ARCHIVE_ROOT_NAME/lima/profiles.env
 $ARCHIVE_ROOT_NAME/notices
+$ARCHIVE_ROOT_NAME/notices/REDISTRIBUTED-PACKAGES.md
 $ARCHIVE_ROOT_NAME/notices/THIRD_PARTY.md
 EOF
     if ! cmp -s "$actual" "$expected"; then
@@ -247,8 +248,8 @@ write_internal_checksums() {
     local root="$stage/$ARCHIVE_ROOT_NAME"
     local list="$stage/internal-members.txt"
     ( cd "$root" && LC_ALL=C find . -type f ! -name SHA256SUMS -print | sed 's#^\./##' | LC_ALL=C sort > "$list" )
-    # 24 manifest files + the launcher + both payloads.
-    [ "$(wc -l < "$list" | tr -d ' ')" -eq 27 ] || die "staged file count is not 27 before SHA256SUMS"
+    # 25 manifest files + the launcher + both payloads.
+    [ "$(wc -l < "$list" | tr -d ' ')" -eq 28 ] || die "staged file count is not 28 before SHA256SUMS"
     ( cd "$root" && sha256sum $(cat "$list") > SHA256SUMS )
     chmod 0644 "$root/SHA256SUMS"
 }

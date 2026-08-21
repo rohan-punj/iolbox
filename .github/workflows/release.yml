@@ -192,6 +192,7 @@ jobs:
       - name: Pack native (systemd) server tarball — linux/arm64
         run: |
           runtime/pack-native.sh --arch arm64 \
+            --bundle-guest-qemu \
             --supervisor-bin supervisor/bin/supervisor-linux-arm64 \
             --build-dir runtime/build-arm64 \
             --out runtime/build \
@@ -393,12 +394,44 @@ jobs:
           echo "--- archive hash ---"
           sha256sum "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz"
 
+      # GPL compliance. The archive redistributes Debian's qemu-user,
+      # binfmt-support and the amd64 runtime libraries, so iolbox owes their
+      # corresponding source. GPLv2 §3 and GPLv3 §6 both allow discharging
+      # that by ACCOMPANYING the binaries with source, which is the option
+      # taken here: the source ships as a release asset from the same page as
+      # the binary, rather than relying on a pointer to a third party's
+      # archive. See packaging/macos/guest-assets/SOURCE-OFFER.txt.
+      #
+      # Versions come from sources.lock, which was derived from Debian's
+      # OpenPGP-signed index — NOT from listing a pool directory, which
+      # returns many versions at once and silently produces source that does
+      # not correspond to the shipped binary.
+      - name: Assemble corresponding source for redistributed packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/macos/guest-assets/fetch-corresponding-source.sh \
+            --out "$RUNNER_TEMP/iolbox-macos-arm64-corresponding-source" \
+            --archive "$GITHUB_WORKSPACE/iolbox-macos-arm64-corresponding-source.tar.gz"
+          sha256sum "$GITHUB_WORKSPACE/iolbox-macos-arm64-corresponding-source.tar.gz" \
+            > "$GITHUB_WORKSPACE/iolbox-macos-arm64-corresponding-source.tar.gz.sha256"
+
       - uses: actions/upload-artifact@v4
         with:
           name: iolbox-macos
           path: |
             iolbox-macos-arm64.tar.gz
             iolbox-macos-arm64.tar.gz.sha256
+
+      # Separate artifact: this is ~200 MB of source tarballs and must not be
+      # bundled into the archive users download to run iolbox. It is published
+      # alongside it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iolbox-macos-corresponding-source
+          path: |
+            iolbox-macos-arm64-corresponding-source.tar.gz
+            iolbox-macos-arm64-corresponding-source.tar.gz.sha256
 
   # ---------------------------------------------------------------------
   # Release: only on an actual tag push (workflow_dispatch runs stop after
@@ -420,10 +453,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          # NOTE: this is a literal block scalar — every line is a glob, and a
+          # '#' line would be treated as a (non-matching) pattern, not a
+          # comment. Keep commentary out here.
+          #
+          # iolbox-macos-corresponding-source carries the GPL corresponding
+          # source for the Debian packages the macOS archive redistributes. It
+          # MUST be published alongside the archive; dropping it while still
+          # shipping iolbox-macos breaks compliance.
           files: |
             iolbox-windows/**/*
             iolbox-linux/**/*
             iolbox-macos/**/*
+            iolbox-macos-corresponding-source/**/*
           body: |
             iolbox ${{ github.ref_name }}
 
@@ -445,7 +487,7 @@ jobs:
 
             **Apple Silicon macOS (Lima):** the Mac archive requires user-installed Lima and ships **two** Linux payloads; the launcher selects one from the profile it resolves.
 
-            - **native-arm64** runs the supervisor, VPCS, and tool packs as **real arm64 binaries** on a Debian 13/trixie guest with the pinned 6.12.101+deb13-cloud-arm64 kernel. x86_64 IOL is still translated, by **qemu-user inside the guest** (installed from Debian at provisioning time), not by Rosetta.
+            - **native-arm64** runs the supervisor, VPCS, and tool packs as **real arm64 binaries** on a Debian 13/trixie guest with the pinned 6.12.101+deb13-cloud-arm64 kernel. x86_64 IOL is still translated, by **qemu-user inside the guest** (redistributed in the archive and installed offline at provisioning time — see `notices/REDISTRIBUTED-PACKAGES.md`), not by Rosetta.
             - **Rosetta profiles** — `debian13` (default guest) and `jammy` (compatibility, pinned to the qualified 5.15 line) — are unchanged and run the existing amd64 payload under Rosetta.
             - On a qualifying Apple Silicon host with **no existing iolbox install**, `auto` now prefers **native-arm64**. An **existing** install keeps its current profile and Lima machine; migrate deliberately with `--profile native-arm64`. To stay on Rosetta explicitly, set `IOLBOX_PROFILE=rosetta-amd64`. `auto` falls back to Rosetta whenever the native preflight fails; a forced `--profile native-arm64` fails closed instead.
             - **x86_64 IOL only, on both profiles.** i386/i86bi remain unsupported, and arm64-native IOL remains unsupported.

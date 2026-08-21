@@ -60,6 +60,13 @@ TOOLLAUNCH_BIN=""
 SIMPLE_PACKS="aaa webserver httpclient syslog netsvc pc"
 SECBENCH_ATTACKS_SRC_DEFAULT="$SCRIPT_DIR/../tools/secbench-attacks-go"
 SKIP_PACKS=0
+# Bundle the redistributed Debian qemu-user/binfmt-support package set into
+# the payload (macOS native-arm64 profile only). OFF BY DEFAULT ON PURPOSE:
+# pack-native.sh also builds the generic "any systemd glibc Linux server"
+# package, and a plain arm64 server install has no use for ~67 MiB of x86_64
+# translation aimed at a Lima guest. Only the macOS release path asks for it.
+# See packaging/macos/guest-assets/ and THIRD_PARTY.md.
+BUNDLE_GUEST_QEMU=0
 OUT_DIR="$BUILD_DIR"
 
 usage() {
@@ -88,6 +95,12 @@ Usage: $0 [options]
                            iolbox-toollaunch binary. Default: cross-compiled
                            on the fly from $TOOLLAUNCH_SRC_DEFAULT (requires
                            'go' on PATH).
+  --bundle-guest-qemu      Bundle the pinned, redistributed Debian
+                           qemu-user/binfmt-support package set into the
+                           payload under guest-assets/qemu-user/ (arm64
+                           only; used by the macOS native-arm64 profile so
+                           the guest installs them offline instead of
+                           apt-getting them at provisioning time).
   --no-packs               Skip building/staging the learning-tool packs
                            (aaa/webserver/httpclient/syslog/netsvc/pc/secbench).
                            PC/VPCS nodes will not work without them.
@@ -111,6 +124,7 @@ while [ $# -gt 0 ]; do
         --vpcs-bin) VPCS_BIN="$2"; shift 2 ;;
         --toollaunch-bin) TOOLLAUNCH_BIN="$2"; shift 2 ;;
         --no-packs) SKIP_PACKS=1; shift ;;
+        --bundle-guest-qemu) BUNDLE_GUEST_QEMU=1; shift ;;
         --build-dir) BUILD_DIR="$2"; OUT_DIR="$BUILD_DIR"; shift 2 ;;
         --out) OUT_DIR="$2"; shift 2 ;;
         --validate-only) VALIDATE_ONLY=1; shift ;;
@@ -123,6 +137,14 @@ case "$TARGET_ARCH" in
     amd64|arm64) ;;
     *) echo "pack-native: --arch must be amd64 or arm64, got '$TARGET_ARCH'" >&2; exit 1 ;;
 esac
+
+# The bundled translator exists to run x86_64 binaries on an arm64 guest.
+# Asking for it on an amd64 payload is always a mistake, so say so rather than
+# silently producing a package with a useless 67 MiB in it.
+if [ "$BUNDLE_GUEST_QEMU" -eq 1 ] && [ "$TARGET_ARCH" != "arm64" ]; then
+    echo "pack-native: --bundle-guest-qemu is only valid with --arch arm64 (got '$TARGET_ARCH')" >&2
+    exit 1
+fi
 
 # Normalize to absolute paths now that --build-dir/--out are final. Several
 # steps below (the tool-pack build loop in particular) build inside a `cd`'d
@@ -387,6 +409,37 @@ install -m 0644 "$NATIVE_DIR/iolbox-bind.env.local" "$STAGE_DIR/systemd/bind.env
 install -m 0644 "$NATIVE_DIR/iolbox-bind.env.all" "$STAGE_DIR/systemd/bind.env.all"
 
 install -m 0644 "$FILES_DIR/99-iolbox.conf" "$STAGE_DIR/etc/99-iolbox.conf"
+
+# Redistributed Debian translator packages + their licence notices. Staged
+# INSIDE the payload rather than as top-level archive members because
+# packaging/macos/release-manifest.txt requires every archive member to be a
+# regular file committed in the repo -- and committing ~67 MiB of .deb blobs
+# per version bump is not a thing we want to do. Riding inside the payload
+# also means the bundle inherits the payload's existing end-to-end sha256
+# verification through CI for free.
+#
+# packaging/macos/guest/10-multiarch-native.sh reaches into the payload
+# tarball for this subtree at provisioning time.
+if [ "$BUNDLE_GUEST_QEMU" -eq 1 ]; then
+    GUEST_ASSETS_SRC="${IOLBOX_GUEST_ASSETS_DIR:-$SCRIPT_DIR/../packaging/macos/guest-assets}"
+    # -f, NOT -x. Every packaging/macos script is committed mode 0644 and is
+    # run as `bash <script>` (the invocation below does exactly that), so the
+    # executable bit is not part of this repo's contract for them. Testing -x
+    # here made the release build fail on any checkout where the bit is absent
+    # -- which is every fresh `actions/checkout` and every clone made from a
+    # filesystem that does not carry it.
+    if [ ! -f "$GUEST_ASSETS_SRC/fetch-qemu-user.sh" ]; then
+        echo "pack-native: --bundle-guest-qemu needs $GUEST_ASSETS_SRC/fetch-qemu-user.sh" >&2
+        exit 1
+    fi
+    echo "== pack-native: staging redistributed qemu-user package bundle =="
+    install -d -m 0755 "$STAGE_DIR/guest-assets"
+    # Cache downloads across repeated local builds; CI starts clean anyway.
+    bash "$GUEST_ASSETS_SRC/fetch-qemu-user.sh"         --out "${IOLBOX_QEMU_BUNDLE_CACHE:-$BUILD_DIR/guest-assets-qemu-user}"
+    cp -R "${IOLBOX_QEMU_BUNDLE_CACHE:-$BUILD_DIR/guest-assets-qemu-user}"         "$STAGE_DIR/guest-assets/qemu-user"
+    find "$STAGE_DIR/guest-assets" -type f -exec chmod 0644 {} +
+    find "$STAGE_DIR/guest-assets" -type d -exec chmod 0755 {} +
+fi
 
 install -m 0755 "$NATIVE_DIR/install.sh" "$STAGE_DIR/install.sh"
 install -m 0755 "$NATIVE_DIR/uninstall.sh" "$STAGE_DIR/uninstall.sh"
