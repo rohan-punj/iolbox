@@ -670,6 +670,8 @@ implementation-time hardening, not open architectural questions.
 
 - **OQ-1 (artwork): reuse `app/src-tauri/icons/icon.png`.** Generate
   `iolbox.icns` from it now; do not block the slice on new art.
+  **Superseded by §15** — that file turned out to be a blank placeholder,
+  not real artwork; replaced with custom-designed network-topology icon.
 - **OQ-2 (friction trade-off): accepted.** The proactive `xattr -dr` step for
   browser-downloaded archives (§11.2) is the same shape as the bare binary's
   existing `xattr -d` requirement, just recursive; proceed.
@@ -807,3 +809,31 @@ scan itself unavailable/skipped). Dock-pin behavior and Dock-pin-after-
 upgrade remain unverified. Both are lower-priority than the two flows just
 confirmed, since the documented recommended flow is now proven to avoid the
 translocation code path entirely.
+
+## 15. Icon artwork replaced (2026-08-21)
+
+§13's OQ-1 decision — reuse the abandoned Tauri shell's `icon.png` — is
+superseded. That file turned out to be a flat solid-blue square with no
+actual artwork (verified by opening it), not real iconography; shipping it
+as `iolbox.icns` would have put a plain blue square in the Dock. Replaced
+with custom artwork: a macOS-style rounded-square plate (matching the
+system's squircle proportions) containing a network-lab topology — a
+central switch/router chassis (port-light row, status bar) connected by six
+cable lines to six small lab-device nodes, each with its own port-row
+glyph, plus green link-status dots at the hub end of each cable. Design
+intent: read clearly as "network device lab" at Dock size, not just an
+abstract mark.
+
+Rendered from `packaging/macos/app/Resources/iolbox-icon-source.svg` (the
+committed, editable source — regenerate by opening it at 1024×1024 and
+re-running the icns build below) via headless Chrome screenshot (no SVG
+rasterizer was available locally; Pillow cannot rasterize SVG). The `.icns`
+itself is built the same way as before — Pillow writing directly to
+`.icns` from the 1024px PNG, no macOS `iconutil` needed:
+
+```sh
+python3 -c "from PIL import Image; Image.open('icon-1024.png').save('iolbox.icns')"
+```
+
+OQ-1 is now closed: this is committed, permanent artwork, not a placeholder
+pending a future decision.

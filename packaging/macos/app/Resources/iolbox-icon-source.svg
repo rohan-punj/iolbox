@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4A7CEB"/>
+      <stop offset="100%" stop-color="#17307A"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="40%" stop-color="#FFFFFF" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="plate">
+      <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224"/>
+    </clipPath>
+    <linearGradient id="chassis" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#12245C"/>
+      <stop offset="100%" stop-color="#0A1740"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#plate)">
+    <!-- macOS-style rounded-square backing plate -->
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#sheen)"/>
+
+    <!-- network lab topology: central hub/switch + six lab devices -->
+    <!-- connection lines, hub to each device -->
+    <g stroke="#AFCCFF" stroke-width="15" stroke-linecap="round" opacity="0.95">
+      <line x1="512" y1="512" x2="512" y2="300"/>
+      <line x1="512" y1="512" x2="708" y2="406"/>
+      <line x1="512" y1="512" x2="708" y2="618"/>
+      <line x1="512" y1="512" x2="512" y2="724"/>
+      <line x1="512" y1="512" x2="316" y2="618"/>
+      <line x1="512" y1="512" x2="316" y2="406"/>
+    </g>
+
+    <!-- link status dots at the hub end, small "connected" cue -->
+    <g fill="#7FE0A8">
+      <circle cx="512" cy="352" r="9"/>
+      <circle cx="664" cy="431" r="9"/>
+      <circle cx="664" cy="593" r="9"/>
+      <circle cx="512" cy="672" r="9"/>
+      <circle cx="360" cy="593" r="9"/>
+      <circle cx="360" cy="431" r="9"/>
+    </g>
+
+    <!-- six small network-device nodes (switch/router silhouette) -->
+    <g id="device-template">
+    </g>
+    <!-- top -->
+    <g transform="translate(512,242)">
+      <rect x="-70" y="-40" width="140" height="80" rx="16" fill="#FFFFFF"/>
+      <rect x="-52" y="-8" width="104" height="16" rx="8" fill="#2D57C4"/>
+      <circle cx="-30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="-10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <rect x="-52" y="16" width="60" height="10" rx="5" fill="#B9CCF0"/>
+    </g>
+    <!-- upper right -->
+    <g transform="translate(760,375)">
+      <rect x="-70" y="-40" width="140" height="80" rx="16" fill="#FFFFFF"/>
+      <rect x="-52" y="-8" width="104" height="16" rx="8" fill="#2D57C4"/>
+      <circle cx="-30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="-10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <rect x="-52" y="16" width="60" height="10" rx="5" fill="#B9CCF0"/>
+    </g>
+    <!-- lower right -->
+    <g transform="translate(760,649)">
+      <rect x="-70" y="-40" width="140" height="80" rx="16" fill="#FFFFFF"/>
+      <rect x="-52" y="-8" width="104" height="16" rx="8" fill="#2D57C4"/>
+      <circle cx="-30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="-10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <rect x="-52" y="16" width="60" height="10" rx="5" fill="#B9CCF0"/>
+    </g>
+    <!-- bottom -->
+    <g transform="translate(512,782)">
+      <rect x="-70" y="-40" width="140" height="80" rx="16" fill="#FFFFFF"/>
+      <rect x="-52" y="-8" width="104" height="16" rx="8" fill="#2D57C4"/>
+      <circle cx="-30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="-10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <rect x="-52" y="16" width="60" height="10" rx="5" fill="#B9CCF0"/>
+    </g>
+    <!-- lower left -->
+    <g transform="translate(264,649)">
+      <rect x="-70" y="-40" width="140" height="80" rx="16" fill="#FFFFFF"/>
+      <rect x="-52" y="-8" width="104" height="16" rx="8" fill="#2D57C4"/>
+      <circle cx="-30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="-10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <rect x="-52" y="16" width="60" height="10" rx="5" fill="#B9CCF0"/>
+    </g>
+    <!-- upper left -->
+    <g transform="translate(264,375)">
+      <rect x="-70" y="-40" width="140" height="80" rx="16" fill="#FFFFFF"/>
+      <rect x="-52" y="-8" width="104" height="16" rx="8" fill="#2D57C4"/>
+      <circle cx="-30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="-10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="10" cy="0" r="4.5" fill="#FFFFFF"/>
+      <circle cx="30" cy="0" r="4.5" fill="#FFFFFF"/>
+      <rect x="-52" y="16" width="60" height="10" rx="5" fill="#B9CCF0"/>
+    </g>
+
+    <!-- central hub: core switch/router chassis -->
+    <g transform="translate(512,512)">
+      <circle r="132" fill="#FFFFFF" opacity="0.12"/>
+      <circle r="112" fill="#FFFFFF" opacity="0.16"/>
+      <rect x="-92" y="-56" width="184" height="112" rx="22" fill="url(#chassis)" stroke="#7FA8FF" stroke-width="4"/>
+      <g fill="#5DD9FF">
+        <circle cx="-64" cy="-8" r="9"/>
+        <circle cx="-32" cy="-8" r="9"/>
+        <circle cx="0" cy="-8" r="9"/>
+        <circle cx="32" cy="-8" r="9"/>
+        <circle cx="64" cy="-8" r="9"/>
+      </g>
+      <rect x="-64" y="16" width="128" height="14" rx="7" fill="#3B6FE0"/>
+      <rect x="-64" y="36" width="80" height="10" rx="5" fill="#274E9E"/>
+    </g>
+  </g>
+</svg>
