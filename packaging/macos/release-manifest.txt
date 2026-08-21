@@ -8,6 +8,7 @@
 packaging/macos/README.release.md|README.md
 LICENSE|LICENSE
 THIRD_PARTY.md|notices/THIRD_PARTY.md
+packaging/macos/guest-assets/REDISTRIBUTED-PACKAGES.md|notices/REDISTRIBUTED-PACKAGES.md
 packaging/macos/lima/profiles.env|lima/profiles.env
 packaging/macos/lima/iolbox-trixie.yaml|lima/iolbox-trixie.yaml
 packaging/macos/lima/iolbox-jammy.yaml|lima/iolbox-jammy.yaml
