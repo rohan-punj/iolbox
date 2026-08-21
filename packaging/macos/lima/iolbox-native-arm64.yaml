@@ -63,7 +63,11 @@ portForwards:
 # guest/40-install-payload.sh steps are Rosetta-specific hard gates (they
 # execute an amd64 loader through Rosetta and verify an
 # IOLBOX_DISABLE_I386=1 + amd64-ExecStart unit) and must NOT be reused
-# unmodified for this profile -- a native-arm64-specific canary/install-
-# payload pair (verifying no Rosetta/binfmt present, a native arm64
-# supervisor ExecStart, and in-guest qemu-user translator presence instead)
-# is still an OPEN GAP for this profile; see docs/m7-phase4-file-mapping.md.
+# unmodified for this profile.
+#
+# The native-arm64-specific replacements exist and are what this profile's
+# row in lima/profiles.env selects: guest/30-canary-native.sh,
+# guest/40-install-payload-native.sh, and guest/50-verify-native.sh. They
+# fail closed if a Rosetta binfmt entry is registered in this guest, assert a
+# plain (never Rosetta-translated) arm64 supervisor ExecStart, and verify the
+# in-guest qemu-user translator. See docs/m7-phase4-file-mapping.md.
