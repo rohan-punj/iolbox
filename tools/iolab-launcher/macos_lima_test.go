@@ -115,7 +115,7 @@ func TestSelectPayloadNewestThenLexicalTieBreak(t *testing.T) {
 	if err := os.Chtimes(second, same, same); err != nil {
 		t.Fatal(err)
 	}
-	got, err := selectPayload("", dir)
+	got, err := selectPayload("", dir, "debian13")
 	if err != nil || got != first {
 		t.Fatalf("payload/error = %q/%v, want %q", got, err, first)
 	}
@@ -126,7 +126,7 @@ func TestSelectPayloadNewestThenLexicalTieBreak(t *testing.T) {
 	if err := os.Chtimes(newer, same.Add(time.Hour), same.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	got, err = selectPayload("", dir)
+	got, err = selectPayload("", dir, "debian13")
 	if err != nil || got != newer {
 		t.Fatalf("newest payload/error = %q/%v, want %q", got, err, newer)
 	}

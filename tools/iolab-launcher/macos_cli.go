@@ -262,7 +262,7 @@ func runDarwinCLI(args []string) int {
 			fmt.Fprintf(os.Stderr, "free disk is below the %d GiB minimum\n", minFreeDiskGiB)
 			return exitPreflight
 		}
-		payload, err := selectPayload(opts.Tarball, assetRoot)
+		payload, err := selectPayload(opts.Tarball, assetRoot, selection.ProfileName)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return exitCode(err)

@@ -500,12 +500,60 @@ type payloadCandidate struct {
 	MTime time.Time
 }
 
-func selectPayload(explicit, assetRoot string) (string, error) {
+// payloadARM64Suffix is the basename suffix runtime/pack-native.sh gives an
+// explicit `--arch arm64` build. The amd64 payload deliberately keeps the
+// historical untagged `iolbox-server-<version>.tar.gz` name, so architecture
+// is encoded in exactly one place: this suffix.
+const payloadARM64Suffix = "-linux-arm64.tar.gz"
+
+// payloadMatchesProfile reports whether a payload basename belongs to the
+// given profile.
+//
+// This exists because the release archive now ships BOTH payloads side by
+// side, and the untagged amd64 name sorts AFTER the arm64 one: pack-release.sh
+// stamps every archive member with the same SOURCE_DATE_EPOCH, so on a clean
+// extraction the two mtimes tie and the lexicographic tie-break below decides
+// — and '-' (0x2D) sorts before '.' (0x2E). Without this filter every Rosetta
+// user doing automatic discovery would deterministically be handed the arm64
+// payload.
+func payloadMatchesProfile(name, profileName string) bool {
+	if !strings.HasPrefix(name, "iolbox-server-") || !strings.HasSuffix(name, ".tar.gz") {
+		return false
+	}
+	if profileName == nativeProfileTableName {
+		return strings.HasSuffix(name, payloadARM64Suffix)
+	}
+	// Rosetta profiles take the untagged historical name, and also accept an
+	// explicitly-tagged amd64 build (pack-native.sh --arch amd64 can produce
+	// one, even though CI does not).
+	return !strings.HasSuffix(name, payloadARM64Suffix)
+}
+
+// payloadArchLabel describes what a profile needs, for error and warning text.
+func payloadArchLabel(profileName string) string {
+	if profileName == nativeProfileTableName {
+		return "arm64"
+	}
+	return "amd64"
+}
+
+func selectPayload(explicit, assetRoot, profileName string) (string, error) {
 	if explicit != "" {
-		if st, err := os.Stat(explicit); err == nil && st.Mode().IsRegular() {
-			return explicit, nil
+		st, err := os.Stat(explicit)
+		if err != nil || !st.Mode().IsRegular() {
+			return "", codedError(exitPreflight, "payload is not a regular file: %s", explicit)
 		}
-		return "", codedError(exitPreflight, "payload is not a regular file: %s", explicit)
+		// An explicit --tarball/IOLBOX_TARBALL always wins: every M4-M7
+		// hardware harness points it at a hand-built tarball with an
+		// arbitrary path, so a hard arch check here would break them all.
+		// But a contradiction between the name and the resolved profile is
+		// worth saying out loud, because staging an amd64 payload into a
+		// native guest fails much later and much less legibly.
+		if base := filepath.Base(explicit); !payloadMatchesProfile(base, profileName) {
+			logf("iolbox-launcher: WARNING: explicit payload %q does not look like a %s payload, but profile %q needs one; using it anyway because it was named explicitly",
+				base, payloadArchLabel(profileName), profileName)
+		}
+		return explicit, nil
 	}
 	roots := []string{assetRoot}
 	if cwd, err := os.Getwd(); err == nil && cwd != assetRoot {
@@ -518,7 +566,7 @@ func selectPayload(explicit, assetRoot string) (string, error) {
 			continue
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "iolbox-server-") || !strings.HasSuffix(entry.Name(), ".tar.gz") {
+			if entry.IsDir() || !payloadMatchesProfile(entry.Name(), profileName) {
 				continue
 			}
 			info, err := entry.Info()
@@ -528,7 +576,10 @@ func selectPayload(explicit, assetRoot string) (string, error) {
 		}
 	}
 	if len(candidates) == 0 {
-		return "", codedError(exitPreflight, "no iolbox-server-*.tar.gz payload found")
+		if profileName == nativeProfileTableName {
+			return "", codedError(exitPreflight, "no iolbox-server-*%s payload found for profile %q", payloadARM64Suffix, profileName)
+		}
+		return "", codedError(exitPreflight, "no amd64 iolbox-server-*.tar.gz payload found for profile %q", profileName)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].MTime.Equal(candidates[j].MTime) {
