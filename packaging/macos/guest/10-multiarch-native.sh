@@ -250,13 +250,29 @@ verify_bundle() {
 check_multiarch_versions() {
     local dir="$1"
     local manifest="$dir/MANIFEST"
-    local package version arch sha256 filename native
+    local package version arch sha256 filename native native_arch
+
+    # ALWAYS arch-qualify. `dpkg-query -W <name>` with no qualifier matches
+    # EVERY installed instance of that name and prints one record per
+    # architecture -- and this format string has no newline, so once the
+    # amd64 instance exists the two versions come back CONCATENATED
+    # ("14.2.0-1914.2.0-19"). That made the comparison below fail on every
+    # provisioning re-run, and fail with an error blaming image/lock drift
+    # that had not happened. Reproduced on hardware; see
+    # docs/macos-native-arm64-qemu-redistribution-plan.md.
+    native_arch="$(dpkg --print-architecture)"
 
     while IFS='|' read -r package version arch sha256 filename || [ -n "${package:-}" ]; do
         case "${package:-}" in ''|'#'*) continue ;; esac
         [ "$arch" = amd64 ] || continue
-        native="$(dpkg-query -W -f='${Version}' "$package" 2>/dev/null || true)"
-        [ -n "$native" ] || continue
+        native="$(dpkg-query -W -f='${Status}|${Version}' "$package:$native_arch" 2>/dev/null || true)"
+        # Only a fully installed native instance constrains us. A removed
+        # package leaving config files behind still has a Version field and
+        # must not be compared against.
+        case "$native" in
+            'install ok installed|'*) native="${native#*|}" ;;
+            *) continue ;;
+        esac
         if [ "$native" != "$version" ]; then
             die "$IOLBOX_EXIT_APT" \
 "multiarch assertion: $package is installed natively at '$native' but the bundle pins '$version'.
@@ -283,11 +299,10 @@ install_bundle() {
 
     while IFS='|' read -r package version arch sha256 filename || [ -n "${package:-}" ]; do
         case "${package:-}" in ''|'#'*) continue ;; esac
-        if [ "$arch" = amd64 ]; then
-            installed="$(dpkg-query -W -f='${Status} ${Version}' "$package:amd64" 2>/dev/null || true)"
-        else
-            installed="$(dpkg-query -W -f='${Status} ${Version}' "$package" 2>/dev/null || true)"
-        fi
+        # Arch-qualified for BOTH branches, for the reason spelled out in
+        # check_multiarch_versions: an unqualified name matches every
+        # installed architecture at once and concatenates their records.
+        installed="$(dpkg-query -W -f='${Status} ${Version}' "$package:$arch" 2>/dev/null || true)"
         if [ "$installed" = "install ok installed $version" ]; then
             log "already at $version, skipping: $package:$arch"
             continue
