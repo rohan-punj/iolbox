@@ -191,6 +191,13 @@ func runDarwinCLI(args []string) int {
 		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
 		return exitPreflight
 	}
+	selection, err = finalizeAutoSelection(context.Background(), selection, earlyTable, opts.Command, opts.Machine, func(ctx context.Context) ([]machineInfo, error) {
+		return listLimaMachines(ctx, preflightLimactl)
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "iolbox-launcher:", err)
+		return exitCode(err)
+	}
 	if selection.FallbackReason != "" {
 		fmt.Fprintf(os.Stderr, "iolbox-launcher: requested profile %q fell back to %q (%s): %s\n", selection.Requested, selection.Selected, selection.Source, selection.FallbackReason)
 	}
