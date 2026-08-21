@@ -1,5 +1,10 @@
-# M6 archive allow-list: source path relative to the repository root | path
+# Archive allow-list: source path relative to the repository root | path
 # relative to the iolbox-macos-arm64/ archive root.
+#
+# Every asset any row of packaging/macos/lima/profiles.env references must
+# appear here, or that profile is advertised in the shipped profiles.env and
+# then fails to load. The native-arm64 block at the bottom was missing for
+# exactly that reason until the native payload joined the release pipeline.
 packaging/macos/README.release.md|README.md
 LICENSE|LICENSE
 THIRD_PARTY.md|notices/THIRD_PARTY.md
@@ -18,3 +23,9 @@ packaging/macos/guest/20-kernel-hold.sh|guest/20-kernel-hold.sh
 packaging/macos/guest/30-canary.sh|guest/30-canary.sh
 packaging/macos/guest/40-install-payload.sh|guest/40-install-payload.sh
 packaging/macos/guest/50-verify.sh|guest/50-verify.sh
+packaging/macos/lima/iolbox-native-arm64.yaml|lima/iolbox-native-arm64.yaml
+packaging/macos/lima/pinned-image-native-arm64.env|lima/pinned-image-native-arm64.env
+packaging/macos/guest/10-multiarch-native.sh|guest/10-multiarch-native.sh
+packaging/macos/guest/30-canary-native.sh|guest/30-canary-native.sh
+packaging/macos/guest/40-install-payload-native.sh|guest/40-install-payload-native.sh
+packaging/macos/guest/50-verify-native.sh|guest/50-verify-native.sh

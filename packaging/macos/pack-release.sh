@@ -2,8 +2,15 @@
 # Build the unsigned Apple Silicon release archive from explicit inputs.
 #
 # This script deliberately has no CI-workspace discovery. The caller supplies
-# the Darwin launcher, the exact native payload, the trusted payload digest,
-# the release/ref version, output path, and SOURCE_DATE_EPOCH.
+# the Darwin launcher, BOTH exact payloads and their trusted digests, the
+# release/ref version, output path, and SOURCE_DATE_EPOCH.
+#
+# Two payloads, because the archive serves two execution profiles:
+#   --payload        the historical untagged amd64 tarball, run under Rosetta
+#                    by the debian13/jammy/debian12 profiles. Unchanged.
+#   --payload-arm64  the linux/arm64 tarball used by the native-arm64 profile.
+# The launcher picks between them from the resolved profile; see selectPayload
+# in tools/iolab-launcher/macos_lima.go.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,6 +21,8 @@ ARCHIVE_ROOT_NAME="iolbox-macos-arm64"
 LAUNCHER=""
 PAYLOAD=""
 PAYLOAD_SHA256=""
+PAYLOAD_ARM64=""
+PAYLOAD_ARM64_SHA256=""
 VERSION=""
 OUTPUT=""
 SOURCE_DATE_EPOCH=""
@@ -22,10 +31,27 @@ usage() {
     cat <<'EOF'
 Usage: packaging/macos/pack-release.sh \
   --launcher PATH --payload PATH --payload-sha256 SHA256 \
+  --payload-arm64 PATH --payload-arm64-sha256 SHA256 \
   --version VERSION --output PATH --source-date-epoch EPOCH
 
-All six inputs are required. The payload and launcher are never discovered by
-searching a build directory; the caller must identify and authenticate them.
+All eight inputs are required.
+
+  --payload / --payload-sha256              amd64 payload, run under Rosetta by
+                                            the debian13/jammy/debian12
+                                            profiles. Basename must be
+                                            iolbox-server-<version>.tar.gz
+  --payload-arm64 / --payload-arm64-sha256  linux/arm64 payload, used by the
+                                            native-arm64 profile. Basename must
+                                            be
+                                            iolbox-server-<version>-linux-arm64.tar.gz
+
+Both payloads are REQUIRED. With the native profile assets in the archive, a
+qualifying host's `auto` selects native; an archive missing the arm64 payload
+would fail only AFTER the profile is locked in, with no fallback left.
+Requiring both makes that state unrepresentable.
+
+Payloads and launcher are never discovered by searching a build directory; the
+caller must identify and authenticate them.
 EOF
 }
 
@@ -39,6 +65,8 @@ while [ "$#" -gt 0 ]; do
         --launcher) [ "$#" -ge 2 ] || die "--launcher needs a value"; LAUNCHER="$2"; shift 2 ;;
         --payload) [ "$#" -ge 2 ] || die "--payload needs a value"; PAYLOAD="$2"; shift 2 ;;
         --payload-sha256) [ "$#" -ge 2 ] || die "--payload-sha256 needs a value"; PAYLOAD_SHA256="$2"; shift 2 ;;
+        --payload-arm64) [ "$#" -ge 2 ] || die "--payload-arm64 needs a value"; PAYLOAD_ARM64="$2"; shift 2 ;;
+        --payload-arm64-sha256) [ "$#" -ge 2 ] || die "--payload-arm64-sha256 needs a value"; PAYLOAD_ARM64_SHA256="$2"; shift 2 ;;
         --version) [ "$#" -ge 2 ] || die "--version needs a value"; VERSION="$2"; shift 2 ;;
         --output) [ "$#" -ge 2 ] || die "--output needs a value"; OUTPUT="$2"; shift 2 ;;
         --source-date-epoch) [ "$#" -ge 2 ] || die "--source-date-epoch needs a value"; SOURCE_DATE_EPOCH="$2"; shift 2 ;;
@@ -50,20 +78,25 @@ done
 [ -n "$LAUNCHER" ] || die "--launcher is required"
 [ -n "$PAYLOAD" ] || die "--payload is required"
 [ -n "$PAYLOAD_SHA256" ] || die "--payload-sha256 is required"
+[ -n "$PAYLOAD_ARM64" ] || die "--payload-arm64 is required"
+[ -n "$PAYLOAD_ARM64_SHA256" ] || die "--payload-arm64-sha256 is required"
 [ -n "$VERSION" ] || die "--version is required"
 [ -n "$OUTPUT" ] || die "--output is required"
 [ -n "$SOURCE_DATE_EPOCH" ] || die "--source-date-epoch is required"
 
 [[ "$PAYLOAD_SHA256" =~ ^[0-9A-Fa-f]{64}$ ]] || die "--payload-sha256 must be 64 hexadecimal characters"
+[[ "$PAYLOAD_ARM64_SHA256" =~ ^[0-9A-Fa-f]{64}$ ]] || die "--payload-arm64-sha256 must be 64 hexadecimal characters"
 [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "version contains unsupported filename characters: $VERSION"
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || die "--source-date-epoch must be a non-negative integer"
 
 LAUNCHER="$(cd "$(dirname "$LAUNCHER")" && pwd)/$(basename "$LAUNCHER")"
 PAYLOAD="$(cd "$(dirname "$PAYLOAD")" && pwd)/$(basename "$PAYLOAD")"
+PAYLOAD_ARM64="$(cd "$(dirname "$PAYLOAD_ARM64")" && pwd)/$(basename "$PAYLOAD_ARM64")"
 OUTPUT="$(cd "$(dirname "$OUTPUT")" 2>/dev/null || { mkdir -p "$(dirname "$OUTPUT")"; cd "$(dirname "$OUTPUT")"; } && pwd)/$(basename "$OUTPUT")"
 
 [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ] || die "launcher must be a regular non-symlink file: $LAUNCHER"
 [ -f "$PAYLOAD" ] && [ ! -L "$PAYLOAD" ] || die "payload must be a regular non-symlink file: $PAYLOAD"
+[ -f "$PAYLOAD_ARM64" ] && [ ! -L "$PAYLOAD_ARM64" ] || die "arm64 payload must be a regular non-symlink file: $PAYLOAD_ARM64"
 command -v file >/dev/null 2>&1 || die "file is required to verify the Darwin launcher"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required on the Ubuntu packer"
 command -v tar >/dev/null 2>&1 || die "GNU tar is required"
@@ -71,7 +104,9 @@ command -v gzip >/dev/null 2>&1 || die "gzip is required"
 tar --version | grep -F 'GNU tar' >/dev/null || die "tar is not GNU tar"
 
 EXPECTED_PAYLOAD="iolbox-server-${VERSION}.tar.gz"
+EXPECTED_PAYLOAD_ARM64="iolbox-server-${VERSION}-linux-arm64.tar.gz"
 [ "$(basename "$PAYLOAD")" = "$EXPECTED_PAYLOAD" ] || die "payload basename is $(basename "$PAYLOAD"), expected $EXPECTED_PAYLOAD"
+[ "$(basename "$PAYLOAD_ARM64")" = "$EXPECTED_PAYLOAD_ARM64" ] || die "arm64 payload basename is $(basename "$PAYLOAD_ARM64"), expected $EXPECTED_PAYLOAD_ARM64"
 [ "$(basename "$OUTPUT")" = "${ARCHIVE_ROOT_NAME}.tar.gz" ] || die "output must be named ${ARCHIVE_ROOT_NAME}.tar.gz"
 
 LAUNCHER_FILE="$(file -b "$LAUNCHER")"
@@ -82,6 +117,8 @@ esac
 
 ACTUAL_PAYLOAD="$(sha256sum "$PAYLOAD" | awk '{print tolower($1)}')"
 [ "$ACTUAL_PAYLOAD" = "$(printf '%s' "$PAYLOAD_SHA256" | tr '[:upper:]' '[:lower:]')" ] || die "payload hash does not match trusted --payload-sha256 (actual $ACTUAL_PAYLOAD)"
+ACTUAL_PAYLOAD_ARM64="$(sha256sum "$PAYLOAD_ARM64" | awk '{print tolower($1)}')"
+[ "$ACTUAL_PAYLOAD_ARM64" = "$(printf '%s' "$PAYLOAD_ARM64_SHA256" | tr '[:upper:]' '[:lower:]')" ] || die "arm64 payload hash does not match trusted --payload-arm64-sha256 (actual $ACTUAL_PAYLOAD_ARM64)"
 
 [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || die "release manifest is missing or is a symlink: $MANIFEST"
 
@@ -107,7 +144,7 @@ while IFS='|' read -r source dest extra || [ -n "${source:-}" ]; do
     MANIFEST_DESTS+=("$dest")
 done < "$MANIFEST"
 
-[ "${#MANIFEST_SOURCES[@]}" -eq 18 ] || die "manifest has ${#MANIFEST_SOURCES[@]} entries, expected 18"
+[ "${#MANIFEST_SOURCES[@]}" -eq 24 ] || die "manifest has ${#MANIFEST_SOURCES[@]} entries, expected 24"
 
 for required_dest in \
     README.md LICENSE notices/THIRD_PARTY.md \
@@ -115,7 +152,10 @@ for required_dest in \
     lima/pinned-image-debian13.env lima/pinned-image.env lima/pinned-image-debian12.env \
     guest/lib.sh guest/10-multiarch-debian.sh guest/10-multiarch.sh \
     guest/20-kernel-hold-debian.sh guest/20-kernel-hold.sh guest/30-canary.sh \
-    guest/40-install-payload.sh guest/50-verify.sh; do
+    guest/40-install-payload.sh guest/50-verify.sh \
+    lima/iolbox-native-arm64.yaml lima/pinned-image-native-arm64.env \
+    guest/10-multiarch-native.sh guest/30-canary-native.sh \
+    guest/40-install-payload-native.sh guest/50-verify-native.sh; do
     found=0
     for dest in "${MANIFEST_DESTS[@]}"; do [ "$dest" = "$required_dest" ] && found=1; done
     [ "$found" -eq 1 ] || die "manifest is missing required destination: $required_dest"
@@ -149,6 +189,8 @@ copy_manifest_into_stage() {
     chmod 0755 "$stage/$ARCHIVE_ROOT_NAME/iolbox"
     cp -- "$PAYLOAD" "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD"
     chmod 0644 "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD"
+    cp -- "$PAYLOAD_ARM64" "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD_ARM64"
+    chmod 0644 "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD_ARM64"
     find "$stage/$ARCHIVE_ROOT_NAME" -type d -exec chmod 0755 {} +
 }
 
@@ -164,21 +206,28 @@ $ARCHIVE_ROOT_NAME/README.md
 $ARCHIVE_ROOT_NAME/SHA256SUMS
 $ARCHIVE_ROOT_NAME/guest
 $ARCHIVE_ROOT_NAME/guest/10-multiarch-debian.sh
+$ARCHIVE_ROOT_NAME/guest/10-multiarch-native.sh
 $ARCHIVE_ROOT_NAME/guest/10-multiarch.sh
 $ARCHIVE_ROOT_NAME/guest/20-kernel-hold-debian.sh
 $ARCHIVE_ROOT_NAME/guest/20-kernel-hold.sh
+$ARCHIVE_ROOT_NAME/guest/30-canary-native.sh
 $ARCHIVE_ROOT_NAME/guest/30-canary.sh
+$ARCHIVE_ROOT_NAME/guest/40-install-payload-native.sh
 $ARCHIVE_ROOT_NAME/guest/40-install-payload.sh
+$ARCHIVE_ROOT_NAME/guest/50-verify-native.sh
 $ARCHIVE_ROOT_NAME/guest/50-verify.sh
 $ARCHIVE_ROOT_NAME/guest/lib.sh
 $ARCHIVE_ROOT_NAME/iolbox
+$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD_ARM64
 $ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD
 $ARCHIVE_ROOT_NAME/lima
 $ARCHIVE_ROOT_NAME/lima/iolbox-bookworm.yaml
 $ARCHIVE_ROOT_NAME/lima/iolbox-jammy.yaml
+$ARCHIVE_ROOT_NAME/lima/iolbox-native-arm64.yaml
 $ARCHIVE_ROOT_NAME/lima/iolbox-trixie.yaml
 $ARCHIVE_ROOT_NAME/lima/pinned-image-debian12.env
 $ARCHIVE_ROOT_NAME/lima/pinned-image-debian13.env
+$ARCHIVE_ROOT_NAME/lima/pinned-image-native-arm64.env
 $ARCHIVE_ROOT_NAME/lima/pinned-image.env
 $ARCHIVE_ROOT_NAME/lima/profiles.env
 $ARCHIVE_ROOT_NAME/notices
@@ -189,7 +238,7 @@ EOF
         cat "$expected" >&2
         echo "actual staged members:" >&2
         cat "$actual" >&2
-        die "staged member tree is not the exact M6 layout"
+        die "staged member tree is not the exact expected layout"
     fi
 }
 
@@ -198,7 +247,8 @@ write_internal_checksums() {
     local root="$stage/$ARCHIVE_ROOT_NAME"
     local list="$stage/internal-members.txt"
     ( cd "$root" && LC_ALL=C find . -type f ! -name SHA256SUMS -print | sed 's#^\./##' | LC_ALL=C sort > "$list" )
-    [ "$(wc -l < "$list" | tr -d ' ')" -eq 20 ] || die "staged file count is not 20 before SHA256SUMS"
+    # 24 manifest files + the launcher + both payloads.
+    [ "$(wc -l < "$list" | tr -d ' ')" -eq 27 ] || die "staged file count is not 27 before SHA256SUMS"
     ( cd "$root" && sha256sum $(cat "$list") > SHA256SUMS )
     chmod 0644 "$root/SHA256SUMS"
 }
@@ -237,6 +287,7 @@ chmod 0644 "$OUTPUT" "$OUTPUT.sha256"
 
 echo "pack-release: launcher=$LAUNCHER_FILE"
 echo "pack-release: payload=$(basename "$PAYLOAD") sha256=$ACTUAL_PAYLOAD"
+echo "pack-release: payload-arm64=$(basename "$PAYLOAD_ARM64") sha256=$ACTUAL_PAYLOAD_ARM64"
 echo "pack-release: source_date_epoch=$SOURCE_DATE_EPOCH"
 echo "pack-release: archive=$OUTPUT sha256=$HASH1"
 echo "pack-release: independent stages byte-identical (hash=$HASH1)"
