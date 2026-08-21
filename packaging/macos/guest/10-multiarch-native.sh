@@ -375,10 +375,10 @@ run_provision() {
     rm -rf "$work_dir"
     trap - EXIT INT TERM
 
-    # Debian's qemu-user-binfmt packaging normally registers the handlers via
-    # update-binfmts automatically; make it explicit and idempotent so a
-    # provisioning re-run -- or a run that skipped installs because everything
-    # was already present -- cannot leave the handler disabled.
+    # The real registration comes from qemu-user-binfmt's postinst dropping a
+    # unit under systemd's binfmt.d, not from update-binfmts's own database --
+    # this call is a harmless no-op kept for defense in depth in case a future
+    # package version relies on update-binfmts instead.
     if have update-binfmts; then
         update-binfmts --enable qemu-x86_64 2>/dev/null || true
     fi
