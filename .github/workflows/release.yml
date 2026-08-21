@@ -113,13 +113,21 @@ jobs:
       # entirely and ships that placeholder ("GUI not bundled in this
       # build") straight into a release artifact — which is exactly what
       # the previous version of this workflow did. Never shortcut this.
-      - name: Build supervisor (build-release.sh — GUI embedded)
-        run: bash build-release.sh
+      # Both architectures are built by ONE invocation on purpose. The script
+      # runs `npm run build:embed` once and restores the committed placeholder
+      # when it exits, so any compile placed after it in this job would embed
+      # the placeholder instead of the real GUI. One invocation, one embed,
+      # two binaries that provably carry the same bundle.
+      - name: Build supervisors (build-release.sh — GUI embedded, amd64 + arm64)
+        run: bash build-release.sh --arch amd64,arm64
 
+      # gcc-aarch64-linux-gnu is needed only for the arm64 VPCS build below:
+      # VPCS is C, so unlike every Go component it cannot be cross-compiled by
+      # the toolchain we already have.
       - name: Install rootfs/packaging build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap zstd build-essential
+          sudo apt-get install -y debootstrap zstd build-essential gcc-aarch64-linux-gnu
 
       # fetch-vpcs.sh needs git + make + a C compiler (all covered by
       # build-essential + the runner's preinstalled git) to clone and
@@ -165,24 +173,78 @@ jobs:
       - name: Pack native (systemd) server tarball
         run: runtime/pack-native.sh --supervisor-bin supervisor/bin/supervisor-linux-amd64 --build-dir runtime/build --version "${{ steps.version.outputs.value }}"
 
+      # --- linux/arm64 payload, for the macOS native-arm64 profile only ------
+      #
+      # IOLBOX_BUILD_DIR must differ from the amd64 build dir: fetch-vpcs.sh
+      # writes $BUILD_DIR/vpcs/vpcs for BOTH architectures and short-circuits
+      # if that file already exists, so reusing runtime/build would silently
+      # skip this build and leave the amd64 binary in place.
+      - name: Build VPCS for linux/arm64
+        env:
+          IOLBOX_BUILD_DIR: runtime/build-arm64
+          VPCS_CC: aarch64-linux-gnu-gcc
+        run: runtime/fetch-vpcs.sh --arch arm64
+
+      # --out runtime/build so the tarball lands beside the amd64 one for the
+      # shared checksum manifest; --build-dir keeps its vpcs/toollaunch/pack
+      # staging separate. pack-native.sh cross-compiles toollaunch and every
+      # tool pack for the target arch itself and hard-fails on a wrong ELF.
+      - name: Pack native (systemd) server tarball — linux/arm64
+        run: |
+          runtime/pack-native.sh --arch arm64 \
+            --supervisor-bin supervisor/bin/supervisor-linux-arm64 \
+            --build-dir runtime/build-arm64 \
+            --out runtime/build \
+            --version "${{ steps.version.outputs.value }}"
+
+      # Two manifests on purpose. SHA256SUMS-ci.txt is itself a PUBLISHED
+      # release asset, so it must list exactly the files that are published —
+      # if it named the macOS-only arm64 payload, `sha256sum -c SHA256SUMS-ci.txt`
+      # against the downloaded release assets would fail on a missing file.
+      # The arm64 payload gets its own manifest, travelling with it in the
+      # CI-only artifact that build-macos consumes.
       - name: Generate checksums
         working-directory: runtime/build
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
-          sha256sum iolbox-rootfs.tar iolbox-ct-*.tar.zst iolbox-server-*.tar.gz > SHA256SUMS-ci.txt
+          sha256sum iolbox-rootfs.tar iolbox-ct-*.tar.zst "iolbox-server-${VERSION}.tar.gz" > SHA256SUMS-ci.txt
           cat SHA256SUMS-ci.txt
+          sha256sum "iolbox-server-${VERSION}-linux-arm64.tar.gz" > SHA256SUMS-macos-arm64.txt
+          cat SHA256SUMS-macos-arm64.txt
 
+      # PUBLISHED Linux artifacts. The paths are listed EXPLICITLY rather than
+      # globbed: the release job publishes iolbox-linux/**/* wholesale, so a
+      # wildcard here would silently turn the macOS-only arm64 payload into a
+      # public standalone Linux release asset — an extra shipped target with
+      # its own support expectations that nobody asked for. If a standalone
+      # linux/arm64 server target is ever wanted, that is a deliberate product
+      # decision with its own docs and install guide, not a side effect.
       - uses: actions/upload-artifact@v4
         with:
           name: iolbox-linux
           path: |
             runtime/build/iolbox-rootfs.tar
             runtime/build/iolbox-ct-*.tar.zst
-            runtime/build/iolbox-server-*.tar.gz
+            runtime/build/iolbox-server-${{ steps.version.outputs.value }}.tar.gz
             runtime/build/SHA256SUMS-ci.txt
 
+      # CI-ONLY artifact: consumed by build-macos, never published. It carries
+      # the checksum manifest too so build-macos can authenticate the payload
+      # the same way it authenticates the amd64 one.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iolbox-macos-payload-arm64
+          path: |
+            runtime/build/iolbox-server-${{ steps.version.outputs.value }}-linux-arm64.tar.gz
+            runtime/build/SHA256SUMS-macos-arm64.txt
+
   # ---------------------------------------------------------------------
-  # macOS: package the Darwin launcher with the exact native payload from
-  # build-linux above. This job never rebuilds or discovers a second payload.
+  # macOS: package the Darwin launcher with the exact payloads from
+  # build-linux above — the untagged amd64 one for the Rosetta profiles and
+  # the linux/arm64 one for the native-arm64 profile. This job never rebuilds
+  # a payload and never discovers one by searching; both are named exactly and
+  # verified against build-linux's checksum manifest before packing.
   # ---------------------------------------------------------------------
   build-macos:
     name: Build Apple Silicon macOS archive
@@ -203,6 +265,11 @@ jobs:
           name: iolbox-linux
           path: linux-artifact
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: iolbox-macos-payload-arm64
+          path: linux-artifact-arm64
+
       - name: Resolve release/ref version and source date
         id: version
         shell: bash
@@ -214,41 +281,52 @@ jobs:
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "source-date-epoch=$epoch" >> "$GITHUB_OUTPUT"
 
-      - name: Select and verify exact build-linux payload
+      # Both payloads go through the SAME authentication: exactly one file of
+      # the expected name, exactly one well-formed checksum manifest, exactly
+      # one line in it for that basename, and a real sha256sum -c. The logic
+      # is a shell function invoked twice rather than copied, so the two
+      # cannot drift apart — this is the security-relevant step of the job.
+      - name: Select and verify exact build-linux payloads
         id: payload
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           set -euo pipefail
-          mapfile -t payloads < <(find linux-artifact -type f -name "iolbox-server-${VERSION}.tar.gz" -print)
-          test "${#payloads[@]}" -eq 1
-          payload="${payloads[0]}"
-          base="$(basename "$payload")"
-          mapfile -t checksum_files < <(find linux-artifact -type f -name SHA256SUMS-ci.txt -print)
-          test "${#checksum_files[@]}" -eq 1
-          checksums="${checksum_files[0]}"
-          expected="$(awk -v b="$base" '
-            BEGIN { bad=0; matches=0; digest="" }
-            NF != 2 || length($1) != 64 || $1 !~ /^[0-9A-Fa-f]+$/ || $2 !~ /^\*?[^[:space:]]+$/ { bad=1 }
-            $2 == b || $2 == "*" b { matches++; digest=$1 }
-            END {
-              if (bad || matches != 1) exit 1
-              print digest
+
+          select_and_verify() {
+            local label="$1" root="$2" want="$3" manifest="$4"
+            local payload base checksums expected
+            mapfile -t payloads < <(find "$root" -type f -name "$want" -print)
+            test "${#payloads[@]}" -eq 1
+            payload="${payloads[0]}"
+            base="$(basename "$payload")"
+            mapfile -t checksum_files < <(find "$root" -type f -name "$manifest" -print)
+            test "${#checksum_files[@]}" -eq 1
+            checksums="${checksum_files[0]}"
+            expected="$(awk -v b="$base" '
+              BEGIN { bad=0; matches=0; digest="" }
+              NF != 2 || length($1) != 64 || $1 !~ /^[0-9A-Fa-f]+$/ || $2 !~ /^\*?[^[:space:]]+$/ { bad=1 }
+              $2 == b || $2 == "*" b { matches++; digest=$1 }
+              END {
+                if (bad || matches != 1) exit 1
+                print digest
+              }
+            ' "$checksums")" || {
+              echo "checksum manifest is malformed or does not contain exactly one line for $base" >&2
+              exit 1
             }
-          ' "$checksums")" || {
-            echo "checksum manifest is malformed or does not contain exactly one line for $base" >&2
-            exit 1
+            printf '%s' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$'
+            ( cd "$(dirname "$payload")" && printf '%s  %s\n' "$expected" "$base" | sha256sum -c - )
+            echo "${label}path=$payload" >> "$GITHUB_OUTPUT"
+            echo "${label}basename=$base" >> "$GITHUB_OUTPUT"
+            echo "${label}sha256=$expected" >> "$GITHUB_OUTPUT"
+            echo "build-linux payload ($label): $payload"
+            echo "trusted payload sha256 ($label): $expected"
           }
-          printf '%s' "$expected" | grep -Eq '^[0-9A-Fa-f]{64}$'
-          ( cd "$(dirname "$payload")" && printf '%s  %s\n' "$expected" "$base" | sha256sum -c - )
-          echo "path=$payload" >> "$GITHUB_OUTPUT"
-          echo "basename=$base" >> "$GITHUB_OUTPUT"
-          echo "sha256=$expected" >> "$GITHUB_OUTPUT"
-          echo "checksums=$checksums" >> "$GITHUB_OUTPUT"
-          echo "build-linux payload: $payload"
-          echo "build-linux checksum manifest: $checksums"
-          echo "trusted payload sha256: $expected"
+
+          select_and_verify "" linux-artifact "iolbox-server-${VERSION}.tar.gz" SHA256SUMS-ci.txt
+          select_and_verify "arm64-" linux-artifact-arm64 "iolbox-server-${VERSION}-linux-arm64.tar.gz" SHA256SUMS-macos-arm64.txt
 
       - name: Vet and test launcher
         working-directory: tools/iolab-launcher
@@ -268,6 +346,8 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ steps.version.outputs.source-date-epoch }}
           PAYLOAD: ${{ steps.payload.outputs.path }}
           PAYLOAD_SHA256: ${{ steps.payload.outputs.sha256 }}
+          PAYLOAD_ARM64: ${{ steps.payload.outputs.arm64-path }}
+          PAYLOAD_ARM64_SHA256: ${{ steps.payload.outputs.arm64-sha256 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -275,6 +355,8 @@ jobs:
             --launcher "$GITHUB_WORKSPACE/tools/iolab-launcher/bin/iolbox-darwin-arm64" \
             --payload "$GITHUB_WORKSPACE/$PAYLOAD" \
             --payload-sha256 "$PAYLOAD_SHA256" \
+            --payload-arm64 "$GITHUB_WORKSPACE/$PAYLOAD_ARM64" \
+            --payload-arm64-sha256 "$PAYLOAD_ARM64_SHA256" \
             --version "$VERSION" \
             --output "$GITHUB_WORKSPACE/iolbox-macos-arm64.tar.gz" \
             --source-date-epoch "$SOURCE_DATE_EPOCH"
@@ -285,6 +367,8 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ steps.version.outputs.source-date-epoch }}
           PAYLOAD: ${{ steps.payload.outputs.path }}
           PAYLOAD_SHA256: ${{ steps.payload.outputs.sha256 }}
+          PAYLOAD_ARM64: ${{ steps.payload.outputs.arm64-path }}
+          PAYLOAD_ARM64_SHA256: ${{ steps.payload.outputs.arm64-sha256 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -293,6 +377,8 @@ jobs:
             --launcher "$GITHUB_WORKSPACE/tools/iolab-launcher/bin/iolbox-darwin-arm64" \
             --payload "$GITHUB_WORKSPACE/$PAYLOAD" \
             --payload-sha256 "$PAYLOAD_SHA256" \
+            --payload-arm64 "$GITHUB_WORKSPACE/$PAYLOAD_ARM64" \
+            --payload-arm64-sha256 "$PAYLOAD_ARM64_SHA256" \
             --version "$VERSION" \
             --source-date-epoch "$SOURCE_DATE_EPOCH"
           echo "--- tar listing ---"
@@ -357,7 +443,15 @@ jobs:
 
             Everything else — `iolbox-rootfs.tar` (WSL2), `iolbox-ct-${{ github.ref_name }}.tar.zst` (Proxmox LXC), `iolbox-server-${{ github.ref_name }}.tar.gz` (native systemd), `iolbox-launcher.exe`, `capture-helper.exe`, `SHA256SUMS-ci.txt` — is already attached by this workflow.
 
-            **Apple Silicon macOS (Lima):** the Mac archive requires user-installed Lima and qualifies Apple Silicon macOS with the Debian 13/trixie default profile and Ubuntu 22.04/Jammy compatibility profile. The default guest/kernel is Debian 13 with the pinned 6.12.101+deb13-cloud-arm64 kernel; Jammy is pinned to the qualified 5.15 line. The existing amd64 supervisor/VPCS and **x86_64 IOL only** run through Rosetta; i386/i86bi and arm64-native IOL are unsupported. The archive is unsigned: verify its outer and internal SHA-256 files, inspect quarantine, and if the launcher is quarantined remove that attribute from the launcher only with `xattr -d com.apple.quarantine ./iolbox` before `./iolbox start`. GUI, console, and capture forwards are loopback-only and unauthenticated. No Cisco software is included.
+            **Apple Silicon macOS (Lima):** the Mac archive requires user-installed Lima and ships **two** Linux payloads; the launcher selects one from the profile it resolves.
+
+            - **native-arm64** runs the supervisor, VPCS, and tool packs as **real arm64 binaries** on a Debian 13/trixie guest with the pinned 6.12.101+deb13-cloud-arm64 kernel. x86_64 IOL is still translated, by **qemu-user inside the guest** (installed from Debian at provisioning time), not by Rosetta.
+            - **Rosetta profiles** — `debian13` (default guest) and `jammy` (compatibility, pinned to the qualified 5.15 line) — are unchanged and run the existing amd64 payload under Rosetta.
+            - On a qualifying Apple Silicon host with **no existing iolbox install**, `auto` now prefers **native-arm64**. An **existing** install keeps its current profile and Lima machine; migrate deliberately with `--profile native-arm64`. To stay on Rosetta explicitly, set `IOLBOX_PROFILE=rosetta-amd64`. `auto` falls back to Rosetta whenever the native preflight fails; a forced `--profile native-arm64` fails closed instead.
+            - **x86_64 IOL only, on both profiles.** i386/i86bi remain unsupported, and arm64-native IOL remains unsupported.
+            - native-arm64 has **no host qualification row**, so the launcher reports it as `UNMEASURED — CANARY REQUIRED`. It is gated at runtime by its own fail-closed canary, not by a prior qualification result.
+
+            The archive is unsigned: verify its outer and internal SHA-256 files, inspect quarantine, and if the launcher is quarantined remove that attribute from the launcher only with `xattr -d com.apple.quarantine ./iolbox` before `./iolbox start`. GUI, console, and capture forwards are loopback-only and unauthenticated. No Cisco software is included.
 
             See [docs/INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md) for which artifact matches your situation, and un-draft only once the manually-built artifacts above are attached.
           generate_release_notes: true
