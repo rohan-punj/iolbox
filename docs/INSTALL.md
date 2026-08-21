@@ -536,21 +536,31 @@ still there. It is not a control panel; `stop`, `status`, `diagnose`, and
 
 `IOLbox.app` does not make the first run warning-free; nothing in this
 archive is signed or notarized. On the `curl` path nothing is quarantined
-and the app just works. **On the browser-download path**, run this once,
-before the first double-click, on the whole extracted folder:
+and the app just works — **verified on real Apple Silicon hardware.**
+**On the browser-download path, running the step below first is not
+optional — it is the only way to launch `IOLbox.app` at all.** Before the
+first double-click, run this once on the whole extracted folder:
 
 ```sh
 xattr -dr com.apple.quarantine /path/to/extracted/iolbox-macos-arm64
 ```
 
-Skipping that step doesn't just risk a Gatekeeper dialog — macOS may run the
-app from a temporary, translocated copy that can't find the `iolbox` CLI or
-`lima/` folder next to it. If that happens, `IOLbox.app` shows an alert
-telling you to run the command above and try again. This translocation
-behavior is inferred from Apple's own documentation and has not yet been
-observed on this project's own hardware; per this section's own rule, the
-exact observed alert wording and dialog sequence must be recorded here from
-a real run before publication.
+**Skipping this step does not show a bypassable warning — it gets the app
+deleted.** Verified on real Apple Silicon hardware (macOS 26): double-clicking
+a quarantined `IOLbox.app` produces the dialog **"IOLbox is damaged and
+can't be opened. You should move it to the Trash,"** with no System
+Settings → Open Anyway recovery offered anywhere in that flow — Trash is
+the only button. (This is Apple's standard, if misleadingly worded, message
+for an unsigned, non-notarized app; nothing is actually corrupted.) If you
+see this dialog, the app is gone — re-extract the archive, run the `xattr`
+command above, and try again.
+
+Even with the command above run first, macOS may still translocate a
+quarantined app to a temporary, read-only copy that can't find the `iolbox`
+CLI or `lima/` folder next to it if any step of that consent flow is
+skipped; App Translocation was independently observed on real hardware for
+the un-stripped case. If `IOLbox.app` shows an alert about not finding its
+files, it's telling you to run the command above and try again.
 
 ### Start, data, upgrade, and uninstall
 

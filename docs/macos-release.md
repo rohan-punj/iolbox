@@ -98,10 +98,12 @@ docs, and `THIRD_PARTY.md` must agree on all of the following:
 - `IOLbox.app` is documented as an optional, unsigned convenience wrapper
   around the CLI (not a replacement for it) that cannot reduce first-run
   friction; the proactive `xattr -dr <folder>` step for browser downloads is
-  stated as the primary documented step before the first double-click, not
-  only as a post-failure remedy, and the App Translocation alert wording is
-  either the actually observed text or explicitly marked unverified — see
-  `docs/macos-launcher-icon-plan.md` §11–§12.
+  documented as mandatory, not optional — hardware qualification confirmed
+  a quarantined `IOLbox.app` is deleted via Gatekeeper's "is damaged, move
+  to Trash" dialog with no recovery path, not merely blocked with a
+  bypassable warning. The App Translocation alert wording is either the
+  actually observed text or explicitly marked unverified — see
+  `docs/macos-launcher-icon-plan.md` §11, §12, and §14.
 
 ## Publication gate
 

@@ -64,17 +64,26 @@ run — is still there. It is not a control panel: `stop`, `status`,
 
 `IOLbox.app` cannot make the first run warning-free; nothing in this archive
 is signed or notarized. If you downloaded with `curl`, nothing is
-quarantined and the app just works. **If you downloaded through a browser**,
-run this once, before the first double-click, on the whole extracted folder:
+quarantined and the app just works. **If you downloaded through a browser,
+running the command below first is not optional — it is the only way to
+launch `IOLbox.app` at all.** Run this once, before the first double-click,
+on the whole extracted folder:
 
 ~~~sh
 xattr -dr com.apple.quarantine /path/to/extracted/iolbox-macos-arm64
 ~~~
 
-Skipping that step doesn't just risk a Gatekeeper dialog — macOS may run the
-app from a temporary, translocated copy that can't find the `iolbox` CLI or
-`lima/` folder next to it. If that happens, `IOLbox.app` shows an alert
-telling you to run the command above and try again.
+**Skipping this step does not show a bypassable warning — it gets the app
+deleted.** A quarantined `IOLbox.app` shows the dialog "IOLbox is damaged
+and can't be opened. You should move it to the Trash," with no recovery
+option offered; Trash is the only button. Nothing is actually corrupted —
+this is Apple's standard message for an unsigned, non-notarized app. If you
+see it, re-extract the archive, run the command above, and try again.
+
+Even with the command above run first, macOS may still translocate a
+quarantined app to a temporary, read-only copy that can't find the `iolbox`
+CLI or `lima/` folder next to it. If `IOLbox.app` shows an alert about not
+finding its files, it's telling you to run the command above and try again.
 
 The launcher resolves a profile, then creates or reuses the durable named
 Lima guest for it, verifies that profile's canary and pinned guest/kernel, and

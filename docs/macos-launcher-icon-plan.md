@@ -715,11 +715,95 @@ and `launchctl asuser <uid> open ...` failed with `Could not switch to audit
 session: Operation not permitted`. This is a macOS SSH-session/audit-session
 restriction unrelated to this design — an SSH session isn't attached to the
 console's Aqua bootstrap context, so LaunchServices refuses to spawn a
-GUI-facing app from it. Consequently the §11.4 matrix's Finder-launch,
-App-Translocation-in-practice, Terminal-window-visibility, and Dock-pin rows
-are **still open** and require either physical presence at the Mac or a
-VNC/Screen-Sharing session with the console's real login session — plain SSH
-cannot exercise them. Running the compiled stub binary directly (bypassing
-LaunchServices) sidesteps this restriction for logic testing, as done above,
-but by construction cannot exercise App Translocation, which is a
-Finder/LaunchServices-specific mechanism.
+GUI-facing app from it, and no non-root SSH-side workaround was available
+(Screen Sharing existed but was not running, and starting it needs `sudo`
+which wasn't available to this session either). Running the compiled stub
+binary directly (bypassing LaunchServices) sidesteps this restriction for
+logic testing, as done above, but by construction cannot exercise App
+Translocation, which is a Finder/LaunchServices-specific mechanism.
+
+**Update: real Finder double-click, curl-path scenario — CONFIRMED on
+hardware (2026-08-21).** The owner double-clicked `curl-path/iolbox-macos-arm64/IOLbox.app`
+at the physical console. Observed via SSH immediately after: a new
+`start-<pid>.command` script appeared in
+`~/Library/Caches/io.github.rohan-punj.iolbox/` with a fresh PID and
+timestamp, correct `ROOT` resolution and quoting, and — checked directly
+with `xattr -l` — **no `com.apple.quarantine` attribute**, matching the
+earlier direct-binary result but now via a genuine Finder launch rather than
+a workaround. The dummy `iolbox` script ran to completion with no errors and
+no stuck processes. This closes the curl-path row of the §11.4 matrix.
+
+**Update: browser-path (quarantined), no proactive `xattr` — CONFIRMED, and
+worse than assumed (2026-08-21).** The owner double-clicked
+`browser-path/iolbox-macos-arm64/IOLbox.app` (already quarantined, `xattr
+-dr` deliberately *not* run first) at the physical console. The unified log
+(`log show --predicate 'process == "syspolicyd" OR process == "Finder"'`)
+shows the real sequence:
+
+1. `syspolicyd` scanned the app and logged `Prompt shown (1, 0), waiting for
+   response` — Gatekeeper did present a dialog.
+2. A real App Translocation mount appeared and tore down
+   (`/private/var/.../T/AppTranslocation/6AFC0210-.../`), confirming
+   translocation genuinely occurs for a quarantined `IOLbox.app` launched
+   from Finder on this hardware/OS (macOS 26.6.2) — not just a theoretical
+   risk cited from Apple's docs, an observed one.
+3. ~6 seconds later: `Skipping adding or removing protection because app was
+   moved to trash`. **The owner reports the exact dialog text: "[IOLbox] is
+   damaged and can't be opened. You should move it to the Trash."** This is
+   Apple's actual (if misleadingly worded — nothing is corrupted) Gatekeeper
+   message for an unsigned, non-notarized, quarantined app on this macOS
+   version. It is a *different* dialog than §4's original assumption
+   ("cannot be opened because Apple cannot verify... System Settings → Open
+   Anyway") — that flow applies to identified-but-untrusted developers;
+   "is damaged" is what an ad-hoc-signed-only, non-notarized app gets
+   instead, and it offers **no System Settings recovery path at all** —
+   Trash is the only button. §4 and the INSTALL.md/README paragraphs written
+   before this finding are corrected below to state the real wording rather
+   than the guessed one.
+
+**Consequence for the stub's own logic: it never ran.** Gatekeeper blocked
+execution before handing control to `main()`, so this run does *not*
+exercise the translocation-alert wording in §11.1 step 2 — that alert only
+fires if the binary gets to execute at all, which this scenario shows cannot
+be assumed for a quarantined `.app` on this macOS version.
+
+**This strengthens, not weakens, §11.2's core recommendation.** The
+proactive `xattr -dr com.apple.quarantine <folder>` step before the first
+double-click is not a nice-to-have friction reducer — on this real hardware,
+skipping it risks the app being deleted outright before any recovery option
+appears, which is worse than the "worse than the bare binary" framing §4
+originally worried about. `docs/INSTALL.md`'s IOLbox.app paragraph should be
+strengthened accordingly (done — see below) rather than left as "may show a
+dialog."
+
+**Update: browser-path, WITH proactive `xattr -dr` first — CONFIRMED clean
+(2026-08-21).** A fresh copy was quarantined identically (simulating a new
+browser download), then `xattr -dr com.apple.quarantine` was run on the
+whole extracted folder *before* the first double-click, per §11.2's
+documented flow. The owner then double-clicked `IOLbox.app` and reports it
+"ran fine." Confirmed independently via the unified log and the filesystem:
+
+- `IOLbox.app` still exists (not trashed).
+- `syspolicyd`'s Gatekeeper scan resolved with `evaluateScanResult: 2` and
+  `Unregistering bundle for protection after scan` — a clean pass, with
+  **no** `Prompt shown` line and **no** `moved to trash` line, unlike the
+  unstripped run above.
+- A fresh `start-<pid>.command` was generated with the correct `ROOT` and
+  **no `com.apple.quarantine` attribute**, same as every other run.
+
+This closes the loop: the design's core recommendation — strip quarantine
+recursively on the whole folder *before* the first double-click, not after a
+failure — is now confirmed on real hardware to produce a fully clean,
+dialog-free launch on the browser-download path, and the un-stripped
+alternative is confirmed to delete the app via a "damaged" dialog with no
+recovery option. Both halves of §11.2's claim are now hardware-verified, not
+just documented as design intent.
+
+**Still open:** the exact wording of the App Translocation alert (§11.1 step
+2) was never exercised — Gatekeeper blocks quarantined execution before the
+stub gets control, so that code path can only be reached in a scenario this
+project hasn't hit yet (e.g. quarantine present but Gatekeeper's XProtect
+scan itself unavailable/skipped). Dock-pin behavior and Dock-pin-after-
+upgrade remain unverified. Both are lower-priority than the two flows just
+confirmed, since the documented recommended flow is now proven to avoid the
+translocation code path entirely.
