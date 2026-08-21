@@ -531,8 +531,13 @@ the same `iolbox` CLI. Once the quarantine check above is done, it lets you
 start iolbox from Finder or the Dock instead of a terminal command: it opens
 a real Terminal window running `./iolbox start`, so every prompt and log
 line the CLI would show — including the vCPU/RAM prompt on first run — is
-still there. It is not a control panel; `stop`, `status`, `diagnose`, and
-`upgrade` remain CLI-only.
+still there. Once `start` finishes, that same Terminal window drops into a
+small `iolbox>` prompt: type `stop` to shut the VM down, `status` or
+`diagnose` to check on it, or close the window to leave it running in the
+background — closing the window does **not** stop the VM, only an explicit
+`stop` does. `IOLbox.app` is still not a control panel: `upgrade` and
+anything beyond stop/status/diagnose remain CLI-only, run from a normal
+terminal in the extracted folder.
 
 `IOLbox.app` does not make the first run warning-free; nothing in this
 archive is signed or notarized. On the `curl` path nothing is quarantined

@@ -125,7 +125,7 @@ func writeLaunchScript(root string) (string, error) {
 		return "", err
 	}
 
-	script := "#!/bin/bash\nset -e\ncd " + posixSingleQuote(root) + "\nexec ./iolbox start\n"
+	script := buildLaunchScript(root)
 
 	final := filepath.Join(dir, "start-"+strconv.Itoa(os.Getpid())+".command")
 	tmp := final + ".tmp"
@@ -143,6 +143,56 @@ func writeLaunchScript(root string) (string, error) {
 // POSIX shell command, escaping any embedded single quotes.
 func posixSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// buildLaunchScript renders the launch script for root. Deliberately does
+// NOT `exec ./iolbox start`: after a successful start this drops into a
+// tiny interactive loop instead of letting the script (and the Terminal
+// window's usefulness) end at "[Process completed]" — the CLI's stop/
+// status/diagnose commands stay one word away without the user having to
+// re-navigate to the extracted folder. `set -e` covers only the initial
+// `cd`+`start`, so a `start` failure still exits the script immediately
+// with its real exit code, unchanged from before; the loop itself runs
+// under `set +e` so a single failed `status`/`diagnose` doesn't kill the
+// session.
+func buildLaunchScript(root string) string {
+	return "#!/bin/bash\n" +
+		"set -e\n" +
+		"cd " + posixSingleQuote(root) + "\n" +
+		"./iolbox start\n" +
+		"set +e\n" +
+		"echo\n" +
+		"echo \"IOLbox is running. Type 'stop' to stop the VM, or close this window to leave it running in the background.\"\n" +
+		"while true; do\n" +
+		"  printf 'iolbox> '\n" +
+		"  if ! IFS= read -r cmd; then\n" +
+		"    echo\n" +
+		"    echo \"Leaving the VM running. Run './iolbox stop' from this folder later, or close this window.\"\n" +
+		"    break\n" +
+		"  fi\n" +
+		"  case \"$cmd\" in\n" +
+		"    stop)\n" +
+		"      ./iolbox stop\n" +
+		"      break\n" +
+		"      ;;\n" +
+		"    status)\n" +
+		"      ./iolbox status\n" +
+		"      ;;\n" +
+		"    diagnose)\n" +
+		"      ./iolbox diagnose\n" +
+		"      ;;\n" +
+		"    \"\"|help)\n" +
+		"      echo \"commands: stop, status, diagnose\"\n" +
+		"      ;;\n" +
+		"    exit|quit)\n" +
+		"      echo \"Leaving the VM running. Run './iolbox stop' from this folder later, or close this window.\"\n" +
+		"      break\n" +
+		"      ;;\n" +
+		"    *)\n" +
+		"      echo \"unknown command: $cmd (try: stop, status, diagnose)\"\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"done\n"
 }
 
 func alert(title, message string) {

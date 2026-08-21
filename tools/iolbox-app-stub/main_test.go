@@ -115,7 +115,36 @@ func TestWriteLaunchScriptIsPerProcessAndExecutable(t *testing.T) {
 	if !strings.Contains(got, posixSingleQuote(root)) {
 		t.Fatalf("expected script to reference quoted root %q, got: %s", root, got)
 	}
-	if !strings.Contains(got, "exec ./iolbox start") {
-		t.Fatalf("expected script to exec ./iolbox start, got: %s", got)
+	if !strings.Contains(got, "./iolbox start") {
+		t.Fatalf("expected script to run ./iolbox start, got: %s", got)
+	}
+	if strings.Contains(got, "exec ./iolbox start") {
+		t.Fatalf("script must NOT exec ./iolbox start -- exec would replace the shell and skip the interactive stop/status/diagnose loop, got: %s", got)
+	}
+}
+
+func TestBuildLaunchScriptHasInteractiveStopLoop(t *testing.T) {
+	got := buildLaunchScript(filepath.Join("some", "archive", "root"))
+
+	for _, want := range []string{
+		"./iolbox start\n",
+		"set +e",
+		"./iolbox stop",
+		"./iolbox status",
+		"./iolbox diagnose",
+		"while true; do",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected script to contain %q, got:\n%s", want, got)
+		}
+	}
+
+	// `set -e` must cover only the cd+start, not the interactive loop --
+	// otherwise a single failed `status`/`diagnose` would kill the session.
+	setEIdx := strings.Index(got, "set -e")
+	startIdx := strings.Index(got, "./iolbox start")
+	setPlusEIdx := strings.Index(got, "set +e")
+	if !(setEIdx >= 0 && setEIdx < startIdx && startIdx < setPlusEIdx) {
+		t.Fatalf("expected order set -e < ./iolbox start < set +e, got:\n%s", got)
 	}
 }

@@ -311,7 +311,9 @@ func runGuestSequence(ctx context.Context, l *limaClient, machine string, p macO
 	canaryStep := p.canaryStep()
 	steps := []string{p.MultiarchStep, p.KernelHoldStep, canaryStep, p.installStep(), p.verifyStep()}
 	for _, step := range steps {
-		err := guestStep(ctx, l, machine, step, env)
+		err := withProgress("guest step "+step, 0, func() error {
+			return guestStep(ctx, l, machine, step, env)
+		})
 		if step == canaryStep {
 			if err != nil {
 				_ = recordCanary(machine, facts, limaVersion, "fail", exitCodeFor(err))
@@ -372,7 +374,16 @@ func runProvision(ctx context.Context, l *limaClient, machine string, p macOSPro
 	validAttestation := func() error {
 		return requireAttestation(attestationPath, p, facts, l.info.Version)
 	}
-	created, err := ensureMachineWithPorts(ctx, l, machine, state, templatePath, attestationPath, validAttestation, &ports)
+	machineLabel := fmt.Sprintf("starting Lima machine %q", machine)
+	if state == "" {
+		machineLabel = fmt.Sprintf("creating Lima machine %q", machine)
+	}
+	var created bool
+	err = withProgress(machineLabel, 0, func() error {
+		var innerErr error
+		created, innerErr = ensureMachineWithPorts(ctx, l, machine, state, templatePath, attestationPath, validAttestation, &ports)
+		return innerErr
+	})
 	if err != nil {
 		return err
 	}
@@ -385,14 +396,19 @@ func runProvision(ctx context.Context, l *limaClient, machine string, p macOSPro
 		fmt.Fprintln(os.Stderr, "Remediation: brew reinstall lima (brew upgrade may be a no-op when Lima is already current).")
 	}
 	payloadBase := filepath.Base(payloadPath)
-	if err := stageFiles(ctx, l, machine, p, payloadPath, payloadBase); err != nil {
+	if err := withProgress("staging provisioning files", 0, func() error {
+		return stageFiles(ctx, l, machine, p, payloadPath, payloadBase)
+	}); err != nil {
 		return err
 	}
 	if err := runGuestSequence(ctx, l, machine, p, facts, l.info.Version, payloadBase, config); err != nil {
 		return err
 	}
 	guiPort := ports.GUIPort
-	if _, err := waitHTTPReady(ctx, nil, fmt.Sprintf("http://127.0.0.1:%d/", guiPort), config.BootTimeout); err != nil {
+	if err := withProgress("waiting for GUI to become ready", 0, func() error {
+		_, err := waitHTTPReady(ctx, nil, fmt.Sprintf("http://127.0.0.1:%d/", guiPort), config.BootTimeout)
+		return err
+	}); err != nil {
 		return codedError(exitVerify, "GUI readiness failed: %v", err)
 	}
 	if err := verifyDarwinHostContract(ports, 2*time.Second); err != nil {
