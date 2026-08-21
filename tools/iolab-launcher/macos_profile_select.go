@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -76,7 +77,13 @@ type profileSelectionResult struct {
 	// ProfileName is the profileTable row name to pass to loadMacOSProfile.
 	ProfileName string
 	// Source explains where Selected came from: explicit-flag / persisted /
-	// persisted-fallback-rosetta / auto-native / auto-fallback-rosetta.
+	// persisted-fallback-rosetta / auto-native / auto-fallback-rosetta /
+	// auto-existing-rosetta-machine.
+	//
+	// auto-existing-rosetta-machine is applied AFTER resolveProfileSelection
+	// returns, by adjustAutoSelectionForExistingInstall (see below) — it is
+	// the only Source this file's resolver cannot produce on its own,
+	// because it depends on host Lima inventory the resolver does not read.
 	Source string
 	// FallbackReason is non-empty only when Requested != Selected.
 	FallbackReason string
@@ -298,8 +305,15 @@ func nativePreflight(ctx context.Context, facts hostFacts, table profileTable, l
 	return r
 }
 
-// resolveProfileSelection is the single entry point macos_cli.go calls. It
-// applies the explicit-flag > persisted > auto precedence, runs native
+// resolveProfileSelection is the first of two steps macos_cli.go calls: it
+// decides the selection from flags, persisted state, and host facts. When it
+// returns Source "auto-native", macos_cli.go then calls
+// adjustAutoSelectionForExistingInstall to finalize that decision against
+// the host's actual Lima inventory (it is not the "single entry point" it
+// once was — auto's native preference is not safe to apply without knowing
+// whether the user already has an install).
+//
+// It applies the explicit-flag > persisted > auto precedence, runs native
 // preflight whenever native-arm64 is in play (forced, persisted, or auto),
 // and fails closed: a FORCED native-arm64 selection that fails preflight is
 // returned as an error (never silently downgraded), while a PERSISTED or
@@ -369,4 +383,216 @@ func resolveProfileSelection(ctx context.Context, explicitFlag string, table pro
 		return profileSelectionResult{Requested: selectionAuto, Selected: selectionRosettaAMD64, ProfileName: rosettaName, Source: "auto-fallback-rosetta", FallbackReason: pf.Reason}, nil
 	}
 	return profileSelectionResult{Requested: selectionAuto, Selected: selectionNativeARM64, ProfileName: nativeName, Source: "auto-native"}, nil
+}
+
+// sourceAutoExistingRosettaMachine is the Source value for the continuity
+// fallback below. Distinct from "auto-fallback-rosetta" on purpose: that one
+// means "native was not usable on this host", this one means "native was
+// usable but the user already has an install we must not abandon".
+// status/diagnose must be able to tell those apart.
+const sourceAutoExistingRosettaMachine = "auto-existing-rosetta-machine"
+
+// machineNameForProfileRow mirrors macos_cli.go's derivation
+// (`opts.Machine = "iolbox-" + profile.Name`). The two must change together;
+// this fix exists precisely because that derivation makes the resolved
+// profile decide which VM the launcher talks to.
+func machineNameForProfileRow(row string) string {
+	return "iolbox-" + row
+}
+
+// existingNonNativeProfileRow reports the profile-table row whose derived
+// Lima machine already exists on this host, preferring the table's DEFAULT
+// row.
+//
+// The remaining rows are considered in sorted name order because
+// profileTable.Profiles is an unordered map: without the sort, a host with
+// two equally-eligible non-default rows would pick a different one from run
+// to run, which would be a genuinely nondeterministic profile selection.
+func existingNonNativeProfileRow(machines []machineInfo, table profileTable) (string, bool) {
+	exists := func(row string) bool {
+		_, ok := findMachine(machines, machineNameForProfileRow(row))
+		return ok
+	}
+	if table.Default != "" && table.Default != nativeProfileTableName && exists(table.Default) {
+		return table.Default, true
+	}
+	rows := make([]string, 0, len(table.Profiles))
+	for row := range table.Profiles {
+		if row == nativeProfileTableName || row == table.Default {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	sort.Strings(rows)
+	for _, row := range rows {
+		if exists(row) {
+			return row, true
+		}
+	}
+	return "", false
+}
+
+// attestedProfileRowFunc reports the profile row a machine was actually
+// provisioned as, according to its host structural-gate attestation, and
+// whether that is known. Injected so the decision function stays pure and
+// testable on a host with no Lima and no attestation files.
+type attestedProfileRowFunc func(machine string) (string, bool)
+
+// attestedProfileRowFor returns the production attestedProfileRowFunc: it
+// reads <machine>-structural-gate.json and reports its recorded profile,
+// but only when that profile is a row this asset root actually knows.
+//
+// This matters because a MACHINE NAME IS NOT PROOF OF ITS PROFILE. The name
+// is merely the default derivation; a user can pair any --machine with any
+// --profile. The attestation is written by the guest install step and
+// records what the machine was really provisioned as, so it outranks the
+// name whenever both are available.
+func attestedProfileRowFor(table profileTable) attestedProfileRowFunc {
+	return func(machine string) (string, bool) {
+		path, err := hostAttestationPath(machine)
+		if err != nil {
+			return "", false
+		}
+		att, err := readAttestation(path)
+		if err != nil {
+			return "", false
+		}
+		if att.Profile == "" {
+			return "", false
+		}
+		if _, known := table.Profiles[att.Profile]; !known {
+			return "", false
+		}
+		return att.Profile, true
+	}
+}
+
+// adjustAutoSelectionForExistingInstall keeps a pre-existing install on its
+// own profile when `auto` would otherwise migrate it to native-arm64.
+//
+// Why this exists: the Lima machine name is derived from the resolved
+// profile, so letting `auto` flip an existing install to native-arm64 points
+// the launcher at a DIFFERENT machine that does not exist. `upgrade` then
+// hard-fails ("upgrade requires existing machine ..."), and `start` quietly
+// creates a second VM while the user's real one is orphaned along with its
+// guest-local state (installed payload, host identity/attestation, image
+// cache). Only EXPLICIT selections are ever persisted — and even those only
+// on a best-effort basis, since persistence failure is deliberately
+// nonfatal — so a user who has only ever run `./iolbox start` has no
+// persisted choice to protect them. That is the default population, not an
+// edge case.
+//
+// "auto" here means bare auto AND an explicit --profile auto /
+// IOLBOX_PROFILE=auto, because the resolver deliberately treats those
+// identically. All three reach Source "auto-native".
+//
+// Deliberately narrow. It fires only for Source == "auto-native", leaving
+// untouched: explicit non-auto selections (the fail-closed migration
+// opt-in), persisted selections, auto runs that already fell back for
+// another reason, hosts that already have a native machine, and — most
+// importantly — fresh hosts with no iolbox install at all, which still get
+// the promoted native default. This does not revert that promotion; it
+// scopes it to installs that have nothing to lose.
+//
+// machineOverride is --machine/IOLBOX_MACHINE. When set, no name is derived,
+// so the derived-name reasoning does not apply — but the override target is
+// NOT simply exempt: if it already exists and its attestation says it is a
+// non-native install, provisioning it as native would stage native guest
+// scripts into a Rosetta VM (a running machine skips attestation validation
+// entirely in ensureMachineWithPorts, so nothing downstream would catch it).
+// In that case we keep its attested profile.
+func adjustAutoSelectionForExistingInstall(sel profileSelectionResult, table profileTable, machines []machineInfo, machineOverride string, attested attestedProfileRowFunc) profileSelectionResult {
+	if sel.Source != "auto-native" {
+		return sel
+	}
+	if attested == nil {
+		attested = func(string) (string, bool) { return "", false }
+	}
+
+	keep := func(row, machine, why string) profileSelectionResult {
+		return profileSelectionResult{
+			Requested:   sel.Requested,
+			Selected:    selectionRosettaAMD64,
+			ProfileName: row,
+			Source:      sourceAutoExistingRosettaMachine,
+			FallbackReason: fmt.Sprintf(
+				"existing Lima machine %q %s; keeping this install on profile %q (run with --profile native-arm64 to migrate to a new native guest)",
+				machine, why, row),
+		}
+	}
+
+	if machineOverride != "" {
+		if _, exists := findMachine(machines, machineOverride); !exists {
+			// Nothing to preserve: the override names a machine that will be
+			// created fresh. Every M4-M7 hardware harness lands here, because
+			// they pass disposable per-run machine names.
+			return sel
+		}
+		row, known := attested(machineOverride)
+		if !known || row == nativeProfileTableName {
+			// Either provenance is unknown (do not guess from a name the
+			// user chose) or it is genuinely native already.
+			return sel
+		}
+		return keep(row, machineOverride, "is attested as a non-native install")
+	}
+
+	if _, migrated := findMachine(machines, machineNameForProfileRow(nativeProfileTableName)); migrated {
+		return sel
+	}
+	row, found := existingNonNativeProfileRow(machines, table)
+	if !found {
+		return sel
+	}
+	machine := machineNameForProfileRow(row)
+	// The name says non-native; if the attestation disagrees, believe the
+	// attestation and let native proceed.
+	if attestedRow, known := attested(machine); known {
+		if attestedRow == nativeProfileTableName {
+			return sel
+		}
+		return keep(attestedRow, machine, "is attested as profile "+attestedRow)
+	}
+	return keep(row, machine, "predates native-arm64")
+}
+
+// finalizeAutoSelection is step two of profile resolution: it settles auto's
+// native preference against the host's real Lima inventory. Split out of
+// runDarwinCLI so the orchestration — not just the pure decision — is
+// testable on a host with no Lima (runDarwinCLI itself refuses to run
+// anywhere but Darwin/arm64).
+//
+// Fail-closed on inventory error for MUTATING commands. This listing and
+// runProvision's own listing are separate calls, so a transient failure here
+// followed by a success there would create exactly the second VM this check
+// exists to prevent. status/diagnose mutate nothing, so they report the
+// uncertainty and continue rather than denying the user their diagnostics.
+func finalizeAutoSelection(ctx context.Context, sel profileSelectionResult, table profileTable, command, machineOverride string, list func(context.Context) ([]machineInfo, error)) (profileSelectionResult, error) {
+	if sel.Source != "auto-native" {
+		return sel, nil
+	}
+	machines, err := list(ctx)
+	if err == nil {
+		return adjustAutoSelectionForExistingInstall(sel, table, machines, machineOverride, attestedProfileRowFor(table)), nil
+	}
+	if command == "start" || command == "upgrade" {
+		return profileSelectionResult{}, codedError(exitPreflight,
+			"could not list Lima machines to check for an existing install: %v; refusing to provision native-arm64 without confirming no existing install would be abandoned (fail-closed). Re-run once limactl is reachable, or select a profile explicitly with --profile", err)
+	}
+	logf("iolbox-launcher: could not list Lima machines to check for an existing install: %v", err)
+	return sel, nil
+}
+
+// listLimaMachines shells the read-only `limactl list`, in the same style as
+// limaSupportsVZ above: it creates, starts, stops, and mutates nothing. The
+// format string matches limaClient.list so both share parseMachineListing.
+func listLimaMachines(ctx context.Context, limactlPath string) ([]machineInfo, error) {
+	if limactlPath == "" {
+		return nil, fmt.Errorf("no limactl executable resolved")
+	}
+	out, err := exec.CommandContext(ctx, limactlPath, "list", "--format", "{{.Name}}|{{.Status}}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("limactl list: %w", err)
+	}
+	return parseMachineListing(string(out))
 }
