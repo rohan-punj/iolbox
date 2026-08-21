@@ -1,5 +1,0 @@
-=== RUN   TestMacOSBrowserEquivalentE2E
-    macos_browser_e2e_darwin_test.go:217: pcapng path=/Users/rohansharma/iolbox-p5-build/src/evidence-p5/m3-20260819T194911Z-28552/M3 data café/captures/M3 link 0.pcapng bytes=896 packets=2 capturePort=5500 sha256=850c2653ac08c8aea7e1ba3e846d38e943981f50cee8e5660604eaee7a62c736
-    macos_browser_e2e_darwin_test.go:235: browser-equivalent HTTP/WS flow passed for lab seed-2-routers (reload p0-two-routers-one-pc)
---- PASS: TestMacOSBrowserEquivalentE2E (57.25s)
-PASS

@@ -1,1 +1,0 @@
-{"id":"m1-evidence-1","ok":true,"result":{"labId":"m1-hardware-two-router","nodes":[{"id":0,"state":"running","consolePort":9000,"pid":5645,"ram":1024,"image":"b858503827356c55"},{"id":1,"state":"running","consolePort":9001,"pid":5647,"ram":1024,"image":"b858503827356c55"}],"links":[{"id":0}]}}

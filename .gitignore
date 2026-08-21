@@ -88,3 +88,14 @@ Thumbs.db
 /docs/slowproto-lacp-lldp.md
 .m4-ssh/
 .m5-ssh/
+
+# AI-session raw scaffolding (codex/luna run transcripts, one-shot
+# continuation prompts for a session that has already run). NOT the
+# result/handoff/plan/plan-review docs or docs/m7-evidence/ -- those carry
+# real engineering rationale (owner-override reasoning, waiver scope, gate
+# evidence) that isn't duplicated anywhere else and stay tracked. See
+# docs/macos-m7-result.md for why the evidence directory is load-bearing.
+docs/*-session-logs/
+.m*-evidence/
+docs/macos-m*-prompt.md
+docs/macos-m7-phase*-continue-prompt.md

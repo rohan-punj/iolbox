@@ -1,1 +1,0 @@
-profile=debian13 role=DEFAULT guest=Debian 13 trixie qualification=UNMEASURED — CANARY REQUIRED

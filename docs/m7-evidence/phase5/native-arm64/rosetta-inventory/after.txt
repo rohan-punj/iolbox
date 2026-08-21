@@ -1,9 +1,0 @@
-=== AFTER restart ===
---mounts--
---rosetta-grep--
-   2096    1163 sh -c  echo --mounts--; mount | grep -i rosetta echo --rosetta-grep--; ps -eo pid,ppid,args | grep -i rosetta echo --supervisor-ps--; ps -eo pid,ppid,args | grep -E "supervisor|vpcs|qemu" | grep -v grep echo --uname--; uname -a 
-   2104    2096 grep -i rosetta
---supervisor-ps--
-   1886       1 /opt/iolbox/supervisor -control-addr 127.0.0.1:4000 -ws-addr 0.0.0.0:4001 -console-bind 0.0.0.0 -capture-bind 0.0.0.0 -image-dir /opt/iolbox/images -run-dir /opt/iolbox/run -labs-dir /opt/iolbox/labs -iourc /opt/iolbox/iourc
---uname--
-Linux lima-iolbox-p5-native-e2e 6.12.101+deb13-cloud-arm64 #1 SMP Debian 6.12.101-1 (2026-08-05) aarch64 GNU/Linux
