@@ -15,6 +15,7 @@ PACKER="$MACOS_DIR/pack-release.sh"
 
 ARCHIVE=""
 LAUNCHER=""
+APP_STUB=""
 PAYLOAD=""
 PAYLOAD_SHA256=""
 PAYLOAD_ARM64=""
@@ -25,7 +26,7 @@ SOURCE_DATE_EPOCH=""
 usage() {
     cat <<'EOF'
 Usage: packaging/macos/tests/release-layout-test.sh \
-  --archive PATH --launcher PATH --payload PATH --payload-sha256 SHA256 \
+  --archive PATH --launcher PATH --app-stub PATH --payload PATH --payload-sha256 SHA256 \
   --payload-arm64 PATH --payload-arm64-sha256 SHA256 \
   --version VERSION --source-date-epoch EPOCH
 EOF
@@ -35,6 +36,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --archive) ARCHIVE="$2"; shift 2 ;;
         --launcher) LAUNCHER="$2"; shift 2 ;;
+        --app-stub) APP_STUB="$2"; shift 2 ;;
         --payload) PAYLOAD="$2"; shift 2 ;;
         --payload-sha256) PAYLOAD_SHA256="$2"; shift 2 ;;
         --payload-arm64) PAYLOAD_ARM64="$2"; shift 2 ;;
@@ -45,7 +47,7 @@ while [ "$#" -gt 0 ]; do
         *) die "unknown option: $1" ;;
     esac
 done
-for required in ARCHIVE LAUNCHER PAYLOAD PAYLOAD_SHA256 PAYLOAD_ARM64 PAYLOAD_ARM64_SHA256 VERSION SOURCE_DATE_EPOCH; do
+for required in ARCHIVE LAUNCHER APP_STUB PAYLOAD PAYLOAD_SHA256 PAYLOAD_ARM64 PAYLOAD_ARM64_SHA256 VERSION SOURCE_DATE_EPOCH; do
     [ -n "${!required}" ] || die "--$(echo "$required" | tr '[:upper:]' '[:lower:]' | tr '_' '-') is required"
 done
 [ -f "$ARCHIVE" ] || die "archive does not exist: $ARCHIVE"
@@ -64,6 +66,13 @@ tar -tzf "$ARCHIVE" > "$TMP/raw-list.txt"
 sed 's#/$##' "$TMP/raw-list.txt" | LC_ALL=C sort > "$TMP/actual-list.txt"
 cat > "$TMP/expected-list.txt" <<EOF
 iolbox-macos-arm64
+iolbox-macos-arm64/IOLbox.app
+iolbox-macos-arm64/IOLbox.app/Contents
+iolbox-macos-arm64/IOLbox.app/Contents/Info.plist
+iolbox-macos-arm64/IOLbox.app/Contents/MacOS
+iolbox-macos-arm64/IOLbox.app/Contents/MacOS/IOLbox
+iolbox-macos-arm64/IOLbox.app/Contents/Resources
+iolbox-macos-arm64/IOLbox.app/Contents/Resources/iolbox.icns
 iolbox-macos-arm64/LICENSE
 iolbox-macos-arm64/README.md
 iolbox-macos-arm64/SHA256SUMS
@@ -134,19 +143,30 @@ while IFS= read -r path; do
         [ "$(stat -c '%a' "$full")" = 755 ] || die "directory mode is not 0755: $path"
     else
         expected_mode=644
-        [ "$path" = "iolbox-macos-arm64/iolbox" ] && expected_mode=755
+        case "$path" in
+            iolbox-macos-arm64/iolbox|iolbox-macos-arm64/IOLbox.app/Contents/MacOS/IOLbox) expected_mode=755 ;;
+        esac
         [ "$(stat -c '%a' "$full")" = "$expected_mode" ] || die "file mode is not $expected_mode: $path"
     fi
 done < "$TMP/actual-list.txt"
 
 ( cd "$ROOT" && sha256sum -c SHA256SUMS ) || die "internal checksums do not verify"
-[ "$(wc -l < "$ROOT/SHA256SUMS" | tr -d ' ')" = 28 ] || die "internal checksum file does not cover exactly 28 files"
+[ "$(wc -l < "$ROOT/SHA256SUMS" | tr -d ' ')" = 31 ] || die "internal checksum file does not cover exactly 31 files"
 
 file_launcher="$(file -b "$ROOT/iolbox")"
 case "$file_launcher" in
     *"Mach-O 64-bit"*"arm64"*) ;;
     *) die "extracted launcher is not Mach-O arm64: $file_launcher" ;;
 esac
+
+file_app_stub="$(file -b "$ROOT/IOLbox.app/Contents/MacOS/IOLbox")"
+case "$file_app_stub" in
+    *"Mach-O 64-bit"*"arm64"*) ;;
+    *) die "extracted app stub is not Mach-O arm64: $file_app_stub" ;;
+esac
+
+grep -Fq "<string>${VERSION}</string>" "$ROOT/IOLbox.app/Contents/Info.plist" || die "Info.plist does not have @VERSION@ substituted with $VERSION"
+grep -Fq '<key>CFBundleExecutable</key>' "$ROOT/IOLbox.app/Contents/Info.plist" || die "Info.plist is missing CFBundleExecutable"
 payload_path="$ROOT/iolbox-server-${VERSION}.tar.gz"
 [ -f "$payload_path" ] || die "expected amd64 payload is missing"
 [ "$(sha256sum "$payload_path" | awk '{print tolower($1)}')" = "$(printf '%s' "$PAYLOAD_SHA256" | tr '[:upper:]' '[:lower:]')" ] || die "extracted amd64 payload is not the trusted build-linux payload"
@@ -177,7 +197,7 @@ done < "$MACOS_DIR/release-manifest.txt"
 # outputs prevents a single lingering stage from masking nondeterminism.
 for n in 1 2; do
     mkdir "$TMP/repro-$n"
-    bash "$PACKER" --launcher "$LAUNCHER" --payload "$PAYLOAD" \
+    bash "$PACKER" --launcher "$LAUNCHER" --app-stub "$APP_STUB" --payload "$PAYLOAD" \
         --payload-sha256 "$PAYLOAD_SHA256" \
         --payload-arm64 "$PAYLOAD_ARM64" \
         --payload-arm64-sha256 "$PAYLOAD_ARM64_SHA256" --version "$VERSION" \
@@ -195,5 +215,6 @@ echo "release-layout-test: PASS"
 echo "release-layout-test: archive=$ARCHIVE sha256=$archive_hash"
 echo "release-layout-test: independent-stage/rebuild hash=$repro_hash_1"
 echo "release-layout-test: launcher=$file_launcher"
+echo "release-layout-test: app-stub=$file_app_stub"
 echo "release-layout-test: amd64 payload=$(basename "$payload_path")"
 echo "release-layout-test: arm64 payload=$(basename "$payload_arm64_path")"

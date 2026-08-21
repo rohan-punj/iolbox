@@ -679,3 +679,47 @@ implementation-time hardening, not open architectural questions.
 
 Status: DESIGN CLOSED. Proceeding to implementation on its own branch, per
 this project's standing rule that nothing lands directly on `main`.
+
+## 14. Partial hardware smoke test (2026-08-21, SSH-only)
+
+Ran a lightweight smoke test on the real qualification Mac
+(`rohansharma@192.168.101.186`, macOS 26.6.2) over SSH, using a minimal test
+bundle (dummy `iolbox`/`lima/profiles.env`, the real cross-compiled stub,
+Info.plist, icns) rather than a full release archive — no lima/qemu assets
+needed to exercise the stub's own logic. This is **not** the full §11.4
+qualification matrix; it's a partial check of what SSH access can reach.
+
+**Confirmed on real hardware:**
+- The cross-compiled `Contents/MacOS/IOLbox` runs correctly as a native
+  Mach-O arm64 binary on real Apple Silicon macOS.
+- Sibling-path resolution (`computeRoot`) is correct against a real
+  filesystem: run from `.../iolbox-macos-arm64/IOLbox.app/Contents/MacOS/IOLbox`,
+  it correctly resolves and `cd`s into `.../iolbox-macos-arm64`.
+- The sanity check passes when `iolbox` + `lima/profiles.env` are present,
+  and fails (exit 1, no hang) when they're absent.
+- **The runtime-generated launch script carries no `com.apple.quarantine`
+  attribute** — verified directly with `xattr -l` on the real generated file
+  (`~/Library/Caches/io.github.rohan-punj.iolbox/start-<pid>.command`),
+  confirming §12's core hardening claim empirically, not just by citing
+  Apple's documented default.
+- The generated script's `ROOT` quoting is correct (single-quoted, matches
+  §11.1 step 5 exactly).
+- The alert path's `osascript` call is safely non-blocking even when it
+  cannot render (see below) — the program still exits(1) rather than
+  hanging, because `alert()` deliberately discards the osascript error.
+
+**Could not be verified over SSH — needs physical or VNC access:** launching
+`IOLbox.app` via `open` (simulating a Finder double-click) failed with
+`RBSRequestErrorDomain Code=5 "Launch failed" ... Launchd job spawn failed`,
+and `launchctl asuser <uid> open ...` failed with `Could not switch to audit
+session: Operation not permitted`. This is a macOS SSH-session/audit-session
+restriction unrelated to this design — an SSH session isn't attached to the
+console's Aqua bootstrap context, so LaunchServices refuses to spawn a
+GUI-facing app from it. Consequently the §11.4 matrix's Finder-launch,
+App-Translocation-in-practice, Terminal-window-visibility, and Dock-pin rows
+are **still open** and require either physical presence at the Mac or a
+VNC/Screen-Sharing session with the console's real login session — plain SSH
+cannot exercise them. Running the compiled stub binary directly (bypassing
+LaunchServices) sidesteps this restriction for logic testing, as done above,
+but by construction cannot exercise App Translocation, which is a
+Finder/LaunchServices-specific mechanism.

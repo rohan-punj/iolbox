@@ -30,3 +30,5 @@ packaging/macos/guest/10-multiarch-native.sh|guest/10-multiarch-native.sh
 packaging/macos/guest/30-canary-native.sh|guest/30-canary-native.sh
 packaging/macos/guest/40-install-payload-native.sh|guest/40-install-payload-native.sh
 packaging/macos/guest/50-verify-native.sh|guest/50-verify-native.sh
+packaging/macos/app/Info.plist|IOLbox.app/Contents/Info.plist
+packaging/macos/app/Resources/iolbox.icns|IOLbox.app/Contents/Resources/iolbox.icns
