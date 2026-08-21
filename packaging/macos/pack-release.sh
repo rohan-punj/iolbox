@@ -19,6 +19,7 @@ MANIFEST="$SCRIPT_DIR/release-manifest.txt"
 ARCHIVE_ROOT_NAME="iolbox-macos-arm64"
 
 LAUNCHER=""
+APP_STUB=""
 PAYLOAD=""
 PAYLOAD_SHA256=""
 PAYLOAD_ARM64=""
@@ -30,12 +31,17 @@ SOURCE_DATE_EPOCH=""
 usage() {
     cat <<'EOF'
 Usage: packaging/macos/pack-release.sh \
-  --launcher PATH --payload PATH --payload-sha256 SHA256 \
+  --launcher PATH --app-stub PATH --payload PATH --payload-sha256 SHA256 \
   --payload-arm64 PATH --payload-arm64-sha256 SHA256 \
   --version VERSION --output PATH --source-date-epoch EPOCH
 
-All eight inputs are required.
+All nine inputs are required.
 
+  --app-stub                                 Darwin/arm64 Mach-O executable for
+                                            IOLbox.app/Contents/MacOS/IOLbox
+                                            (docs/macos-launcher-icon-plan.md
+                                            §11) — a separate build input, like
+                                            --launcher, not a manifest entry.
   --payload / --payload-sha256              amd64 payload, run under Rosetta by
                                             the debian13/jammy/debian12
                                             profiles. Basename must be
@@ -63,6 +69,7 @@ die() {
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --launcher) [ "$#" -ge 2 ] || die "--launcher needs a value"; LAUNCHER="$2"; shift 2 ;;
+        --app-stub) [ "$#" -ge 2 ] || die "--app-stub needs a value"; APP_STUB="$2"; shift 2 ;;
         --payload) [ "$#" -ge 2 ] || die "--payload needs a value"; PAYLOAD="$2"; shift 2 ;;
         --payload-sha256) [ "$#" -ge 2 ] || die "--payload-sha256 needs a value"; PAYLOAD_SHA256="$2"; shift 2 ;;
         --payload-arm64) [ "$#" -ge 2 ] || die "--payload-arm64 needs a value"; PAYLOAD_ARM64="$2"; shift 2 ;;
@@ -76,6 +83,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$LAUNCHER" ] || die "--launcher is required"
+[ -n "$APP_STUB" ] || die "--app-stub is required"
 [ -n "$PAYLOAD" ] || die "--payload is required"
 [ -n "$PAYLOAD_SHA256" ] || die "--payload-sha256 is required"
 [ -n "$PAYLOAD_ARM64" ] || die "--payload-arm64 is required"
@@ -90,11 +98,13 @@ done
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || die "--source-date-epoch must be a non-negative integer"
 
 LAUNCHER="$(cd "$(dirname "$LAUNCHER")" && pwd)/$(basename "$LAUNCHER")"
+APP_STUB="$(cd "$(dirname "$APP_STUB")" && pwd)/$(basename "$APP_STUB")"
 PAYLOAD="$(cd "$(dirname "$PAYLOAD")" && pwd)/$(basename "$PAYLOAD")"
 PAYLOAD_ARM64="$(cd "$(dirname "$PAYLOAD_ARM64")" && pwd)/$(basename "$PAYLOAD_ARM64")"
 OUTPUT="$(cd "$(dirname "$OUTPUT")" 2>/dev/null || { mkdir -p "$(dirname "$OUTPUT")"; cd "$(dirname "$OUTPUT")"; } && pwd)/$(basename "$OUTPUT")"
 
 [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ] || die "launcher must be a regular non-symlink file: $LAUNCHER"
+[ -f "$APP_STUB" ] && [ ! -L "$APP_STUB" ] || die "app-stub must be a regular non-symlink file: $APP_STUB"
 [ -f "$PAYLOAD" ] && [ ! -L "$PAYLOAD" ] || die "payload must be a regular non-symlink file: $PAYLOAD"
 [ -f "$PAYLOAD_ARM64" ] && [ ! -L "$PAYLOAD_ARM64" ] || die "arm64 payload must be a regular non-symlink file: $PAYLOAD_ARM64"
 command -v file >/dev/null 2>&1 || die "file is required to verify the Darwin launcher"
@@ -113,6 +123,12 @@ LAUNCHER_FILE="$(file -b "$LAUNCHER")"
 case "$LAUNCHER_FILE" in
     *"Mach-O 64-bit"*"arm64"*) ;;
     *) die "launcher is not a Mach-O arm64 executable: $LAUNCHER_FILE" ;;
+esac
+
+APP_STUB_FILE="$(file -b "$APP_STUB")"
+case "$APP_STUB_FILE" in
+    *"Mach-O 64-bit"*"arm64"*) ;;
+    *) die "app-stub is not a Mach-O arm64 executable: $APP_STUB_FILE" ;;
 esac
 
 ACTUAL_PAYLOAD="$(sha256sum "$PAYLOAD" | awk '{print tolower($1)}')"
@@ -144,7 +160,7 @@ while IFS='|' read -r source dest extra || [ -n "${source:-}" ]; do
     MANIFEST_DESTS+=("$dest")
 done < "$MANIFEST"
 
-[ "${#MANIFEST_SOURCES[@]}" -eq 25 ] || die "manifest has ${#MANIFEST_SOURCES[@]} entries, expected 25"
+[ "${#MANIFEST_SOURCES[@]}" -eq 27 ] || die "manifest has ${#MANIFEST_SOURCES[@]} entries, expected 27"
 
 for required_dest in \
     README.md LICENSE notices/THIRD_PARTY.md notices/REDISTRIBUTED-PACKAGES.md \
@@ -155,7 +171,8 @@ for required_dest in \
     guest/40-install-payload.sh guest/50-verify.sh \
     lima/iolbox-native-arm64.yaml lima/pinned-image-native-arm64.env \
     guest/10-multiarch-native.sh guest/30-canary-native.sh \
-    guest/40-install-payload-native.sh guest/50-verify-native.sh; do
+    guest/40-install-payload-native.sh guest/50-verify-native.sh \
+    IOLbox.app/Contents/Info.plist IOLbox.app/Contents/Resources/iolbox.icns; do
     found=0
     for dest in "${MANIFEST_DESTS[@]}"; do [ "$dest" = "$required_dest" ] && found=1; done
     [ "$found" -eq 1 ] || die "manifest is missing required destination: $required_dest"
@@ -178,7 +195,7 @@ copy_manifest_into_stage() {
         source_path="$REPO_ROOT/$source"
         dest_path="$stage/$ARCHIVE_ROOT_NAME/$dest"
         mkdir -p "$(dirname "$dest_path")"
-        if [ "$dest" = "README.md" ]; then
+        if [ "$dest" = "README.md" ] || [ "$dest" = "IOLbox.app/Contents/Info.plist" ]; then
             sed "s|@VERSION@|$VERSION|g" "$source_path" > "$dest_path"
         else
             cp -- "$source_path" "$dest_path"
@@ -187,6 +204,9 @@ copy_manifest_into_stage() {
     done < "$MANIFEST"
     cp -- "$LAUNCHER" "$stage/$ARCHIVE_ROOT_NAME/iolbox"
     chmod 0755 "$stage/$ARCHIVE_ROOT_NAME/iolbox"
+    mkdir -p "$stage/$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/MacOS"
+    cp -- "$APP_STUB" "$stage/$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/MacOS/IOLbox"
+    chmod 0755 "$stage/$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/MacOS/IOLbox"
     cp -- "$PAYLOAD" "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD"
     chmod 0644 "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD"
     cp -- "$PAYLOAD_ARM64" "$stage/$ARCHIVE_ROOT_NAME/$EXPECTED_PAYLOAD_ARM64"
@@ -201,6 +221,13 @@ verify_stage_tree() {
     ( cd "$stage" && LC_ALL=C find "$ARCHIVE_ROOT_NAME" -print | LC_ALL=C sort > "$actual" )
     cat > "$expected" <<EOF
 $ARCHIVE_ROOT_NAME
+$ARCHIVE_ROOT_NAME/IOLbox.app
+$ARCHIVE_ROOT_NAME/IOLbox.app/Contents
+$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/Info.plist
+$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/MacOS
+$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/MacOS/IOLbox
+$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/Resources
+$ARCHIVE_ROOT_NAME/IOLbox.app/Contents/Resources/iolbox.icns
 $ARCHIVE_ROOT_NAME/LICENSE
 $ARCHIVE_ROOT_NAME/README.md
 $ARCHIVE_ROOT_NAME/SHA256SUMS
@@ -248,8 +275,8 @@ write_internal_checksums() {
     local root="$stage/$ARCHIVE_ROOT_NAME"
     local list="$stage/internal-members.txt"
     ( cd "$root" && LC_ALL=C find . -type f ! -name SHA256SUMS -print | sed 's#^\./##' | LC_ALL=C sort > "$list" )
-    # 25 manifest files + the launcher + both payloads.
-    [ "$(wc -l < "$list" | tr -d ' ')" -eq 28 ] || die "staged file count is not 28 before SHA256SUMS"
+    # 27 manifest files + the launcher + the app stub + both payloads.
+    [ "$(wc -l < "$list" | tr -d ' ')" -eq 31 ] || die "staged file count is not 31 before SHA256SUMS"
     ( cd "$root" && sha256sum $(cat "$list") > SHA256SUMS )
     chmod 0644 "$root/SHA256SUMS"
 }
@@ -287,6 +314,7 @@ printf '%s  %s\n' "$HASH1" "$(basename "$OUTPUT")" > "$OUTPUT.sha256"
 chmod 0644 "$OUTPUT" "$OUTPUT.sha256"
 
 echo "pack-release: launcher=$LAUNCHER_FILE"
+echo "pack-release: app-stub=$APP_STUB_FILE"
 echo "pack-release: payload=$(basename "$PAYLOAD") sha256=$ACTUAL_PAYLOAD"
 echo "pack-release: payload-arm64=$(basename "$PAYLOAD_ARM64") sha256=$ACTUAL_PAYLOAD_ARM64"
 echo "pack-release: source_date_epoch=$SOURCE_DATE_EPOCH"

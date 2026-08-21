@@ -524,6 +524,34 @@ real browser flow succeeds through a narrower Finder/Gatekeeper consent action
 instead, the release record and this procedure must be updated before
 publication; do not substitute an unexecuted workaround.
 
+### Optional: double-click launcher (IOLbox.app)
+
+The archive also ships `IOLbox.app`, an unsigned convenience wrapper around
+the same `iolbox` CLI. Once the quarantine check above is done, it lets you
+start iolbox from Finder or the Dock instead of a terminal command: it opens
+a real Terminal window running `./iolbox start`, so every prompt and log
+line the CLI would show — including the vCPU/RAM prompt on first run — is
+still there. It is not a control panel; `stop`, `status`, `diagnose`, and
+`upgrade` remain CLI-only.
+
+`IOLbox.app` does not make the first run warning-free; nothing in this
+archive is signed or notarized. On the `curl` path nothing is quarantined
+and the app just works. **On the browser-download path**, run this once,
+before the first double-click, on the whole extracted folder:
+
+```sh
+xattr -dr com.apple.quarantine /path/to/extracted/iolbox-macos-arm64
+```
+
+Skipping that step doesn't just risk a Gatekeeper dialog — macOS may run the
+app from a temporary, translocated copy that can't find the `iolbox` CLI or
+`lima/` folder next to it. If that happens, `IOLbox.app` shows an alert
+telling you to run the command above and try again. This translocation
+behavior is inferred from Apple's own documentation and has not yet been
+observed on this project's own hardware; per this section's own rule, the
+exact observed alert wording and dialog sequence must be recorded here from
+a real run before publication.
+
 ### Start, data, upgrade, and uninstall
 
 From the extracted directory, the documented first command is:

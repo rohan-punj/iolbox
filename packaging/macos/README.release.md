@@ -52,6 +52,30 @@ Then start the product from the extracted directory with one command:
 ./iolbox start
 ~~~
 
+### Optional: double-click launcher (IOLbox.app)
+
+The archive also ships `IOLbox.app`, an unsigned convenience wrapper around
+the same `iolbox` CLI. Once you've completed the quarantine check above, it
+lets you start iolbox from Finder or the Dock instead of a terminal command:
+it opens a real Terminal window running `./iolbox start`, so every prompt
+and log line you'd see from the CLI — including the vCPU/RAM prompt on first
+run — is still there. It is not a control panel: `stop`, `status`,
+`diagnose`, and `upgrade` remain CLI-only.
+
+`IOLbox.app` cannot make the first run warning-free; nothing in this archive
+is signed or notarized. If you downloaded with `curl`, nothing is
+quarantined and the app just works. **If you downloaded through a browser**,
+run this once, before the first double-click, on the whole extracted folder:
+
+~~~sh
+xattr -dr com.apple.quarantine /path/to/extracted/iolbox-macos-arm64
+~~~
+
+Skipping that step doesn't just risk a Gatekeeper dialog — macOS may run the
+app from a temporary, translocated copy that can't find the `iolbox` CLI or
+`lima/` folder next to it. If that happens, `IOLbox.app` shows an alert
+telling you to run the command above and try again.
+
 The launcher resolves a profile, then creates or reuses the durable named
 Lima guest for it, verifies that profile's canary and pinned guest/kernel, and
 serves the GUI on http://127.0.0.1:4001. The GUI, console, and capture
