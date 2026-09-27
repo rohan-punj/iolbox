@@ -1,33 +1,29 @@
 # Installing iolbox
 
-iolbox is a lightweight, Windows-native lab tool for Cisco IOL and VPCS: a
+iolbox is a lightweight lab tool for Cisco IOL and VPCS: a
 Go supervisor with an embedded browser GUI drives a small Linux runtime
 (wherever it runs best on your machine) and you drive it all from a browser
 tab. **iolbox ships no Cisco software** — you supply your own IOL `.bin`/
 `.iol` image files and hold the appropriate licenses for them; see the
 "First steps" section below for how images get loaded in on each target.
 
-The current release publishes seven deployable artifacts (plus
-`capture-helper.exe`, a small standalone Wireshark-bridge helper, and
-`SHA256SUMS-ci.txt` — which covers only the CI-built artifacts; the
-VMware/OVA/QEMU disk-image artifacts in sections 1, 2, and 6 are built and
-attached by hand and aren't in it). Use the release tag in the download URLs
-and filenames below; older tags do not retroactively gain the Apple Silicon
-archive. Pick the row that matches your situation:
+The current release provides seven deployment packages, standalone Windows
+helpers, a QEMU disk, and `SHA256SUMS.txt` covering the release downloads.
+The refreshed packages use platform-based filenames. Older releases retain
+their original names; use the names listed in the release you download.
 Pick the row that matches your situation:
 
 | Your situation | Artifact | Section |
 |---|---|---|
-| Windows desktop/laptop, want the simplest path | `iolbox-launcher-v0.5.2-windows.zip` | [QEMU disk (Windows launcher)](#6-qemu-disk-windows-bundled-launcher) |
-| Windows desktop already running VMware Workstation/Player, or ESXi/VirtualBox | `iolbox-appliance-v0.5.2.ova` | [OVA](#1-ova-vmware-workstationplayer-esxi-virtualbox) |
-| Windows with WSL2/Hyper-V already enabled | `iolbox-rootfs.tar` | [WSL rootfs](#3-wsl-rootfs-wsl2) |
-| Proxmox homelab | `iolbox-ct-v0.5.2.tar.zst` | [Proxmox LXC](#4-proxmox-lxc) |
-| Existing Linux server / cloud VM / on-prem hypervisor guest | `iolbox-server-v0.5.2.tar.gz` | [Native (systemd)](#5-native-systemd-linux-server) |
+| Windows desktop/laptop, want the simplest path | `iolbox-windows-amd64.zip` | [QEMU disk (Windows launcher)](#6-qemu-disk-windows-bundled-launcher) |
+| Windows desktop already running VMware Workstation/Player, or ESXi/VirtualBox | `iolbox-appliance-amd64.ova` | [OVA](#1-ova-vmware-workstationplayer-esxi-virtualbox) |
+| VMware Workstation without OVF import | `iolbox-vmware-amd64.zip` | [VMware bundle](#2-vmware-vmdkvmx-raw-pre-converted-pair) |
+| Windows with WSL2/Hyper-V already enabled | `iolbox-wsl-amd64.tar` | [WSL rootfs](#3-wsl-rootfs-wsl2) |
+| Proxmox homelab | `iolbox-lxc-amd64.tar.zst` | [Proxmox LXC](#4-proxmox-lxc) |
+| Existing Linux server / cloud VM / on-prem hypervisor guest | `iolbox-linux-amd64.tar.gz` | [Native (systemd)](#5-native-systemd-linux-server) |
 | Apple Silicon Mac with Lima | `iolbox-macos-arm64.tar.gz` | [Apple Silicon macOS (Lima)](#7-apple-silicon-macos-lima) |
 
-All seven run the identical Go supervisor and (except the native target's
-build) the identical Debian-slim runtime — see `runtime/README.md`'s "one
-rootfs, two packages" note. Whichever you pick, the GUI ends up at
+Whichever package you pick, the GUI ends up at
 **`http://<host>:4001`**, and it has **no login of any kind**. Only expose
 it on localhost or a network you trust (see the security note repeated in
 each section).
@@ -44,12 +40,12 @@ isn't one of the seven release artifacts and isn't covered in depth here.
 
 ## 1. OVA (VMware Workstation/Player, ESXi, VirtualBox)
 
-**Artifact:** `iolbox-appliance-v0.5.2.ova`
+**Artifact:** `iolbox-appliance-amd64.ova`
 **Source:** `runtime/pack-ova.sh`, `runtime/REDEPLOY.md`
 
 ### GUI import
 
-1. Download `iolbox-appliance-v0.5.2.ova`.
+1. Download `iolbox-appliance-amd64.ova`.
 2. VMware Workstation/Player: **File > Open**, pick the `.ova`, follow the
    import wizard. ESXi: use the web UI's **Create/Register VM > Deploy a
    virtual machine from an OVF or OVA file**. VirtualBox: **File > Import
@@ -63,7 +59,7 @@ isn't one of the seven release artifacts and isn't covered in depth here.
 
 ```bash
 ovftool --acceptAllEulas --allowExtraConfig --name=iolbox \
-    "iolbox-appliance-v0.5.2.ova" <dest-dir>\
+    "iolbox-appliance-amd64.ova" <dest-dir>\
 ```
 
 ### Boot and find the GUI
@@ -91,18 +87,13 @@ host-monitor footer shows a `build <version>` line (per `REDEPLOY.md`).
 
 ## 2. VMware vmdk+vmx (raw pre-converted pair)
 
-**Artifact:** `iolbox-appliance-v0.5.2.vmdk` + `iolbox-appliance-v0.5.2.vmx`
+**Artifact:** `iolbox-vmware-amd64.zip`, containing `iolbox-vmware.vmdk` and
+`iolbox-vmware.vmx`
 **Source:** `runtime/pack-vmware.sh`, `runtime/REDEPLOY.md`
 
-Attached separately from the OVA, built by hand alongside it (`pack-vmware.sh`
-and `pack-ova.sh` both consume the same `build-rootfs.sh` output — see
-`runtime/README.md`). For most people the OVA in
-[section 1](#1-ova-vmware-workstationplayer-esxi-virtualbox) is still the
-simpler pick — a single standard-format file with no manifest warning to
-click through. Use this pair instead if you want to skip the OVF import
-step entirely (e.g. deploying many copies): download both files into the
-same folder and open the `.vmx` directly in VMware Workstation/Player
-(**File > Open**), or `vmrun -T ws start "iolbox-appliance-v0.5.2.vmx" nogui`.
+Use this bundle to skip OVF import in VMware Workstation/Player. Download and
+extract the ZIP, keep the `.vmdk` and `.vmx` together, then open the `.vmx`
+(**File > Open**), or `vmrun -T ws start "iolbox-vmware.vmx" nogui`.
 
 **Sizing** (once you have the `.vmx`): templated from
 `runtime/resources.env` (4 vCPU / 4096 MB) — see `files/iolbox-appliance.vmx.tmpl`.
@@ -113,7 +104,7 @@ UI, then power-cycle the VM.
 
 ## 3. WSL rootfs (WSL2)
 
-**Artifact:** `iolbox-rootfs.tar`
+**Artifact:** `iolbox-wsl-amd64.tar`
 **Source:** `runtime/REDEPLOY.md`, `runtime/README.md`
 
 Requires WSL2 (i.e. the Windows Hyper-V platform already enabled). Per
@@ -122,7 +113,7 @@ VMware Workstation** — the two are mutually exclusive platforms on the same
 box.
 
 ```powershell
-wsl --import iolbox C:\Users\<you>\iolbox-wsl iolbox-rootfs.tar
+wsl --import iolbox C:\Users\<you>\iolbox-wsl iolbox-wsl-amd64.tar
 wsl -d iolbox -- systemctl status iolbox-supervisor.service
 # browse to http://localhost:4001
 ```
@@ -151,14 +142,14 @@ systemctl status iolbox-supervisor.service` shows active/running.
 
 ## 4. Proxmox LXC
 
-**Artifact:** `iolbox-ct-v0.5.2.tar.zst`
+**Artifact:** `iolbox-lxc-amd64.tar.zst`
 **Source:** `runtime/files/lxc/pct-create.md` (canonical — also shipped as
 `SETUP.md` inside the tarball itself)
 
 ### 1. Upload the template
 
 ```bash
-scp iolbox-ct-v0.5.2.tar.zst root@<pve-host>:/var/lib/vz/template/cache/
+scp iolbox-lxc-amd64.tar.zst root@<pve-host>:/var/lib/vz/template/cache/
 ```
 
 (Or Datacenter > Storage > Content > Upload; the storage must allow "CT
@@ -167,7 +158,7 @@ Template".)
 ### 2. Create the container
 
 ```bash
-pct create <vmid> local:vztmpl/iolbox-ct-v0.5.2.tar.zst \
+pct create <vmid> local:vztmpl/iolbox-lxc-amd64.tar.zst \
     --unprivileged 1 \
     --hostname iolbox \
     --cores 4 \
@@ -224,15 +215,15 @@ auth; `pct set <vmid> --firewall 1` plus a CT firewall rule restricting
 
 ## 5. Native (systemd Linux server)
 
-**Artifact:** `iolbox-server-v0.5.2.tar.gz`
+**Artifact:** `iolbox-linux-amd64.tar.gz`
 **Source:** `runtime/files/native/README.txt`, `runtime/files/native/install.sh`
 
 For "bring your own Linux box": bare metal, a cloud VM, or an existing
 on-prem hypervisor guest. Requires systemd, x86-64/glibc, and root.
 
 ```bash
-tar xzf iolbox-server-v0.5.2.tar.gz
-cd iolbox-server-v0.5.2
+tar xzf iolbox-linux-amd64.tar.gz
+cd iolbox-server-*
 sudo ./install.sh                  # binds GUI/console/capture to 127.0.0.1 only
 # or:
 sudo ./install.sh --bind all       # binds 0.0.0.0 — LAN/VPN/tunnel reachable
@@ -285,7 +276,7 @@ to use at the end of the run.
 
 ## 6. QEMU disk (Windows, bundled launcher)
 
-**Artifact:** `iolbox-launcher-v0.5.2-windows.zip` (one zip — the launcher
+**Artifact:** `iolbox-windows-amd64.zip` (one zip — the launcher
 exe, the disk image, and the bundled `qemu/` folder all together; it depends
 on the disk sitting right next to it, so it ships as a single archive rather
 than separate downloads)
@@ -297,7 +288,7 @@ rights, works on any Windows machine.
 
 ### Setup
 
-1. Download `iolbox-launcher-v0.5.2-windows.zip` and extract it — everything
+1. Download `iolbox-windows-amd64.zip` and extract it — everything
    needed is already laid out correctly inside:
 
 ```
