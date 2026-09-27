@@ -39,7 +39,7 @@ func TestNetmapAllStaticTaps(t *testing.T) {
 				{Node: 1, Interface: "e0/2"}, {Node: 2, Interface: "e0/2"}}},
 		},
 	}
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(doc, "/run/iolbox")
 	s.refreshFabric(ll)
 	got := s.netmapFor(ll)
@@ -135,7 +135,7 @@ func TestRefreshFabricDropsRemovedNodeTaps(t *testing.T) {
 		ID:      "tap-plan",
 		Nodes:   []lab.Node{iolNode(1), iolNode(2), iolNode(3)},
 	}
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(doc, t.TempDir())
 	s.refreshFabric(ll)
 	initial := ll.staticTapsSnapshot()

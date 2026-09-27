@@ -9,6 +9,7 @@
   import { consoleUiStore } from "../consoleUiStore.svelte";
   import { ConsoleTransport } from "../consoleTransport";
   import { ConsoleColorizer } from "../consoleColorizer";
+  import { attachConsoleMetrics } from "../consoleMetrics";
   import type { ConsoleMark } from "../consoleUiStore.svelte";
 
   let {
@@ -36,6 +37,10 @@
   let resizeObserver: ResizeObserver | undefined;
   let promptLine = "";
   let realConsole: ConsoleTransport | undefined;
+  let colorizer: ConsoleColorizer | undefined;
+  let metricsHandle: ReturnType<typeof attachConsoleMetrics>;
+  let metricsRenderSubscription: { dispose(): void } | undefined;
+  let focusFrame: number | undefined;
   let searchInput = $state<HTMLInputElement | undefined>();
   let searchQuery = $state("");
   let searchMatches = $state(0);
@@ -45,6 +50,22 @@
   const PROMPT = "Router>";
   const DIM = "\x1b[2m";
   const RESET = "\x1b[0m";
+
+  function queueTerminalFocus() {
+    if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
+    // Wait for Svelte's pane reorder/layout and the browser's default mouse
+    // focus to finish. A pointerdown focus can otherwise be immediately lost.
+    focusFrame = requestAnimationFrame(() => {
+      focusFrame = undefined;
+      if (visible && focused && !searchOpen) term?.focus();
+    });
+  }
+
+  function activateConsole(event: PointerEvent) {
+    if (event.button !== 0) return;
+    consoleUiStore.setFocused({ kind: "console", node: nodeId });
+    queueTerminalFocus();
+  }
 
   // Resolve theme tokens to concrete colours xterm can consume (it needs hex/
   // rgb, not CSS vars). Re-read when the theme flips.
@@ -147,39 +168,57 @@
     if (container) {
       term.open(container);
       refitAndResize();
-      if (focused) term.focus();
+      if (visible && focused && !searchOpen) queueTerminalFocus();
     }
 
     if (labStore.transportKind === "ws") {
+      metricsHandle = attachConsoleMetrics(nodeId);
+      if (metricsHandle) metricsRenderSubscription = term.onRender(() => metricsHandle?.metrics.render());
+      const encoder = metricsHandle ? new TextEncoder() : undefined;
+      const writeConsole = (text: string) => {
+        if (!term || !text) return;
+        if (metricsHandle && encoder) {
+          const parsed = metricsHandle.metrics.emit(encoder.encode(text).byteLength, visible);
+          term.write(text, parsed);
+        } else term.write(text);
+      };
       // Real supervisor: pipe xterm <-> ws(s)://<host>/console/<nodeId>
       // (binary frames; see consoleTransport.ts / wsbridge.go).
-      const decoder = new TextDecoder();
+      let decoder = new TextDecoder();
       // v2 colorizer emits through a sink (it may hold an incomplete line tail
       // for ~one frame — see consoleColorizer.ts); everything lands in term.
-      const colorizer = new ConsoleColorizer((s) => term?.write(s));
+      const streamColorizer = new ConsoleColorizer(writeConsole);
+      colorizer = streamColorizer;
       const rc = new ConsoleTransport(nodeId, {
         onData: (bytes) => {
+          metricsHandle?.metrics.receive(bytes.byteLength);
           const text = decoder.decode(bytes, { stream: true });
           if (consoleUiStore.colorize) {
-            colorizer.push(text);
+            streamColorizer.push(text);
           } else {
             // Toggled off mid-stream: release anything still held FIRST so
             // byte order is preserved, then write raw.
-            colorizer.flushHeld();
-            term?.write(text);
+            streamColorizer.flushHeld();
+            writeConsole(text);
           }
         },
         onOpen: () => {
-          colorizer.reset(); // fresh stream (reconnects replay recent context)
+          metricsHandle?.metrics.reconnect();
+          streamColorizer.reset(); // fresh stream (reconnects replay recent context)
+          decoder = new TextDecoder(); // discard an incomplete UTF-8 prefix from the old socket
           if (term && container && container.clientWidth > 0 && container.clientHeight > 0) {
             rc.sendResize(term.cols, term.rows);
           }
         },
+        onClose: () => streamColorizer.flushHeld(),
         onError: () => labStore.pushLog("error", `console ws error for node ${nodeId}`, nodeId),
       });
       rc.connect();
       realConsole = rc;
-      term.onData((data) => rc.sendInput(data));
+      term.onData((data) => {
+        streamColorizer.noteInput(data);
+        rc.sendInput(data);
+      });
     } else {
       // Mock console: replay buffered history and drive a tiny fake shell.
       for (const line of labStore.mockTransport?.getConsoleHistory(nodeId) ?? []) {
@@ -195,18 +234,26 @@
   });
 
   onDestroy(() => {
+    if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
     resizeObserver?.disconnect();
     realConsole?.disconnect();
+    colorizer?.reset();
+    metricsRenderSubscription?.dispose();
+    metricsHandle?.dispose();
+    metricsHandle = undefined;
     term?.dispose();
+    term = undefined;
   });
 
   $effect(() => {
     if (visible) {
       requestAnimationFrame(() => refitAndResize());
     }
-    if (focused) {
-      term?.focus();
-    }
+  });
+
+  $effect(() => {
+    if (visible && focused && !searchOpen) queueTerminalFocus();
+    else term?.blur();
   });
 
   // Refit + re-send NAWS when the dock side flips (bottom<->right changes the
@@ -256,8 +303,11 @@
   });
 
   $effect(() => {
-    if (searchOpen && focused && searchInput) {
-      requestAnimationFrame(() => searchInput?.focus());
+    if (searchOpen && visible && focused && searchInput) {
+      const frame = requestAnimationFrame(() => {
+        if (searchOpen && visible && focused) searchInput?.focus();
+      });
+      return () => cancelAnimationFrame(frame);
     }
   });
 
@@ -326,7 +376,7 @@
 </script>
 
 <div class="term-shell">
-  <div class="term-container" bind:this={container}></div>
+  <div class="term-container" role="group" aria-label="Node console" bind:this={container} onpointerdown={activateConsole}></div>
   {#if searchOpen && focused}
     <div class="find-bar" role="search" aria-label="Find in this console">
       <label for={`console-find-${nodeId}`}>Find in this console</label>

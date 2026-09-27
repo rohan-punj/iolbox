@@ -12,7 +12,7 @@ import (
 )
 
 func TestB15StartToolNodeRejectsUnsupportedRuntime(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	doc := &lab.Lab{Version: 1, ID: "tool-unsupported", Name: "tool", Nodes: []lab.Node{{
 		ID: 7, Kind: lab.KindTool, Name: "Tool", Config: map[string]json.RawMessage{
 			"pack": json.RawMessage(`"stub"`),
@@ -31,7 +31,7 @@ func TestB15StartToolNodeRejectsUnsupportedRuntime(t *testing.T) {
 }
 
 func TestB15StartToolNodeRejectsUnknownPack(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	s.toolCaps = tool.Capabilities{
 		NetnsCreate: true, VethCreate: true, VethMoveRename: true,
 		CgroupDelegated: true, AmbientCapTransition: true, UnixProxy: true,
@@ -59,7 +59,7 @@ func TestB15LabLoadChecksInstalledToolPack(t *testing.T) {
 			"pack": json.RawMessage(`"uninstalled"`),
 		},
 	}}}
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "lab.load", protocol.LabLoadArgs{Lab: doc})
 	if resp.OK || resp.Error.Code != protocol.CodeBadRequest {
 		t.Fatalf("unknown pack lab.load = %+v, want bad_request", resp)
@@ -69,7 +69,7 @@ func TestB15LabLoadChecksInstalledToolPack(t *testing.T) {
 	}
 
 	doc.ID = "tool-load-installed"
-	s = newTestServer()
+	s = newTestServer(t)
 	s.toolPacks = []tool.Pack{{ID: "installed"}}
 	doc.Nodes[0].Config["pack"] = json.RawMessage(`"installed"`)
 	resp = dispatch(t, s, "lab.load", protocol.LabLoadArgs{Lab: doc})
@@ -79,7 +79,7 @@ func TestB15LabLoadChecksInstalledToolPack(t *testing.T) {
 }
 
 func TestB15HelloToolFeatureIsCapabilityGated(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "hello", protocol.HelloArgs{Client: "gui"})
 	if !resp.OK {
 		t.Fatalf("hello without tool capabilities failed: %+v", resp.Error)
@@ -114,7 +114,7 @@ func TestB15HelloToolFeatureIsCapabilityGated(t *testing.T) {
 }
 
 func TestB15StopNodeWithNilToolIsNoOp(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	doc := &lab.Lab{Version: 1, ID: "tool-stop", Name: "tool", Nodes: []lab.Node{{
 		ID: 10, Kind: lab.KindTool, Name: "Tool", Config: map[string]json.RawMessage{
 			"pack": json.RawMessage(`"stub"`),

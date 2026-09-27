@@ -5,6 +5,7 @@
     clampGeom,
     consoleUiStore,
     paneKey,
+    samePane,
     FONT_MIN,
     FONT_MAX,
     type PaneRef,
@@ -23,7 +24,7 @@
   const key = $derived(paneKey(ref));
   const geom = $derived(consoleUiStore.windows[key]);
   const minimized = $derived(consoleUiStore.minimized.includes(key));
-  const topmost = $derived(consoleUiStore.windowOrder.at(-1) === key);
+  const focused = $derived(!minimized && samePane(consoleUiStore.focused, ref));
   const title = $derived(
     ref.kind === "console"
       ? nodeName(ref.node)
@@ -200,7 +201,7 @@
   </div>
 
   <div class="pane-content" class:minimized>
-    <PaneBody {ref} visible={!minimized} focused={topmost} />
+    <PaneBody {ref} visible={!minimized} {focused} />
   </div>
   <div
     class="float-grip"

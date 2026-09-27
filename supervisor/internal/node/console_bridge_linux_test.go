@@ -31,12 +31,17 @@ func TestPCConsoleBridgeBroadcastsToTwoClients(t *testing.T) {
 	for i, client := range clients {
 		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
 		buf := make([]byte, 256)
-		n, err := client.Read(buf)
-		if err != nil {
-			t.Fatalf("client %d: %v", i, err)
-		}
-		if !bytes.Contains(buf[:n], []byte("PC> ready")) {
-			t.Fatalf("client %d got %q", i, buf[:n])
+		var received []byte
+		// TCP may split negotiation, title, and console output across reads.
+		for !bytes.Contains(received, []byte("PC> ready")) {
+			n, err := client.Read(buf)
+			received = append(received, buf[:n]...)
+			if bytes.Contains(received, []byte("PC> ready")) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("client %d: %v; received %q", i, err, received)
+			}
 		}
 	}
 	_ = cliPeer.Close()

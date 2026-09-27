@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -54,6 +55,37 @@ func pipeConns(t *testing.T) (*Conn, net.Conn) {
 	a, b := net.Pipe()
 	srv := newConn(a, bufio.NewReader(a))
 	return srv, b
+}
+
+func TestFrameWriteTimeoutIncludesAutomaticPong(t *testing.T) {
+	for _, control := range []bool{false, true} {
+		t.Run(fmt.Sprint(control), func(t *testing.T) {
+			srv, client := pipeConns(t)
+			defer srv.Close()
+			defer client.Close()
+			srv.SetWriteTimeout(30 * time.Millisecond)
+			// Idle time must not consume the next frame's deadline.
+			time.Sleep(40 * time.Millisecond)
+			done := make(chan error, 1)
+			if control {
+				go func() { _, _, err := srv.ReadMessage(); done <- err }()
+				if _, err := client.Write(clientFrame(OpPing, []byte("ping"), true)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				go func() { done <- srv.WriteMessage(OpBinary, []byte("data")) }()
+			}
+			// Peer deliberately never reads server output.
+			select {
+			case err := <-done:
+				if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+					t.Fatalf("expected timeout, got %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("write remained blocked")
+			}
+		})
+	}
 }
 
 func TestReadMessageText(t *testing.T) {

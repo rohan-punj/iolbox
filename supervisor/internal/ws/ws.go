@@ -132,9 +132,10 @@ type Conn struct {
 	nc net.Conn
 	br *bufio.Reader
 
-	writeMu sync.Mutex
-	closed  bool
-	closeMu sync.Mutex
+	writeMu      sync.Mutex
+	writeTimeout time.Duration // applied under writeMu to every frame, including pong/close
+	closed       bool
+	closeMu      sync.Mutex
 }
 
 func newConn(nc net.Conn, br *bufio.Reader) *Conn {
@@ -148,6 +149,15 @@ func (c *Conn) RemoteAddr() net.Addr { return c.nc.RemoteAddr() }
 // this to evict a peer whose TCP receive window has stopped making progress.
 func (c *Conn) SetWriteDeadline(deadline time.Time) error {
 	return c.nc.SetWriteDeadline(deadline)
+}
+
+// SetWriteTimeout configures a fresh deadline per frame. Configure before
+// starting pumps; unlike an externally set deadline, it cannot go stale while
+// idle or be extended concurrently by an automatic pong writer.
+func (c *Conn) SetWriteTimeout(timeout time.Duration) {
+	c.writeMu.Lock()
+	c.writeTimeout = timeout
+	c.writeMu.Unlock()
 }
 
 // Close closes the underlying TCP connection without a close handshake. Use
@@ -324,6 +334,14 @@ func (c *Conn) WriteClose(code uint16, reason string) error {
 func (c *Conn) writeFrame(op Opcode, payload []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.isClosed() {
+		return ErrClosed
+	}
+	if c.writeTimeout > 0 {
+		if err := c.nc.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return err
+		}
+	}
 
 	var hdr bytes.Buffer
 	hdr.WriteByte(0x80 | byte(op)) // FIN=1, opcode

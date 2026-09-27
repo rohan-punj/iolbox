@@ -20,7 +20,7 @@ func (c *testBridgeCloser) Close() error {
 }
 
 func TestEvictTapBridgeOnPumpFailure(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(&lab.Lab{ID: "bridge-lab"}, t.TempDir())
 	closer := &testBridgeCloser{}
 	bridge := &labBridge{netioPath: "/tmp/netio/501", tapName: "iol1_0", closer: closer}
@@ -34,8 +34,9 @@ func TestEvictTapBridgeOnPumpFailure(t *testing.T) {
 	}
 }
 
-func newTestServer() *Server {
-	return New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: "/run/iolbox", Version: "test"})
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	return New(Config{ControlAddr: "127.0.0.1:0", ImageDir: "/opt/iolbox/images", RunDir: t.TempDir(), Version: "test"})
 }
 
 // TestConcurrentLabReadsAndTopologyEdits is the regression for the
@@ -44,7 +45,7 @@ func newTestServer() *Server {
 // status, an empty lab.start (fabric/document path without a process spawn),
 // and repeated node add/remove operations.
 func TestConcurrentLabReadsAndTopologyEdits(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	load := json.RawMessage(`{"lab":{"version":1,"id":"race-lab","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":0,"y":0}],"links":[]}}`)
 	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "load", Op: "lab.load", Args: load}); !resp.OK {
 		t.Fatalf("lab.load: %+v", resp.Error)
@@ -83,7 +84,7 @@ func TestStartNodesReportsFailureAndContinues(t *testing.T) {
 			{ID: 1, Kind: lab.KindVPCS, Name: "already-up"},
 		},
 	}
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(doc, t.TempDir())
 	// Including an IOL node means startNodes provisions real static kernel
 	// taps for it (fabric.go's computeStaticTaps runs for every IOL node in
@@ -121,7 +122,7 @@ func TestStartNodesReportsFailureAndContinues(t *testing.T) {
 }
 
 func TestBulkStartReportsAllNodeFailures(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	load := json.RawMessage(`{"lab":{"version":1,"id":"partial-lab","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":0,"y":0}],"links":[]}}`)
 	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "load", Op: "lab.load", Args: load}); !resp.OK {
 		t.Fatalf("lab.load: %+v", resp.Error)
@@ -153,7 +154,7 @@ func dispatch(t *testing.T, s *Server, op string, args any) *protocol.Response {
 }
 
 func TestHelloVerb(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "hello", protocol.HelloArgs{Client: "gui"})
 	if !resp.OK {
 		t.Fatalf("hello failed: %+v", resp.Error)
@@ -208,7 +209,7 @@ func TestHelloArchExplicitTargets(t *testing.T) {
 }
 
 func TestLabLoadValidation(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	// Invalid: version 2.
 	bad := json.RawMessage(`{"lab":{"version":2,"id":"x","name":"n","nodes":[],"links":[]}}`)
 	resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "1", Op: "lab.load", Args: bad})
@@ -230,7 +231,7 @@ func TestLabLoadValidation(t *testing.T) {
 }
 
 func TestStatusNotLoaded(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "status", protocol.LabSelectArgs{})
 	if !resp.OK {
 		t.Fatalf("status should succeed when empty: %+v", resp.Error)
@@ -243,7 +244,7 @@ func TestStatusNotLoaded(t *testing.T) {
 }
 
 func TestOperationsRequireLoadedLab(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "lab.start", protocol.LabSelectArgs{LabID: "nope"})
 	if resp.OK || resp.Error.Code != protocol.CodeNotLoaded {
 		t.Fatalf("expected not_loaded, got %+v", resp)
@@ -251,7 +252,7 @@ func TestOperationsRequireLoadedLab(t *testing.T) {
 }
 
 func TestUnknownVerb(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "does.not.exist", nil)
 	if resp.OK || resp.Error.Code != protocol.CodeUnsupported {
 		t.Fatalf("expected unsupported, got %+v", resp)
@@ -259,7 +260,7 @@ func TestUnknownVerb(t *testing.T) {
 }
 
 func TestAllVerbsRegistered(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	want := []string{
 		"hello", "image.list", "image.register", "lab.load", "lab.start", "lab.stop",
 		"lab.wipe", "node.start", "node.stop", "node.restart", "node.setImage", "link.add",
@@ -281,7 +282,7 @@ func TestAllVerbsRegistered(t *testing.T) {
 // it can start without a lab.load; duplicates are rejected; remove drops the
 // node AND its links from the loaded doc.
 func TestNodeAddRemove(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	load := json.RawMessage(`{"lab":{"version":1,"id":"l1","name":"n","nodes":[{"id":0,"kind":"vpcs","name":"PC","x":0,"y":0}],"links":[]}}`)
 	if resp := s.Dispatcher().Dispatch(&protocol.Request{ID: "1", Op: "lab.load", Args: load}); !resp.OK {
 		t.Fatalf("lab.load: %+v", resp.Error)

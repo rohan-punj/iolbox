@@ -113,7 +113,7 @@ func TestSameTopologyRenamedNodeMovedPosition(t *testing.T) {
 // doc — the core WS2 guarantee (a GUI refresh / second tab must not kill a
 // running lab).
 func TestLabLoadAdoptsRunningLabNoTeardown(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	doc := twoNodeLab("lab-adopt")
 	ll := loadLab(t, s, doc)
 
@@ -174,7 +174,7 @@ func TestLabLoadAdoptsRunningLabNoTeardown(t *testing.T) {
 // through the normal teardown-and-reload path (the running node must stop),
 // even though the id matches.
 func TestLabLoadDifferentTopologyStillTearsDown(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	doc := twoNodeLab("lab-diff")
 	ll := loadLab(t, s, doc)
 	nr0 := ll.get(0)
@@ -203,7 +203,7 @@ func TestLabLoadDifferentTopologyStillTearsDown(t *testing.T) {
 // reload path rather than adopting — adoption is only meaningful (and only
 // needed) when there's a live process to protect.
 func TestLabLoadIdleLabStillReloads(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	doc := twoNodeLab("lab-idle")
 	ll := loadLab(t, s, doc)
 	// Nothing driven to running: every node is stopped.

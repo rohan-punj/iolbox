@@ -73,20 +73,20 @@ func TestLaunchArgvNamespaceTransitionTargetOrder(t *testing.T) {
 
 func TestLaunchNativeArgvWithCgroup(t *testing.T) {
 	spec := LaunchSpec{
-		Netns:       "iolt7",
+		NodeID:      7,
 		CgroupPath:  "/sys/fs/cgroup/tool-7",
 		Binary:      "/opt/pack/tool",
 		Args:        []string{"--serve"},
 		AmbientCaps: []string{"NET_RAW"},
 	}
 	want := []string{
+		"ip", "netns", "exec", "iolt7",
 		"/opt/iolbox/iolbox-toollaunch",
 		"--cgroup", "/sys/fs/cgroup/tool-7",
-		"--netns", "iolt7",
 		"--user", "ioltool", "--caps", "cap_net_raw", "--",
 		"/opt/pack/tool", "--serve",
 	}
-	if got := launchNativeArgv(spec, true, -1); !reflect.DeepEqual(got, want) {
+	if got := NetnsExecArgs(spec.NodeID, launchNativeArgv(spec, true, -1)); !reflect.DeepEqual(got, want) {
 		t.Fatalf("native argv = %#v, want %#v", got, want)
 	}
 }

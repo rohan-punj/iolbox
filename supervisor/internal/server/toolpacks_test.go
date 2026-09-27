@@ -13,7 +13,7 @@ import (
 )
 
 func TestToolListPacksEmptyIsArray(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	result, err := s.handleToolListPacks(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +28,7 @@ func TestToolListPacksEmptyIsArray(t *testing.T) {
 }
 
 func TestToolListPacksMapsManifestMetadata(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	s.toolPacks = []tool.Pack{{
 		ID: "secbench",
 		Manifest: tool.Manifest{
@@ -65,7 +65,7 @@ func TestToolListPacksMapsManifestMetadata(t *testing.T) {
 }
 
 func TestToolPackLookup(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	want := tool.Pack{ID: "stub"}
 	s.toolPacks = []tool.Pack{want}
 	if got, ok := s.toolPack("stub"); !ok || got.ID != want.ID {
@@ -87,7 +87,7 @@ func TestToolpacksLoadKeepsValidPackWithMalformedPack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newTestServer()
+	s := newTestServer(t)
 	s.toolpacksLoad(dir)
 	if len(s.toolPacks) != 1 || s.toolPacks[0].ID != "valid" {
 		t.Fatalf("cached packs = %#v, want valid pack despite warning", s.toolPacks)
@@ -100,7 +100,7 @@ func TestToolpacksLoadKeepsValidPackWithMalformedPack(t *testing.T) {
 func TestToolpacksLoadSeparatesBuiltInPC(t *testing.T) {
 	dir := t.TempDir()
 	toolpacksTestWritePack(t, filepath.Join(dir, "pc"), "pc", "Virtual PC")
-	s := newTestServer()
+	s := newTestServer(t)
 	s.toolpacksLoad(dir)
 	if _, ok := s.toolPack("pc"); ok {
 		t.Fatal("built-in pc leaked into ordinary tool registry")
@@ -123,7 +123,7 @@ func TestToolpacksLoadSeparatesBuiltInPC(t *testing.T) {
 }
 
 func TestStopRuntimeIsNilSafeAndIdempotent(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	s.StopRuntime()
 	calls := 0
 	s.toolStop = func() { calls++ }

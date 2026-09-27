@@ -9,7 +9,7 @@ import (
 )
 
 func TestToolListPacksDispatcherRoundTripWire(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	packsDir := t.TempDir()
 	toolpacksTestWritePack(t, filepath.Join(packsDir, "stub"), "stub", "Stub Tool")
 	s.toolpacksLoad(packsDir)

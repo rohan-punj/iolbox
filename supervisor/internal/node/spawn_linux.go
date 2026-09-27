@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/rohanpunj/iolbox/supervisor/internal/tool"
 )
 
@@ -114,18 +113,19 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 		return nil, fmt.Errorf("node %d: not in a startable state", spec.NodeID)
 	}
 
-	// pty.Start allocates a pty, wires cmd's stdin/stdout/stderr to the slave,
+	// startConsolePTY allocates/prepares a pty before exec, wires cmd's
+	// stdin/stdout/stderr to the slave,
 	// and sets SysProcAttr{Setsid:true, Setctty:true} so the slave is the
 	// process's controlling terminal — the IOL console.
 	//
-	// pty.Start is the fork+exec here, so it is what runs inside StartAndAdd:
+	// startConsolePTY is the fork+exec here, so it runs inside StartAndAdd:
 	// the registry lock is held across the start and the PID registration
 	// together, so the supervisor's subreaper can never observe this IOL child
 	// as an unregistered orphan and reap it before cmd.Wait owns its status.
 	var ptmx *os.File
 	err = tool.Registry.StartAndAdd(func() error {
 		var startErr error
-		ptmx, startErr = pty.Start(cmd)
+		ptmx, startErr = startConsolePTY(cmd)
 		return startErr
 	}, func() int { return cmd.Process.Pid })
 	if err != nil {
@@ -133,7 +133,6 @@ func spawnIOL(spec Spec, m *Machine) (*Process, error) {
 		_ = ln.Close()
 		return nil, fmt.Errorf("node %d: pty start: %w", spec.NodeID, err)
 	}
-
 	p := &Process{
 		Spec:     spec,
 		Machine:  m,

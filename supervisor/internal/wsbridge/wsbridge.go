@@ -38,6 +38,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/rohanpunj/iolbox/supervisor/internal/consolediag"
 	"io"
 	"log"
 	"net"
@@ -374,6 +375,7 @@ func (b *Bridge) handleConsole(w http.ResponseWriter, r *http.Request) {
 // level (not a method) so it's independently testable against fake
 // net.Conn/ws.Conn-shaped pipes.
 func bridgeConsole(ctx context.Context, wsConn *ws.Conn, telnetConn net.Conn) {
+	wsConn.SetWriteTimeout(5 * time.Second)
 	done := make(chan struct{})
 	var once sync.Once
 	closeAll := func() {
@@ -476,6 +478,9 @@ func bridgeConsole(ctx context.Context, wsConn *ws.Conn, telnetConn net.Conn) {
 // guardrail; a real pty-resize (pty.Setsize) is a separate, not-yet-designed
 // feature, not something this refactor should introduce as a side effect.
 func bridgeConsoleSub(ctx context.Context, wsConn *ws.Conn, sub *node.Subscription) {
+	wsConn.SetWriteTimeout(5 * time.Second)
+	metrics := consolediag.New(wsConn.RemoteAddr().String(), "ws-write")
+	defer metrics.Flush()
 	done := make(chan struct{})
 	var once sync.Once
 	closeAll := func() {
@@ -489,6 +494,8 @@ func bridgeConsoleSub(ctx context.Context, wsConn *ws.Conn, sub *node.Subscripti
 	go func() {
 		select {
 		case <-ctx.Done():
+			closeAll()
+		case <-sub.Done:
 			closeAll()
 		case <-done:
 		}
@@ -505,7 +512,10 @@ func bridgeConsoleSub(ctx context.Context, wsConn *ws.Conn, sub *node.Subscripti
 					return
 				}
 				if len(chunk) > 0 {
-					if werr := wsConn.WriteMessage(ws.OpBinary, chunk); werr != nil {
+					at := time.Now()
+					werr := wsConn.WriteMessage(ws.OpBinary, chunk)
+					metrics.Observe(len(chunk), time.Since(at))
+					if werr != nil {
 						return
 					}
 				}

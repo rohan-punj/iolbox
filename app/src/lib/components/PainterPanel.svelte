@@ -1,8 +1,8 @@
 <script lang="ts">
   // Topology Painter panel (WS5b) — a compact floating card over the canvas,
   // sibling to the Network Watcher. The user picks a protocol (STP / OSPF /
-  // EIGRP / BGP) and, for routing protocols, a destination (a node loopback or
-  // a typed prefix), then hits Paint for a one-shot live snapshot. All state
+  // EIGRP / BGP) and, for routing protocols, a destination prefix or host,
+  // then hits Paint for a one-shot live snapshot. All state
   // lives in painterStore; FloatingEdge reads the same store to draw the
   // badges/highlights, so this panel is pure chrome + the paint trigger.
   import {
@@ -26,10 +26,7 @@
   const busy = $derived(painterStore.busy);
   const isStp = $derived(proto === "stp");
 
-  // IOL nodes offered as destination picks (routing protocols). A pick just
-  // fills the prefix box with a placeholder the user can refine — the frontend
-  // has no authoritative loopback address, so we suggest a "<name> loopback"
-  // hint and let them type the real prefix.
+  // IOL nodes available for STP VLAN discovery.
   const iolNodes = $derived(labStore.lab.nodes.filter((n) => n.kind === "iol"));
 
   // Any running node at all? Paint is pointless (and the backend returns all
@@ -139,36 +136,13 @@
         </div>
       {/if}
 
-      <!-- Destination selector — only for routing protocols. A node picker
-           (fills the prefix box) plus a free-text prefix/host input. -->
+      <!-- Routing destination stays in the store while STP hides this input. -->
       {#if destUsed(proto)}
         <div class="pp-dest">
           <label class="pp-dest-label" for="pp-dest-input">
-            Destination{destRequired(proto) ? "" : " (optional)"}
+            Destination prefix or host{destRequired(proto) ? "" : " (optional)"}
           </label>
           <div class="pp-dest-row">
-            <select
-              class="pp-dest-node"
-              aria-label="Pick a destination node"
-              value={painterStore.destNodeId ?? ""}
-              onchange={(e) => {
-                const v = (e.currentTarget as HTMLSelectElement).value;
-                if (v === "") {
-                  painterStore.destNodeId = null;
-                  return;
-                }
-                const id = Number(v);
-                painterStore.destNodeId = id;
-                const n = labStore.lab.nodes.find((x) => x.id === id);
-                // Suggest a loopback-style prefix; the user refines the real one.
-                painterStore.destText = `${n?.name ?? "R" + id} loopback`;
-              }}
-            >
-              <option value="">— node —</option>
-              {#each iolNodes as n (n.id)}
-                <option value={n.id}>{n.name}</option>
-              {/each}
-            </select>
             <input
               id="pp-dest-input"
               class="pp-dest-input"
@@ -178,7 +152,6 @@
               value={painterStore.destText}
               oninput={(e) => {
                 painterStore.destText = (e.currentTarget as HTMLInputElement).value;
-                painterStore.destNodeId = null;
               }}
             />
           </div>
@@ -371,16 +344,6 @@
   .pp-dest-row {
     display: flex;
     gap: 6px;
-  }
-  .pp-dest-node {
-    flex: 0 0 84px;
-    min-width: 0;
-    font-size: var(--fs-xs);
-    color: var(--ink);
-    background: var(--bg-1);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    padding: 4px 6px;
   }
   .pp-dest-input {
     flex: 1;

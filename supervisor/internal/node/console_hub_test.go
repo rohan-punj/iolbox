@@ -232,15 +232,9 @@ func TestHubDropsBackpressuredClient(t *testing.T) {
 	healthy := attachPipe(h)
 	defer healthy.Close()
 
-	// Drain the healthy client continuously in the background.
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			if _, err := healthy.Read(buf); err != nil {
-				return
-			}
-		}
-	}()
+	// Drain each broadcast before producing the next. A background reader can
+	// itself be starved by the test producer and get spuriously evicted.
+	collectUntil(t, healthy, telnetPreamble)
 
 	// Push queue-capacity+2 chunks. The stalled client's writer goroutine
 	// blocks on the first chunk (net.Pipe is unbuffered), its queue fills, and
@@ -250,6 +244,7 @@ func TestHubDropsBackpressuredClient(t *testing.T) {
 		if _, err := outW.Write(chunk); err != nil {
 			t.Fatal(err)
 		}
+		collectUntil(t, healthy, chunk)
 	}
 
 	waitFor(t, "stalled client to be dropped", func() bool {
@@ -470,29 +465,12 @@ func TestHubSubscribeAfterShutdownReturnsNil(t *testing.T) {
 	}
 }
 
-// TestHubOneNegotiatorSharedAcrossTCPClients is the core Phase 1 regression
-// test: TWO TCP clients attach to the SAME hub, and the hub answers each
-// one's WILL/DO negotiation through the SAME underlying Negotiator instance
-// (h.neg) — not one each. We prove this indirectly (h.neg is unexported)
-// by exploiting RFC 1143's Q-method idempotency, the exact mechanism
-// documented in internal/telnet/iac.go: if two independent Negotiators were
-// in play, each client's own WILL/DO negotiation would be answered
-// independently and every client would see a full negotiation reply
-// sequence for ITS OWN option offers. With one shared Negotiator, a SECOND
-// client's WILL SGA (an option the hub already accepted from the FIRST
-// client) is recognized as already-on and produces NO further reply to that
-// second client on that option — the state transitioned once, globally, not
-// per-connection.
-func TestHubOneNegotiatorSharedAcrossTCPClients(t *testing.T) {
+// Each native client negotiates independently even when another client has
+// already accepted the same option on the shared console.
+func TestHubNegotiatorsIndependentAcrossTCPClients(t *testing.T) {
 	pty, _, inR := newFakePty()
 	h := newConsoleHub(pty, "")
 	defer h.shutdown()
-
-	// Confirm there is exactly one Negotiator instance on the hub (not a
-	// per-client map or slice) — the structural invariant Phase 1 introduces.
-	if h.neg == nil {
-		t.Fatal("hub must own a Negotiator instance")
-	}
 
 	c1 := attachPipe(h)
 	defer c1.Close()
@@ -503,14 +481,7 @@ func TestHubOneNegotiatorSharedAcrossTCPClients(t *testing.T) {
 	_ = readWithDeadline(t, c1, 200*time.Millisecond)
 	_ = readWithDeadline(t, c2, 200*time.Millisecond)
 
-	// c1 offers WILL SGA — the hub's shared Negotiator has ALREADY set
-	// remoteOn[SGA]=true when it sent its own WILL SGA in the preamble... but
-	// preamble WILL is US offering, not the peer. To exercise the shared
-	// remoteOn/localOn transition tracked by the SAME instance across
-	// connections, send the identical WILL SGA from c1, then from c2: the
-	// first transitions the state (hub replies DO SGA), the second is a
-	// no-op replay of a state the hub already considers "on" and gets no
-	// reply — proving one shared state machine, not two independent ones.
+	// Both peers must receive their own DO SGA response.
 	willSGA := []byte{telnet.IAC, telnet.WILL, telnet.OptSGA}
 	if _, err := c1.Write(willSGA); err != nil {
 		t.Fatal(err)
@@ -524,8 +495,8 @@ func TestHubOneNegotiatorSharedAcrossTCPClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	reply2 := readWithDeadline(t, c2, 300*time.Millisecond)
-	if len(reply2) != 0 {
-		t.Fatalf("c2's WILL SGA replays an ALREADY-ON global state (shared Negotiator) — expected NO reply, got %q", reply2)
+	if !bytes.Equal(reply2, []byte{telnet.IAC, telnet.DO, telnet.OptSGA}) {
+		t.Fatalf("c2 must negotiate its own stream independently, got %q", reply2)
 	}
 
 	_ = inR // pty input side unused in this test; keeping the handle for symmetry with other hub tests

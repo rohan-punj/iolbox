@@ -61,7 +61,7 @@ func TestUnsupportedSerialFaultDoesNotMutateState(t *testing.T) {
 		Nodes: []lab.Node{{ID: 1, Kind: lab.KindIOL}, {ID: 2, Kind: lab.KindIOL}},
 		Links: []lab.Link{{ID: 4, Endpoints: []lab.Endpoint{{Node: 1, Interface: "s0/0"}, {Node: 2, Interface: "e0/0"}}}},
 	}
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(doc, t.TempDir())
 	s.lab = ll
 	args := protocol.LinkFaultArgs{LabID: doc.ID, Link: 4, Fault: &lab.LinkFault{LossPct: 10}}
@@ -85,7 +85,7 @@ func TestLinkSetFaultRejectsOutOfRangeTargetAtHandler(t *testing.T) {
 		Nodes: []lab.Node{{ID: 1, Kind: lab.KindIOL}, {ID: 2, Kind: lab.KindIOL}},
 		Links: []lab.Link{{ID: 5, Endpoints: []lab.Endpoint{{Node: 1, Interface: "e0/0"}, {Node: 2, Interface: "e0/0"}}}},
 	}
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(doc, t.TempDir())
 	s.lab = ll
 	target := 2

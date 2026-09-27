@@ -49,7 +49,7 @@ func TestMergePCStateWritesOnlyPCConfig(t *testing.T) {
 // watchdog fails it; post-fix the RPC returns, the node is stopped, and both
 // locks are free again.
 func TestStopRunningPCNodeReturns(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	pcNode := lab.Node{ID: 7, Kind: lab.KindPC, Name: "PC7"}
 	ll := newLoadedLab(&lab.Lab{Version: 1, ID: "pc-stop", Name: "pc-stop", Nodes: []lab.Node{pcNode}}, t.TempDir())
 	ll.nodes[7] = &nodeRuntime{

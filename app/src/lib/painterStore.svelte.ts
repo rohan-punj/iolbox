@@ -69,18 +69,15 @@ class PainterStore {
   /** Chosen protocol for the next paint. */
   proto = $state<PainterProto>("stp");
 
-  /** Destination for routing paints. Either a typed prefix/host string, or a
-   *  node id the user picked (resolved to an address at paint time). Stored raw
-   *  as a string; when a node was picked we keep its id in `destNodeId` so the
-   *  <select> reflects the choice. */
+  /** Typed routing destination, kept verbatim across protocol changes, panel
+   *  visibility changes, paint attempts, and clearing the overlay. */
   destText = $state("");
-  destNodeId = $state<number | null>(null);
 
   // ---- STP node → VLAN flow ----
   // STP is per-VLAN (backend redesign): the user picks the IOL node to probe,
   // hits "Detect VLANs" (painter.stpVlans), then picks one of the VLANs it
   // returned before Paint is enabled. This is deliberately separate from the
-  // routing `destText`/`destNodeId` pair above — different protocol shape.
+  // routing `destText` above — different protocol shape.
 
   /** Node chosen for VLAN discovery / as the probe target. */
   stpNodeId = $state<number | null>(null);
@@ -148,16 +145,9 @@ class PainterStore {
     }
   }
 
-  /** Resolve the chosen destination to the STRING the backend expects. When the
-   *  user picked a node, prefer that node's first configured interface/loopback
-   *  address if we can infer one; otherwise fall back to the typed text. The
-   *  frontend does NOT have authoritative addresses (lab docs don't carry L3
-   *  config parsed out), so a node pick without a known address yields "" and
-   *  the panel nudges the user to type a prefix. */
+  /** Trim the destination for the wire payload without changing the input. */
   resolveDest(): string {
-    const t = this.destText.trim();
-    if (t) return t;
-    return "";
+    return this.destText.trim();
   }
 
   /** True once a VLAN has been chosen — gates the Paint button for STP (the

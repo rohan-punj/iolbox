@@ -93,6 +93,33 @@ func TestSessionSyncPrompt(t *testing.T) {
 	}
 }
 
+func TestRunExecIgnoresStalePromptsAndSplitEcho(t *testing.T) {
+	f := &fakeConsole{}
+	f.sess = New(f.write)
+	f.sess.Feed([]byte("cached\r\nR1>"))
+	f.chunks = [][]byte{
+		[]byte("\r\nR1#"),
+		[]byte("R1#"), []byte("terminal len"), []byte("gth 0\r\nR1#"),
+		[]byte("old result\r\nR1#"), []byte("show cl"), []byte("ock\r\nfresh result\r\n"), []byte("R1#"),
+	}
+	out, err := f.sess.RunExec(context.Background(), f.read, "show clock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "fresh result" {
+		t.Fatalf("captured stale output: %q", out)
+	}
+}
+
+func TestCommandWithoutEchoCannotCompleteOnPrompt(t *testing.T) {
+	f := &fakeConsole{}
+	f.sess = New(f.write)
+	f.chunks = [][]byte{[]byte("R1#"), []byte("R1#")}
+	if _, err := f.sess.RunExec(context.Background(), f.read, "show clock"); err == nil {
+		t.Fatal("bare stale prompt completed command")
+	}
+}
+
 // TestSessionRunExec exercises the full enable -> terminal length 0 -> show
 // sequence end-to-end against a scripted fake, mirroring the exact behavior
 // consoleSession.runShow had inline before the Phase 0 extraction.
@@ -110,8 +137,8 @@ func TestSessionRunExec(t *testing.T) {
 	// TestNodeMACsReadsIOLShowInterfaces, which caught it as an
 	// order-dependent failure when run alongside other tests.)
 	f.chunks = [][]byte{
-		[]byte("\r\nR1>"),                              // response to the initial bare CR (unprivileged)
-		[]byte("enable\r\nR1#"),                         // response after Reset()+"enable\r"
+		[]byte("\r\nR1>"),                                // response to the initial bare CR (unprivileged)
+		[]byte("enable\r\nR1#"),                          // response after Reset()+"enable\r"
 		[]byte("terminal length 0\r\nR1#"),               // response after Reset()+"terminal length 0\r"
 		[]byte("show clock\r\n*12:00:00.000 UTC\r\nR1#"), // response after Reset()+the show command
 	}
@@ -144,9 +171,9 @@ func TestSessionRunExecAlreadyPrivileged(t *testing.T) {
 	f := &fakeConsole{}
 	f.sess = New(f.write)
 	f.chunks = [][]byte{
-		[]byte("R1#"),       // already privileged
-		[]byte("R1#"),       // after terminal length 0
-		[]byte("ok\r\nR1#"), // after show command
+		[]byte("R1#"), // already privileged
+		[]byte("terminal length 0\r\nR1#"),
+		[]byte("show version\r\nok\r\nR1#"),
 	}
 	out, err := f.sess.RunExec(context.Background(), f.read, "show version")
 	if err != nil {
@@ -174,8 +201,8 @@ func TestSessionRunExecConfigModeUsesDoPrefix(t *testing.T) {
 	f := &fakeConsole{}
 	f.sess = New(f.write)
 	f.chunks = [][]byte{
-		[]byte("R1(config)#"),                                      // initial sync: config mode
-		[]byte("R1(config)#"),                                      // after "do terminal length 0"
+		[]byte("R1(config)#"), // initial sync: config mode
+		[]byte("do terminal length 0\r\nR1(config)#"),
 		[]byte("do show spanning-tree\r\nVLAN0001\r\nR1(config)#"), // after the do-prefixed show
 	}
 	out, err := f.sess.RunExec(context.Background(), f.read, "show spanning-tree")

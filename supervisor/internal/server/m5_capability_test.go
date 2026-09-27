@@ -26,7 +26,7 @@ func helloForTest(t *testing.T, s *Server) (protocol.HelloResult, []byte) {
 }
 
 func TestHelloCapabilitySignal(t *testing.T) {
-	legacy, legacyRaw := helloForTest(t, newTestServer())
+	legacy, legacyRaw := helloForTest(t, newTestServer(t))
 	if !contains(legacy.Features, "i386") {
 		t.Fatalf("default hello omitted i386: %+v", legacy.Features)
 	}

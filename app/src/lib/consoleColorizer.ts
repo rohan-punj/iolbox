@@ -1,42 +1,11 @@
-// IOS console color highlighter — a stream transformer applied to node->browser
-// bytes before xterm.write, mirroring the user's PNetLab webconsole colorizer.
-//
-// WHY v2: live WS-frame evidence against real IOL (17.18.02 over the
-// pty→telnet→wsbridge chain) showed the v1 assumption — "bulk output delivers
-// whole lines inside one chunk" — is simply false in practice. Lines routinely
-// split mid-word across frames (one frame even carried a single byte of a
-// word), and the IOS prompt ALWAYS arrives as an unterminated tail ("\r\nR1>",
-// no trailing newline). v1 colorized a line only when its terminator arrived in
-// the same chunk as its start, so in real sessions essentially NOTHING was
-// colorized (and prompts never could be). v2 fixes both while keeping
-// interactive echo effectively instant:
-//
-//   - Complete lines are colorized whenever NO part of the line was already
-//     emitted raw (`emittedInLine === 0`) — even if the line's bytes arrived
-//     across several chunks, because the incomplete tail is briefly HELD.
-//   - The incomplete tail of the current line is held back for a very short
-//     flush window (flushDelayMs ≈ 16ms — about one display frame). If the rest
-//     of the line arrives in that window, the whole line colorizes; if not, the
-//     tail is flushed. A prompt-shaped tail ("R1#", "SW1(config-if)#") is
-//     colorized ON FLUSH — the only chance a prompt ever gets, since it never
-//     receives a terminator.
-//   - INTERACTIVE ECHO IS NEVER DELAYED: a tiny chunk (≤ 3 bytes, no newline)
-//     arriving while nothing is held — the shape of per-keystroke echo, seen as
-//     1-byte frames on the wire — is forwarded raw synchronously in the same
-//     push() call.
-//   - Once any part of a line has gone out raw, the rest of that line is
-//     forwarded raw immediately (never recolored, never held).
-//   - A tail containing ESC is never held or rewritten (cursor moves, colored
-//     banners — corrupting those is worse than not coloring). Complete lines
-//     containing ESC pass through colorizeLine untouched as before.
-//
-// Byte ordering is inviolboxle: held bytes are always emitted before any bytes
-// from a later chunk, and terminators ("\n", "\r\n") are preserved exactly.
-//
-// The transformer emits through a SINK callback (not a return value) because
-// the flush window makes emission asynchronous. One instance per console tab;
-// the per-line decision (`colorizeLine`) stays a pure exported function.
-
+// IOS console highlighter applied to decoded node output before xterm.write.
+// Complete clean lines and recognizable prompt tails receive Cisco colors.
+// Other incomplete output is held for at most one display frame, measured from
+// its first fragment. WS frame length never identifies interactive echo: even
+// a single byte can be part of a prompt or bulk output. ConsoleTerm calls
+// noteInput before sending keystrokes to release held output and keep echo raw.
+// Already-emitted lines and ESC-bearing tails pass through without rewriting.
+// Byte order and original line terminators are preserved exactly.
 // SecureCRT "Cisco Words" keyword-highlighting rules, in priority order (first
 // rule to claim a character wins). Ported verbatim from the PNetLab web-console
 // (engine-custom/opt/unetlab/html/console/vendor/securecrt-cisco-rules.js, itself
@@ -108,7 +77,7 @@ const CISCO_RULES: CiscoRule[] = [
 // A held TAIL that is exactly a prompt (nothing after the > or #). Anchored both
 // ends: a tail like "R1#sh" is a prompt + typed echo and must NOT be colorized on
 // flush (that would tint the typed command too). Prompts never receive a
-// terminator, so the flush window is the only chance to color a bare prompt.
+// terminator, so recognizable tails are colored as soon as they arrive.
 const PROMPT_TAIL_RE = /^[\w.-]+(\([\w-]+\))?[>#] ?$/;
 
 // A JS-word character (used for SecureCRT-style word-boundary rejection below).
@@ -119,7 +88,7 @@ function isWordChar(ch: string): boolean {
 
 /**
  * Colorize ONE complete line (terminator stripped by the caller) using the
- * SecureCRT "Cisco Words" rule set (securecrtRules.ts), the exact algorithm the
+ * SecureCRT "Cisco Words" rule set above, the exact algorithm the
  * PNetLab HTML5 console uses: walk the rules in priority order, let the FIRST
  * rule that claims a character own it, then emit 24-bit truecolor SGR runs.
  * Matches are rejected when they start or end inside a word so keyword rules
@@ -175,11 +144,6 @@ export function colorizeLine(line: string): string {
 /** Bytes emitted by the colorizer, in order. */
 export type ColorizerSink = (text: string) => void;
 
-/** Chunks at or below this size (with no newline, nothing held) are treated as
- *  interactive echo and forwarded raw synchronously. On the wire, per-keystroke
- *  echo is a 1-byte frame; 3 covers backspace ("\b \b") too. */
-const ECHO_CHUNK_MAX = 3;
-
 /** How long an incomplete line tail is held before being flushed raw (or
  *  prompt-colorized) — about one display frame, imperceptible on echo. */
 const DEFAULT_FLUSH_MS = 16;
@@ -195,8 +159,9 @@ export class ConsoleColorizer {
    *  may still be colorized when it completes). */
   private emittedInLine = 0;
   /** Held (not yet emitted) tail of the current line. Always emitted BEFORE any
-   *  later chunk's bytes — ordering is inviolboxle. */
+   *  later chunk's bytes — ordering is inviolable. */
   private held = "";
+  private heldSince = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private sink: ColorizerSink;
   private flushDelayMs: number;
@@ -208,27 +173,23 @@ export class ConsoleColorizer {
     this.flushDelayMs = flushDelayMs;
   }
 
+  /** Release pending output before sending input. Echo is identified by input
+   *  state, never by WS frame size (a one-byte frame may be output or a prompt).
+   *  Printable/editing input makes the current line raw; Enter leaves the next
+   *  output line eligible for highlighting once its newline arrives. */
+  noteInput(data: string): void {
+    this.flushHeld();
+    if (/[^\r\n]/.test(data)) this.emittedInLine = Math.max(1, this.emittedInLine);
+  }
+
   /** Transform one chunk. Emits through the sink (usually synchronously within
    *  this call; an incomplete tail may follow up to flushDelayMs later). */
   push(chunk: string): void {
     if (chunk.length === 0) return;
 
-    // Interactive echo fast path: tiny newline-less chunk, nothing held —
-    // forward raw in the same call. The line is now "dirty" (partially shown),
-    // so it can never be recolored.
-    if (
-      this.held === "" &&
-      chunk.length <= ECHO_CHUNK_MAX &&
-      !chunk.includes("\n") &&
-      !chunk.includes("\x1b")
-    ) {
-      this.emittedInLine += chunk.length;
-      this.sink(chunk);
-      return;
-    }
-
     // Merge the held tail back in front so ordering is preserved, then scan.
     this.cancelTimer();
+    const heldSince = this.held === "" ? Date.now() : this.heldSince;
     const text = this.held + chunk;
     this.held = "";
 
@@ -264,20 +225,30 @@ export class ConsoleColorizer {
       this.sink(out + tail);
       return;
     }
+    // A complete prompt is already recognizable, even if it arrived one byte
+    // at a time. Emit now so rapid Enter never waits behind the tail timer.
+    if (PROMPT_TAIL_RE.test(tail)) {
+      this.emittedInLine += tail.length;
+      this.sink(out + colorizeLine(tail));
+      return;
+    }
     // Clean incomplete tail: hold it for the flush window so the rest of the
-    // line (or nothing — then it's likely a prompt) can decide its color.
+    // line can decide its color. If it stays incomplete, flush it raw.
     if (out) this.sink(out);
     this.held = tail;
+    // Bound the hold from the first fragment, not the most recent fragment.
+    // A continuous stream of partial chunks must not keep postponing output.
+    this.heldSince = segStart > 0 ? Date.now() : heldSince;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.flushHeld();
-    }, this.flushDelayMs);
+    }, Math.max(0, this.flushDelayMs - (Date.now() - this.heldSince)));
   }
 
   /**
    * Emit the held tail now. A tail that is exactly a prompt is colorized —
-   * prompts never receive a terminator, so the flush window is their only
-   * chance. Anything else goes out raw. Safe to call any time (idempotent when
+   * normally complete prompts have already been emitted by push(). Anything
+   * else goes out raw. Safe to call any time (idempotent when
    * nothing is held); ConsoleTerm calls it when colorizing is toggled off so no
    * bytes are ever stranded.
    */

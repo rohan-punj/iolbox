@@ -100,7 +100,7 @@ func TestLabWipeUnknownNode(t *testing.T) {
 
 // TestLabWipeRequiresLoadedLab rejects a wipe when no lab is loaded.
 func TestLabWipeRequiresLoadedLab(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	resp := dispatch(t, s, "lab.wipe", protocol.LabWipeArgs{LabID: "nope"})
 	if resp.OK || resp.Error.Code != protocol.CodeNotLoaded {
 		t.Fatalf("expected not_loaded, got %+v", resp)

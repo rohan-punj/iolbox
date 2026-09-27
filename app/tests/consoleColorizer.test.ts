@@ -74,7 +74,7 @@ test("colorizeLine: empty and no-match lines returned unchanged", () => {
   assert.equal(colorizeLine("     "), "     "); // whitespace: no rule claims it
 });
 
-// ---- streaming transformer (unchanged machinery) ----
+// ---- streaming transformer ----
 
 test("bulk multi-line chunk: every complete line colorized, terminators exact", () => {
   const h = harness();
@@ -87,6 +87,7 @@ test("bulk multi-line chunk: every complete line colorized, terminators exact", 
 
 test("typed echo byte-by-byte: instant, raw, synchronous", () => {
   const h = harness();
+  h.c.noteInput("show");
   for (const ch of "show") {
     const before = h.out.length;
     h.c.push(ch);
@@ -129,9 +130,10 @@ test("held non-prompt tail flushes raw after the window", async () => {
   assert.equal(h.text(), "partial line without termina", "flushed raw, byte-exact");
 });
 
-test("prompt tail is colorized on flush", async () => {
+test("prompt tail is colorized immediately and stays unchanged after the flush window", async () => {
   const h = harness();
   h.c.push("\r\nR1>"); // exactly how the prompt arrives on the wire
+  assert.equal(h.text(), `\r\n${AQUA}R1>${R39}`);
   await h.settle();
   assert.equal(h.text(), `\r\n${AQUA}R1>${R39}`);
 });
@@ -148,15 +150,13 @@ test("config-mode prompt tail colorized; prompt+typed-echo tail is NOT", async (
   assert.equal(h2.text(), "R1#show ru", "not wholesale-colored");
 });
 
-test("bug1 regression: held prompt tail merging with bulk body — body NOT swept into prompt colour", async () => {
+test("bug1 regression: prompt followed by bulk body — body NOT swept into prompt colour", async () => {
   const h = harness();
-  h.c.push("\r\nR1#"); // prompt tail — held for the flush window
+  h.c.push("\r\nR1#"); // prompt tail — colored immediately
   h.c.push("version 17.18\r\n!\r\nservice timestamps debug\r\nhostname R1\r\n");
   const got = h.text();
-  // Merged first line: the prompt colour is RESET right after "R1#" (SecureCRT's
-  // `^\w[^>]*#` claims only the prompt), so body keywords get their own colours
-  // instead of being swept into the prompt cyan — the original "whole body cyan"
-  // bug. ("version" here is separately tinted by the version rule, not cyan.)
+  // The prompt's foreground resets before the following body arrives, so
+  // the body cannot inherit cyan. Later complete lines get their own rules.
   assert.ok(got.includes(`${CYAN}R1#${R39}`), "prompt cyan reset before the body");
   assert.ok(!got.includes(`${CYAN}R1#${R39}version 17.18${R39}`), "body not inside the prompt span");
   assert.equal(
@@ -169,11 +169,80 @@ test("bug1 regression: held prompt tail merging with bulk body — body NOT swep
 
 test("dirty line is never recolored, terminator preserved", async () => {
   const h = harness();
+  h.c.noteInput("up down 10.0.0.1");
   for (const ch of "up down 10.0.0.1") h.c.push(ch); // echo path → all raw
   h.c.push("\r\nEthernet0/0 is up\r\n"); // terminator for the dirty line + a fresh line
   const got = h.text();
   assert.ok(got.startsWith("up down 10.0.0.1\r\n"), "dirty line stays raw");
   assert.match(got.slice("up down 10.0.0.1\r\n".length), TRUECOLOR, "following fresh line colorized");
+});
+
+test("prompt color is identical at every frame split, including one-byte frames", () => {
+  for (const prompt of ["R0#", "R1>", "R0(config-if-range)#"]) {
+    const text = `\r\n${prompt}`;
+    const expected = `\r\n${colorizeLine(prompt)}`;
+    for (let split = 0; split <= text.length; split++) {
+      const h = harness();
+      h.c.push(text.slice(0, split));
+      h.c.push(text.slice(split));
+      assert.equal(h.text(), expected, `split ${split}: ${prompt}`);
+      h.c.reset();
+    }
+    const h = harness();
+    for (const ch of text) h.c.push(ch);
+    assert.equal(h.text(), expected, `one-byte frames: ${prompt}`);
+  }
+});
+
+test("rapid Enter keeps every fragmented prompt colored without a flush delay", () => {
+  const h = harness();
+  for (let i = 0; i < 20; i++) {
+    h.c.noteInput("\r");
+    for (const ch of "\r\nR0#") h.c.push(ch);
+  }
+  assert.equal(h.text(), `\r\n${CYAN}R0#${R39}`.repeat(20));
+});
+
+test("input flushes held output before immediate echo, preserving order", () => {
+  const h = harness(10_000);
+  h.c.push("incomplete output");
+  h.c.noteInput("s");
+  h.c.push("s");
+  assert.equal(h.text(), "incomplete outputs");
+  h.c.reset();
+});
+
+test("partial fragments do not extend the maximum output hold", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const h = harness(16);
+  h.c.push("partial");
+  t.mock.timers.tick(8);
+  h.c.push(" output");
+  t.mock.timers.tick(8);
+  assert.equal(h.text(), "partial output", "flushed 16ms after the first fragment");
+  h.c.reset();
+});
+
+test("a completed line gives the next incomplete tail its own flush window", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 0 });
+  const h = harness(16);
+  h.c.push("Ethernet0/0");
+  t.mock.timers.tick(8);
+  h.c.push(" is up\r\nnext tail");
+  const completedLine = colorizeLine("Ethernet0/0 is up") + "\r\n";
+  assert.equal(h.text(), completedLine);
+  t.mock.timers.tick(8);
+  assert.equal(h.text(), completedLine, "old line's deadline does not flush the new tail");
+  t.mock.timers.tick(8);
+  assert.equal(h.text(), completedLine + "next tail");
+  h.c.reset();
+});
+
+test("small initial output fragments reassemble into colored complete lines", () => {
+  const h = harness();
+  const text = "Ethernet0/0 is up\r\n";
+  for (const ch of text) h.c.push(ch);
+  assert.equal(h.text(), colorizeLine("Ethernet0/0 is up") + "\r\n");
 });
 
 test("ESC in tail is never held (emitted immediately, raw)", () => {

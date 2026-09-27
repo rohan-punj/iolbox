@@ -14,7 +14,7 @@ func natNode(id int) lab.Node { return lab.Node{ID: id, Kind: lab.KindNAT, Name:
 // TestHelloAdvertisesGatedFeatures confirms the hello features array carries the
 // base set and appends natgw exactly when the server's detected caps allow.
 func TestHelloAdvertisesGatedFeatures(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	// Inject caps directly (Detect returns all-false off Linux / without sudo).
 	s.caps = extnet.Capabilities{NAT: true}
 	resp := dispatch(t, s, "hello", protocol.HelloArgs{Client: "gui"})
@@ -49,12 +49,10 @@ func TestHelloAdvertisesGatedFeatures(t *testing.T) {
 // TestStartNatUnsupported confirms lab.start of a nat node on a runtime that did
 // not advertise support returns a clear unsupported error.
 func TestStartNatUnsupported(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	s.caps = extnet.Capabilities{} // nat/mgmt unsupported
 	doc := lab.Lab{Version: 1, ID: "lab-nat", Name: "n",
-		Nodes: []lab.Node{iolNode(0), natNode(1)},
-		Links: []lab.Link{{ID: 0, Type: lab.LinkP2P,
-			Endpoints: []lab.Endpoint{{Node: 0, Interface: "e0/0"}, {Node: 1, Interface: "eth0"}}}},
+		Nodes: []lab.Node{natNode(1)},
 	}
 	if resp := dispatch(t, s, "lab.load", protocol.LabLoadArgs{Lab: doc}); !resp.OK {
 		t.Fatalf("lab.load failed: %+v", resp.Error)

@@ -114,6 +114,7 @@ type ReadFunc func(ctx context.Context) error
 // is privileged (enable) mode. Bounded by ctx: a read error (including a
 // deadline set from ctx by the caller's ReadFunc) aborts the loop.
 func (s *Session) SyncPrompt(ctx context.Context, read ReadFunc) (priv bool, err error) {
+	s.Reset()
 	if err := s.Write([]byte("\r")); err != nil {
 		return false, err
 	}
@@ -144,6 +145,46 @@ func (s *Session) awaitPrompt(ctx context.Context, read ReadFunc) (priv bool, er
 		if err := read(ctx); err != nil {
 			// A read timeout with no prompt yet is a real failure.
 			return false, err
+		}
+	}
+}
+
+// commandOutput locates a complete echo line for this command, excluding
+// delayed output/prompts from earlier phases. IOS may prefix the echo with its
+// prompt when a prior response arrived after the phase reset.
+func commandOutput(raw, cmd string) (string, bool) {
+	raw = strings.ReplaceAll(strings.ReplaceAll(raw, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(raw, "\n")
+	for i, line := range lines[:len(lines)-1] {
+		t := strings.TrimSpace(line)
+		if !strings.HasSuffix(t, cmd) {
+			continue
+		}
+		prefix := strings.TrimSuffix(t, cmd)
+		if prefix != "" {
+			if _, _, ok := HasPromptSuffix(prefix); !ok {
+				continue
+			}
+		}
+		return strings.Join(lines[i+1:], "\n"), true
+	}
+	return "", false
+}
+
+// awaitCommand only accepts a prompt after the current command's complete
+// echo boundary. A bare delayed prompt cannot complete a later show command.
+func (s *Session) awaitCommand(ctx context.Context, read ReadFunc, cmd string) (string, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if output, echoed := commandOutput(s.String(), cmd); echoed {
+			if _, _, ok := HasPromptSuffix(output); ok {
+				return output, nil
+			}
+		}
+		if err := read(ctx); err != nil {
+			return "", err
 		}
 	}
 }
@@ -191,7 +232,7 @@ func (s *Session) ensureEnable(ctx context.Context, read ReadFunc) (config bool,
 	if err := s.Write([]byte("enable\r")); err != nil {
 		return false, err
 	}
-	if _, err := s.awaitPrompt(ctx, read); err != nil {
+	if _, err := s.awaitCommand(ctx, read, "enable"); err != nil {
 		return false, err
 	}
 	prompt, _, _ = HasPromptSuffix(s.String())
@@ -226,7 +267,7 @@ func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (strin
 	if err := s.Write([]byte(prefix + "terminal length 0\r")); err != nil {
 		return "", err
 	}
-	if _, err := s.awaitPrompt(ctx, read); err != nil {
+	if _, err := s.awaitCommand(ctx, read, prefix+"terminal length 0"); err != nil {
 		return "", err
 	}
 
@@ -238,18 +279,11 @@ func (s *Session) RunExec(ctx context.Context, read ReadFunc, cmd string) (strin
 	if err := s.Write([]byte(sent + "\r")); err != nil {
 		return "", err
 	}
-	for {
-		if _, _, ok := HasPromptSuffix(s.String()); ok {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if err := read(ctx); err != nil {
-			return "", err
-		}
+	output, err := s.awaitCommand(ctx, read, sent)
+	if err != nil {
+		return "", err
 	}
-	return CleanShowOutput(s.String(), sent), nil
+	return CleanShowOutput(output, sent), nil
 }
 
 // CleanShowOutput strips the echoed command line and the trailing prompt line

@@ -106,7 +106,7 @@ func TestClaimTapDisplacesForeignOwner(t *testing.T) {
 // then taken ownership of the same kernel tap name, exactly as computeStaticTaps
 // guarantees it can. The timer must decline to touch the kernel.
 func TestScheduledFaultTimerSkipsTapOwnedByAnotherLab(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	older := newLoadedLab(twoIOLLab("older"), t.TempDir())
 	s.refreshFabric(older)
 	s.mu.Lock()
@@ -176,7 +176,7 @@ func TestScheduledFaultTimerSkipsTapOwnedByAnotherLab(t *testing.T) {
 // exist, so reconcileLinkFault's existence filter yields no targets and the
 // callback performs no privileged work on any platform.
 func TestScheduledFaultTimerCompletes(t *testing.T) {
-	s := newTestServer()
+	s := newTestServer(t)
 	ll := newLoadedLab(twoIOLLab("timer"), t.TempDir())
 	s.refreshFabric(ll)
 	s.mu.Lock()
@@ -225,7 +225,7 @@ func TestScheduledFaultTimerCompletes(t *testing.T) {
 // has never started its fabric at all (no claims anywhere), must be unaffected.
 func TestScheduledFaultTimerActsOnItsOwnTaps(t *testing.T) {
 	ll := newLoadedLab(twoIOLLab("own"), t.TempDir())
-	s := newTestServer()
+	s := newTestServer(t)
 	s.refreshFabric(ll)
 	l := &ll.doc.Links[0]
 

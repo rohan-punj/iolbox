@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rohanpunj/iolbox/supervisor/internal/consolediag"
 	"github.com/rohanpunj/iolbox/supervisor/internal/consolescript"
 	"github.com/rohanpunj/iolbox/supervisor/internal/telnet"
 )
@@ -53,21 +54,9 @@ var ErrNoConsoleHub = errors.New("node: no console hub for this node")
 //   - Client->pty writes are serialized through one mutex so interleaved
 //     keystrokes from two clients never split multi-byte sequences written in
 //     a single call.
-//   - v0.3.0 Phase 1: the hub owns exactly ONE telnet.Negotiator for the
-//     whole node (not one per attached TCP connection). Every TCP-attached
-//     connection's raw bytes are fed through this single shared Negotiator
-//     before being forwarded to the pty; negotiation replies are written back
-//     to whichever connection triggered them. This is safe because IOL/VPCS
-//     telnet consoles are the ONLY thing that ever sees the negotiated
-//     wire-protocol view; every attached TCP peer is negotiating the SAME
-//     logical option set (echo/SGA) against the SAME logical console, so one
-//     shared Q-method state machine is the structurally-correct model — see
-//     docs/v0.3.0-console-unification.md §2.2/§3(a). In-process subscribers
-//     (wsbridge, programmatic RunExec — Phase 2/4) never touch the
-//     Negotiator at all: they get pre-decoded application bytes directly from
-//     the broadcast, and their writes go straight to the pty write path
-//     unchanged, exactly as if they were a TCP client whose telnet layer the
-//     hub already peeled off.
+//   - Every native TCP stream owns its telnet negotiator. Parser state and
+//     temporary decoded buffers never cross streams. In-process clients use
+//     application bytes directly.
 //   - A replay ring of the most recent replayRingSize bytes of pty output is
 //     sent to every newly attached subscriber first, so a fresh session shows
 //     the current prompt/context instead of a blank screen.
@@ -81,7 +70,8 @@ type consoleHub struct {
 	// xterm title escape (OSC 0) so native telnet clients that honour remote
 	// titles (PuTTY & friends) label their tab/window "R1" instead of a bare
 	// host:port. Clients that ignore OSC just discard the sequence.
-	name string
+	name    string
+	metrics *consolediag.Recorder
 
 	mu      sync.Mutex
 	clients map[*hubClient]struct{}
@@ -90,13 +80,6 @@ type consoleHub struct {
 
 	// wmu serializes all client->pty writes.
 	wmu sync.Mutex
-
-	// neg is the SOLE telnet.Negotiator for this node (v0.3.0 Phase 1): every
-	// TCP-attached connection's inbound bytes are fed through it (nmu
-	// serializes access, since multiple TCP readers could otherwise race the
-	// same state machine). In-process subscribers never touch it.
-	nmu sync.Mutex
-	neg *telnet.Negotiator
 
 	// turn is the v0.3.0 Phase 3/4 input-arbitration gate: while a programmatic
 	// caller (ClaimTurn/RunExec) holds it, interactive input from BOTH TCP
@@ -119,6 +102,8 @@ type consoleHub struct {
 // second, so this is generous for anything a human could type in that window.
 const turnQueueCap = 256
 
+const consoleWriteTimeout = 2 * time.Second
+
 // inputTurn is the hub's exclusive-input-turn gate (v0.3.0 Phase 4). Only one
 // programmatic caller (painter's runShow today; any future scripted driver)
 // may hold it at a time per node. While held, interactive input from every
@@ -128,6 +113,7 @@ type inputTurn struct {
 	mu     sync.Mutex // guards the fields below; held only briefly per operation
 	active bool
 	holder string // e.g. "painter:show:R1" — for the force-release warning log
+	id     uint64 // distinguishes expired holders from their successors
 	queue  [][]byte
 }
 
@@ -142,6 +128,7 @@ func (t *inputTurn) claim(holder string) bool {
 	}
 	t.active = true
 	t.holder = holder
+	t.id++
 	return true
 }
 
@@ -189,19 +176,18 @@ func (t *inputTurn) isActive() bool {
 const replayRingSize = 8 * 1024
 
 // hubClientQueue is the per-client output queue depth, in broadcast chunks
-// (each up to 4096 bytes). A client this far behind is dropped.
+// (each up to 16 KiB for deadline-capable readers). A client this far behind is dropped.
 const hubClientQueue = 64
 
-// hubClient is one attached subscriber. Exactly one of conn (a real TCP
-// connection — native telnet) or inProcess (true — wsbridge/programmatic, no
-// socket) applies. TCP clients get their bytes telnet-decoded through the
-// hub's single shared Negotiator before being forwarded to the pty; in-process
-// subscribers hand the hub already-clean bytes via Subscription.Write.
+// hubClient is one TCP or in-process subscriber. Its mutex protects
+// output enqueue/close; each native reader owns its own telnet parser.
 type hubClient struct {
-	conn net.Conn // nil for in-process subscribers
-	out  chan []byte
-	stop chan struct{}
-	once sync.Once
+	mu     sync.Mutex // serializes every enqueue with output channel closure
+	closed bool
+	conn   net.Conn // nil for in-process subscribers
+	out    chan []byte
+	stop   chan struct{}
+	once   sync.Once
 	// crPending tracks a CR seen at the END of the previous input chunk, so the
 	// telnet NVT line-ending normalization (CR LF / CR NUL -> CR) works across
 	// chunk boundaries. Touched only by this client's reader goroutine (TCP) or
@@ -224,6 +210,9 @@ type Subscription struct {
 	// broadcast chunks) until the hub shuts down or the subscription is
 	// dropped for backpressure, at which point Out is closed.
 	Out <-chan []byte
+	// Done closes immediately on detach, eviction, or shutdown, independently
+	// of buffered output. Consumers use it to interrupt blocked socket writes.
+	Done <-chan struct{}
 }
 
 // Write sends raw application bytes toward the pty, subject to the hub's
@@ -248,11 +237,18 @@ func (h *consoleHub) gatedWrite(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
+	h.wmu.Lock()
+	defer h.wmu.Unlock()
+	select {
+	case <-h.done:
+		return errHubClosed
+	default:
+	}
 	if h.turn.isActive() {
 		h.turn.enqueue(p)
 		return nil
 	}
-	return h.writeDirect(p)
+	return h.writePTY(context.Background(), p)
 }
 
 // writeDirect writes p straight to the pty under wmu, bypassing the turn gate
@@ -265,9 +261,48 @@ func (h *consoleHub) writeDirect(p []byte) error {
 		return nil
 	}
 	h.wmu.Lock()
-	_, err := h.pty.Write(p)
+	err := h.writePTY(context.Background(), p)
 	h.wmu.Unlock()
 	return err
+}
+
+// Runtime PTYs and PC sockets support write deadlines. Test doubles may omit
+// them. This is called only while wmu is held, so deadlines cannot interfere
+// with another writer and a partial write is never silently accepted.
+func (h *consoleHub) writePTY(ctx context.Context, p []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d, ok := h.pty.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		deadline := time.Now().Add(consoleWriteTimeout)
+		if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
+			deadline = end
+		}
+		if err := d.SetWriteDeadline(deadline); err != nil {
+			return err
+		}
+		defer d.SetWriteDeadline(time.Time{})
+	}
+	n, err := h.pty.Write(p)
+	if err == nil && n != len(p) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+// Claim/script waits remain cancellable even while an earlier device write
+// owns the sequencing mutex. No detached writer goroutine can outlive a turn.
+func (h *consoleHub) lockInput(ctx context.Context) error {
+	for !h.wmu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-h.done:
+			return errHubClosed
+		case <-time.After(turnClaimPoll):
+		}
+	}
+	return nil
 }
 
 // Unsubscribe detaches the subscription. Idempotent; safe to call more than
@@ -291,20 +326,75 @@ func newConsoleHub(pty io.ReadWriter, name string) *consoleHub {
 	h := &consoleHub{
 		pty:     pty,
 		name:    name,
+		metrics: consolediag.New(name, "pty-read-to-broadcast"),
 		clients: make(map[*hubClient]struct{}),
-		neg:     telnet.NewNegotiator(),
 		done:    make(chan struct{}),
 	}
 	go h.readLoop()
 	return h
 }
 
-// readLoop is the single owner of pty reads: it appends each chunk to the
+const consoleReadBatchLimit = 16 * 1024
+const consoleReadBatchWindow = 2 * time.Millisecond
+
+type consoleReadDeadline interface {
+	SetReadDeadline(time.Time) error
+}
+
+// readConsoleBatch keeps one fixed deadline from the first received bytes.
+// The initial read blocks normally; only subsequent reads may wait for the
+// small coalescing window. The caller supplies a bounded buffer and owns all
+// reads, so no background reader can outlive this batch or steal later bytes.
+func readConsoleBatch(reader io.Reader, deadline consoleReadDeadline, buf []byte) (n int, at time.Time, err error) {
+	if deadline != nil {
+		// A previous batch's timeout must never expire the next initial read.
+		if err = deadline.SetReadDeadline(time.Time{}); err != nil {
+			return
+		}
+	}
+	n, err = reader.Read(buf)
+	if n == 0 {
+		return
+	}
+	at = time.Now()
+	if err != nil || deadline == nil || n == len(buf) {
+		return
+	}
+	until := at.Add(consoleReadBatchWindow)
+	if err = deadline.SetReadDeadline(until); err != nil {
+		return
+	}
+	for n < len(buf) && time.Now().Before(until) {
+		var read int
+		read, err = reader.Read(buf[n:])
+		n += read
+		if err != nil {
+			var timeout net.Error
+			if errors.As(err, &timeout) && timeout.Timeout() {
+				// The batching deadline ends this batch, not the console stream.
+				err = nil
+			}
+			return
+		}
+		if read == 0 {
+			return
+		}
+	}
+	return
+}
+
+// readLoop is the single owner of pty reads: it appends each bounded batch to the
 // replay ring and enqueues it to every client, dropping clients whose queue is
 // full. Exits (and shuts the hub down) when the pty read errors — node exit or
 // teardown closing the pty master.
 func (h *consoleHub) readLoop() {
-	buf := make([]byte, 4096)
+	var deadline consoleReadDeadline
+	limit := 4096
+	if d, ok := h.pty.(consoleReadDeadline); ok && d.SetReadDeadline(time.Time{}) == nil {
+		deadline = d
+		limit = consoleReadBatchLimit
+	}
+	buf := make([]byte, limit)
 	for {
 		// Exit promptly once the hub is shut down (teardown closed done), even if
 		// the pty keeps yielding: without this a pty that returns (0, nil) on a
@@ -316,12 +406,15 @@ func (h *consoleHub) readLoop() {
 			return
 		default:
 		}
-		n, err := h.pty.Read(buf)
+		n, at, err := readConsoleBatch(h.pty, deadline, buf)
 		if n > 0 {
 			// Copy out of the reused read buffer before it escapes to queues.
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 			h.broadcast(chunk)
+			// Includes the bounded coalescing delay, copy, and fanout, but not
+			// the initial blocking read's idle time. Bytes count the full batch.
+			h.metrics.Observe(n, time.Since(at))
 		}
 		if err != nil {
 			h.shutdown()
@@ -341,9 +434,7 @@ func (h *consoleHub) broadcast(chunk []byte) {
 		h.ring = append([]byte(nil), h.ring[over:]...)
 	}
 	for c := range h.clients {
-		select {
-		case c.out <- chunk:
-		default:
+		if !c.enqueue(chunk) {
 			delete(h.clients, c)
 			dropped = append(dropped, c)
 		}
@@ -364,7 +455,7 @@ func (h *consoleHub) broadcast(chunk []byte) {
 // so advertising WILL ECHO/WILL SGA to them (bytes they'd forward straight
 // into a browser's xterm.js, which already handles its own local echo
 // semantics) would be a protocol leak, not a courtesy.
-func (h *consoleHub) registerLocked(conn net.Conn, wantTelnetPreamble bool) *hubClient {
+func (h *consoleHub) registerLocked(conn net.Conn, wantTelnetPreamble, replay bool) *hubClient {
 	c := &hubClient{
 		conn: conn,
 		out:  make(chan []byte, hubClientQueue),
@@ -384,10 +475,10 @@ func (h *consoleHub) registerLocked(conn net.Conn, wantTelnetPreamble bool) *hub
 			telnet.IAC, telnet.WILL, telnet.OptSGA,
 		}
 	}
-	if h.name != "" {
+	if replay && h.name != "" {
 		c.out <- []byte("\x1b]0;" + h.name + "\x07")
 	}
-	if len(h.ring) > 0 {
+	if replay && len(h.ring) > 0 {
 		replay := make([]byte, len(h.ring))
 		copy(replay, h.ring)
 		c.out <- replay
@@ -405,11 +496,9 @@ func (h *consoleHub) registerLocked(conn net.Conn, wantTelnetPreamble bool) *hub
 // immediately. If the hub is already shut down the connection is closed
 // instead.
 //
-// v0.3.0 Phase 1: inbound bytes from conn are fed through the hub's ONE
-// shared Negotiator (h.neg, serialized by h.nmu) instead of a fresh
-// per-connection Negotiator — see the consoleHub doc comment.
+// Each attached TCP stream has independent telnet parser state.
 func (h *consoleHub) attach(conn net.Conn) {
-	c := h.registerLocked(conn, true)
+	c := h.registerLocked(conn, true, true)
 	if c == nil {
 		_ = conn.Close()
 		return
@@ -447,18 +536,16 @@ func (h *consoleHub) attach(conn net.Conn) {
 	// into the middle of a data chunk.
 	go func() {
 		defer h.detach(c)
+		// Parser state and Feed's reused output buffer belong to this stream.
+		neg := telnet.NewNegotiator()
 		buf := make([]byte, 4096)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
-				h.nmu.Lock()
-				clean := h.neg.Feed(buf[:n])
-				reply := h.neg.Reply()
-				h.nmu.Unlock()
+				clean := neg.Feed(buf[:n])
+				reply := neg.Reply()
 				if len(reply) > 0 {
-					select {
-					case c.out <- reply:
-					default:
+					if !c.enqueue(reply) {
 						return // queue jammed — same drop policy as broadcast
 					}
 				}
@@ -485,11 +572,15 @@ func (h *consoleHub) attach(conn net.Conn) {
 // while a turn is active, direct otherwise). Returns nil if the hub is
 // already shut down.
 func (h *consoleHub) Subscribe() *Subscription {
-	c := h.registerLocked(nil, false)
+	return h.subscribe(true)
+}
+
+func (h *consoleHub) subscribe(replay bool) *Subscription {
+	c := h.registerLocked(nil, false, replay)
 	if c == nil {
 		return nil
 	}
-	return &Subscription{hub: h, c: c, Out: c.out}
+	return &Subscription{hub: h, c: c, Out: c.out, Done: c.stop}
 }
 
 // turnClaimPoll is how often ClaimTurn re-checks whether the turn has become
@@ -519,21 +610,45 @@ const turnClaimPoll = 10 * time.Millisecond
 // Returns an error (without claiming) if the hub is already shut down or ctx
 // is done before a turn becomes available.
 func (h *consoleHub) ClaimTurn(ctx context.Context, holder string) (release func(), err error) {
+	release, _, err = h.claimTurn(ctx, holder)
+	return release, err
+}
+
+func (h *consoleHub) claimTurn(ctx context.Context, holder string) (release func(), id uint64, err error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
 		h.mu.Lock()
 		closed := h.closed
 		h.mu.Unlock()
 		if closed {
-			return nil, errHubClosed
+			return nil, 0, errHubClosed
 		}
-		if h.turn.claim(holder) {
+		if err := h.lockInput(ctx); err != nil {
+			return nil, 0, err
+		}
+		if err := ctx.Err(); err != nil {
+			h.wmu.Unlock()
+			return nil, 0, err
+		}
+		select {
+		case <-h.done:
+			h.wmu.Unlock()
+			return nil, 0, errHubClosed
+		default:
+		}
+		claimed := h.turn.claim(holder)
+		id = h.turn.id
+		h.wmu.Unlock()
+		if claimed {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		case <-h.done:
-			return nil, errHubClosed
+			return nil, 0, errHubClosed
 		case <-time.After(turnClaimPoll):
 		}
 	}
@@ -546,14 +661,13 @@ func (h *consoleHub) ClaimTurn(ctx context.Context, holder string) (release func
 		select {
 		case <-ctx.Done():
 			once.Do(func() {
-				queued := h.turn.release()
-				log.Printf("consoleHub: FORCE-RELEASED stuck input turn holder=%q reason=%v (queued %d interactive write(s) flushed)", holder, ctx.Err(), len(queued))
-				h.flushQueued(queued)
+				count := h.releaseTurn(true)
+				log.Printf("consoleHub: FORCE-RELEASED stuck input turn holder=%q reason=%v (queued %d interactive write(s) flushed)", holder, ctx.Err(), count)
 			})
 		case <-h.done:
 			once.Do(func() {
-				queued := h.turn.release()
-				log.Printf("consoleHub: force-released input turn holder=%q on hub shutdown (queued %d interactive write(s) discarded)", holder, len(queued))
+				count := h.releaseTurn(false)
+				log.Printf("consoleHub: force-released input turn holder=%q on hub shutdown (queued %d interactive write(s) discarded)", holder, count)
 				// Hub is shutting down — the pty is going away too; don't bother
 				// flushing to a dead write path.
 			})
@@ -564,26 +678,53 @@ func (h *consoleHub) ClaimTurn(ctx context.Context, holder string) (release func
 	release = func() {
 		once.Do(func() {
 			close(watchdogDone)
-			queued := h.turn.release()
-			h.flushQueued(queued)
+			h.releaseTurn(true)
 		})
 	}
-	return release, nil
+	return release, id, nil
 }
 
-// flushQueued writes queued interactive bytes to the pty in original order,
-// AFTER the turn's own output has settled — this is the ordering guarantee
-// docs/v0.3.0-console-unification.md §5 calls out ("queued interactive bytes
-// go out after the turn's own output settles, not interleaved mid-turn").
-// Uses writeDirect (not gatedWrite) since the turn is already released by the
-// time this runs; re-entering gatedWrite here would be correct too (no turn
-// active) but writeDirect makes the "no re-queueing" invariant explicit.
-func (h *consoleHub) flushQueued(queued [][]byte) {
-	for _, p := range queued {
-		if err := h.writeDirect(p); err != nil {
-			return
+// Holding wmu across release and the complete drain prevents either a new
+// claim or interactive input from overtaking queued input.
+func (h *consoleHub) releaseTurn(flush bool) int {
+	h.wmu.Lock()
+	defer h.wmu.Unlock()
+	queued := h.turn.release()
+	if flush {
+		ctx, cancel := context.WithTimeout(context.Background(), consoleWriteTimeout)
+		defer cancel()
+		for i, p := range queued {
+			select {
+			case <-h.done:
+				return len(queued)
+			default:
+			}
+			if err := h.writePTY(ctx, p); err != nil {
+				log.Printf("consoleHub: queued input drain failed after %d of %d write(s): %v", i, len(queued), err)
+				break
+			}
 		}
 	}
+	return len(queued)
+}
+
+func (h *consoleHub) writeTurn(ctx context.Context, id uint64, p []byte) error {
+	if err := h.lockInput(ctx); err != nil {
+		return err
+	}
+	defer h.wmu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-h.done:
+		return errHubClosed
+	default:
+	}
+	if !h.turn.isActive() || h.turn.id != id {
+		return errors.New("node: console input turn expired")
+	}
+	return h.writePTY(ctx, p)
 }
 
 // RunExec claims a turn, drives one scripted exec command (sync prompt, enable
@@ -599,21 +740,23 @@ func (h *consoleHub) flushQueued(queued [][]byte) {
 // pass a context already carrying the desired timeout (painter_linux.go uses
 // runShowTimeout, 8s, mirroring the turn-claim-timeout decision in §7.4).
 func (h *consoleHub) RunExec(ctx context.Context, holder, cmd string) (string, error) {
-	release, err := h.ClaimTurn(ctx, holder)
+	release, id, err := h.claimTurn(ctx, holder)
 	if err != nil {
 		return "", err
 	}
 	defer release()
 
-	sub := h.Subscribe()
+	sub := h.subscribe(false)
 	if sub == nil {
 		return "", errHubClosed
 	}
 	defer sub.Unsubscribe()
 
-	sess := consolescript.New(h.writeDirect)
+	sess := consolescript.New(func(p []byte) error { return h.writeTurn(ctx, id, p) })
 	read := func(ctx context.Context) error {
 		select {
+		case <-sub.Done:
+			return errHubClosed
 		case chunk, ok := <-sub.Out:
 			if !ok {
 				return errHubClosed
@@ -671,16 +814,31 @@ func (h *consoleHub) detach(c *hubClient) {
 // none), stops its writer goroutine, and closes its output channel so an
 // in-process Subscription's Out-channel consumer (e.g. a `for chunk := range
 // sub.Out` loop) observes the detach and returns instead of blocking forever.
-// Idempotent. Safe to call after the client has already been removed from
-// h.clients (detach/shutdown both remove-then-close), so no further send on
-// c.out can race this close.
+// Output enqueue and closure share c.mu, including negotiation replies.
+func (c *hubClient) enqueue(p []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	select {
+	case c.out <- p:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *hubClient) close() {
 	c.once.Do(func() {
+		c.mu.Lock()
+		c.closed = true
 		close(c.stop)
+		close(c.out)
+		c.mu.Unlock()
 		if c.conn != nil {
 			_ = c.conn.Close()
 		}
-		close(c.out)
 	})
 }
 
@@ -688,6 +846,7 @@ func (c *hubClient) close() {
 // when the pty read fails; also safe to call from teardown paths.
 func (h *consoleHub) shutdown() {
 	h.once.Do(func() {
+		h.metrics.Flush()
 		h.mu.Lock()
 		h.closed = true
 		clients := make([]*hubClient, 0, len(h.clients))
